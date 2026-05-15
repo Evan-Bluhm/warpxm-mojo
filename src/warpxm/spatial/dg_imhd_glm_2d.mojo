@@ -63,11 +63,11 @@ def _imhd_glm_rhs_kernel_2d[
     ) -> InlineArray[Real, MHD_GLM_NC]:
         comptime if USE_HLLD:
             return ImhdGLM2D.numerical_flux_hlld_static(
-                q_l, q_r, nx, ny, gamma, rho_min, press_min, c_h,
+                q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min, c_h,
             )
         else:
             return ImhdGLM2D.numerical_flux_static(
-                q_l, q_r, nx, ny, gamma, rho_min, press_min, c_h,
+                q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min, c_h,
             )
 
     @parameter
