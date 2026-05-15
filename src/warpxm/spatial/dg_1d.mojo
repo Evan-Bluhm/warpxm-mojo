@@ -250,7 +250,7 @@ struct DGSpatialSolver1D[P: Int, NC: Int]:
         ]
         ctx.enqueue_function[kernel](
             q_view, rhs_view, elf_view, erf_view, fl_view, fr_view, fbc_view,
-            self.app.velocity, mesh.jacobian, mesh.num_elements, mesh.num_faces,
+            self.app.velocity_x, mesh.jacobian, mesh.num_elements, mesh.num_faces,
             grid_dim=mesh.num_elements,
             block_dim=num_nodes_per_elem,
         )

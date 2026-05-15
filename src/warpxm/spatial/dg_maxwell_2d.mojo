@@ -89,7 +89,7 @@ def _maxwell_rhs_kernel_2d[
         q_r: InlineArray[Real, MAXWELL_NC],
         nx: Real, ny: Real,
     ) -> InlineArray[Real, MAXWELL_NC]:
-        return Maxwell2D.numerical_flux_static(q_l, q_r, nx, ny, c_light)
+        return Maxwell2D.numerical_flux_static(q_l, q_r, nx, ny, Real(0.0), c_light)
 
     @parameter
     def apply_bc(

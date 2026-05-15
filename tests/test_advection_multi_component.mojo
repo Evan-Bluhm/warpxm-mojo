@@ -43,7 +43,7 @@ def main() raises:
             host[base + 1] = cos(TWO_PI * x)
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = Advection1D[NC](velocity=Real(1.0), cfl_max=Real(1.0))
+    var app = Advection1D[NC](velocity_x=Real(1.0), cfl_max=Real(1.0))
     var spatial = DGSpatialSolver1D[P, NC](app)
     var stepper = SSPRK3_1D[P, NC](ctx, mesh.num_elements)
 

@@ -57,12 +57,23 @@ def main() raises:
     var spatial = DGSpatialSolver2D[P, NC](app)
     var stepper = SSPRK3_2D[P, NC](ctx, mesh.num_elements)
 
+    @parameter
+    def compute_rhs(
+        mut q_in: DGState2D[P, NC],
+        mut q_out: DGState2D[P, NC],
+    ) raises:
+        spatial.compute_rhs(ctx, mesh, q_in, q_out)
+
+    @parameter
+    def no_adjust(mut q_: DGState2D[P, NC]) raises:
+        pass
+
     var dt: Real = 5.0e-4
     var t_final: Real = 1.0
     var t: Real = 0.0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        stepper.step(ctx, mesh, spatial, q, dt_use)
+        stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
         t += dt_use
     ctx.synchronize()
 

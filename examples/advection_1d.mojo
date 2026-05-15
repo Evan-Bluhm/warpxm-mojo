@@ -90,7 +90,7 @@ def main() raises:
     init_sine(ctx, q, mesh)
     dump_first_few("Initial q (first nodes):", ctx, q)
 
-    var app = Advection1D[1](velocity=VELOCITY, cfl_max=Real(1.0))
+    var app = Advection1D[1](velocity_x=VELOCITY, cfl_max=Real(1.0))
     var spatial = DGSpatialSolver1D[P, 1](app)
     var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
 

@@ -49,7 +49,7 @@ def _run_dp45(var ctx: DeviceContext) raises -> Real:
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
     var spatial = DGSpatialSolver1D[P, 1](
-        Advection1D[1](velocity=Real(1.0), cfl_max=Real(1.0))
+        Advection1D[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
     )
     var stepper = DormandPrince45_1D[P, 1](ctx, mesh.num_elements)
 
@@ -95,7 +95,7 @@ def _run_ssprk3(var ctx: DeviceContext) raises -> Real:
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
     var spatial = DGSpatialSolver1D[P, 1](
-        Advection1D[1](velocity=Real(1.0), cfl_max=Real(1.0))
+        Advection1D[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
     )
     var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
 

@@ -59,7 +59,8 @@ def _advection_rhs_kernel_2d[
         nx: Real, ny: Real,
     ) -> InlineArray[Real, NC]:
         return Advection2D[NC].numerical_flux_static(
-            q_l, q_r, nx, ny, velocity_x, velocity_y,
+            q_l, q_r, nx, ny, Real(0.0),
+            velocity_x, velocity_y, Real(0.0),
         )
 
     @parameter

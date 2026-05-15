@@ -43,7 +43,7 @@ def main() raises:
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
     # Integrate one period.
-    var app = Advection1D[1](velocity=Real(1.0), cfl_max=Real(1.0))
+    var app = Advection1D[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
     var spatial = DGSpatialSolver1D[P, 1](app)
     var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
     var dt: Real = 1.0e-3
