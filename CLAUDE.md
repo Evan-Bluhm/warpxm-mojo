@@ -129,19 +129,23 @@ Mostly *quality* and *scale* items, not feature gaps:
 3. **Kinetic Vlasov-Maxwell solver** — different architecture (phase-space DG
    instead of configuration-space DG). Sizeable port.
 4. **MPI halo exchange** — multi-GPU support. Sizeable engineering effort.
-5. **Adaptive RK45 (Dormand-Prince)** — shipped for 1D generic DG fields
-   and 2D Euler (`temporal/dormand_prince_1d.mojo` and
-   `temporal/dormand_prince_euler_2d.mojo`). Fixed-dt `step` and adaptive
+5. **Adaptive RK45 (Dormand-Prince)** — shipped as NC-parameterised
+   generic steppers for all three dimensions
+   (`temporal/dormand_prince_{1,2,3}d.mojo`,
+   `DormandPrince45_{1,2,3}D[P, NC]`). Fixed-dt `step` and adaptive
    `step_adaptive` (embedded 4th-order estimate, dt clipped to [0.2·dt,
    5·dt], atol/rtol scaled RMS norm). On smooth problems takes ~10× fewer
-   steps than fixed-dt SSPRK3 at the same tolerance. 3D port and other 2D
-   physics (MHD, Maxwell, etc.) still to do.
+   steps than fixed-dt SSPRK3 at the same tolerance.
 6. **HLLD numerical flux for MHD** — shipped in 2D and 3D
    (`DGImhdSolver{2,3}D[P, USE_HLLD=True]`, Miyoshi-Kusano 2005 five-state
    solver). 3D version uses a permutation-based core
    (`_hlld_core_3d` in `apps/imhd_3d.mojo`) so all three axis-aligned face
    directions share one ~150-line implementation. Default path stays
-   Rusanov (no regression).
+   Rusanov (no regression). HLLD is also available on GLM-MHD
+   (`DGImhdGLMSolver{2,3}D[P, USE_HLLD=True]`) — the 8 MHD components use
+   IMHD HLLD; the (B_n, ψ) GLM block is solved exactly as a decoupled 2x2
+   Riemann problem at ±c_h (Dedner et al. 2002 §3.2; Mignone & Tzeferacos
+   2010 §4).
 
 ## Key references in upstream
 

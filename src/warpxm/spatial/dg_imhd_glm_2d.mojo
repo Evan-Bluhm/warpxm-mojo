@@ -29,7 +29,7 @@ def _apply_bc_imhd_glm(
 
 
 def _imhd_glm_rhs_kernel_2d[
-    P: Int,
+    P: Int, USE_HLLD: Bool,
     QLayout: TensorLayout, RhsLayout: TensorLayout,
     FaceLayout: TensorLayout, EFLayout: TensorLayout,
 ](
@@ -61,9 +61,14 @@ def _imhd_glm_rhs_kernel_2d[
         q_r: InlineArray[Real, MHD_GLM_NC],
         nx: Real, ny: Real,
     ) -> InlineArray[Real, MHD_GLM_NC]:
-        return ImhdGLM2D.numerical_flux_static(
-            q_l, q_r, nx, ny, gamma, rho_min, press_min, c_h,
-        )
+        comptime if USE_HLLD:
+            return ImhdGLM2D.numerical_flux_hlld_static(
+                q_l, q_r, nx, ny, gamma, rho_min, press_min, c_h,
+            )
+        else:
+            return ImhdGLM2D.numerical_flux_static(
+                q_l, q_r, nx, ny, gamma, rho_min, press_min, c_h,
+            )
 
     @parameter
     def apply_bc(
@@ -81,8 +86,13 @@ def _imhd_glm_rhs_kernel_2d[
     )
 
 
-struct DGImhdGLMSolver2D[P: Int]:
-    """Host-side launcher for the 2D GLM-MHD DG kernel."""
+struct DGImhdGLMSolver2D[P: Int, USE_HLLD: Bool = False]:
+    """Host-side launcher for the 2D GLM-MHD DG kernel.
+
+    `USE_HLLD = False` (default) uses Rusanov with c_max bumped to `c_h`;
+    `USE_HLLD = True` uses Miyoshi-Kusano HLLD for the 8 MHD components and
+    the exact (B_n, ψ) 2x2 Riemann solver for the GLM block on top.
+    """
 
     var app: ImhdGLM2D
 
@@ -110,7 +120,7 @@ struct DGImhdGLMSolver2D[P: Int]:
         var fbc_view = TileTensor(mesh.face_bc_buf, face_layout)
 
         comptime kernel = _imhd_glm_rhs_kernel_2d[
-            Self.P,
+            Self.P, Self.USE_HLLD,
             type_of(q_layout), type_of(q_layout),
             type_of(face_layout), type_of(ef_layout),
         ]

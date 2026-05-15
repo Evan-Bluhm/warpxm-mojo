@@ -43,7 +43,7 @@ def _load_node[
 
 
 def _imhd_glm_rhs_kernel_3d[
-    P: Int,
+    P: Int, USE_HLLD: Bool,
     QLayout: TensorLayout, RhsLayout: TensorLayout,
     FaceLayout: TensorLayout, EFLayout: TensorLayout,
 ](
@@ -118,58 +118,60 @@ def _imhd_glm_rhs_kernel_3d[
     var w_P: Scalar[WXM_DTYPE] = weights[P]
     var surface: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
 
+    @parameter
+    def num_flux(
+        q_l: InlineArray[Real, NC], q_r: InlineArray[Real, NC],
+        nx_: Real, ny_: Real, nz_: Real,
+    ) -> InlineArray[Real, NC]:
+        comptime if USE_HLLD:
+            return ImhdGLM3D.numerical_flux_hlld_static(
+                q_l, q_r, nx_, ny_, nz_, gamma, rho_min, press_min, c_h,
+            )
+        else:
+            return ImhdGLM3D.numerical_flux_static(
+                q_l, q_r, nx_, ny_, nz_, gamma, rho_min, press_min, c_h,
+            )
+
     if in_ == 0:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_LEFT_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
         var q_nbr = _load_node[P](q, nbr, kn * P1 * P1 + jn * P1 + P)
-        var f_star = ImhdGLM3D.numerical_flux_static(
-            q_nbr, q_n, Real(1.0), Real(0.0), Real(0.0), gamma, rho_min, press_min, c_h
-        )
+        var f_star = num_flux(q_nbr, q_n, Real(1.0), Real(0.0), Real(0.0))
         comptime for c in range(NC):
             surface[c] += (f_star[c] - fx_n[c]) / (jacobian_x * w_0)
     if in_ == P:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_RIGHT_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
         var q_nbr = _load_node[P](q, nbr, kn * P1 * P1 + jn * P1 + 0)
-        var f_star = ImhdGLM3D.numerical_flux_static(
-            q_n, q_nbr, Real(1.0), Real(0.0), Real(0.0), gamma, rho_min, press_min, c_h
-        )
+        var f_star = num_flux(q_n, q_nbr, Real(1.0), Real(0.0), Real(0.0))
         comptime for c in range(NC):
             surface[c] += (fx_n[c] - f_star[c]) / (jacobian_x * w_P)
     if jn == 0:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_BOTTOM_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
         var q_nbr = _load_node[P](q, nbr, kn * P1 * P1 + P * P1 + in_)
-        var f_star = ImhdGLM3D.numerical_flux_static(
-            q_nbr, q_n, Real(0.0), Real(1.0), Real(0.0), gamma, rho_min, press_min, c_h
-        )
+        var f_star = num_flux(q_nbr, q_n, Real(0.0), Real(1.0), Real(0.0))
         comptime for c in range(NC):
             surface[c] += (f_star[c] - fy_n[c]) / (jacobian_y * w_0)
     if jn == P:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_TOP_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
         var q_nbr = _load_node[P](q, nbr, kn * P1 * P1 + 0 * P1 + in_)
-        var f_star = ImhdGLM3D.numerical_flux_static(
-            q_n, q_nbr, Real(0.0), Real(1.0), Real(0.0), gamma, rho_min, press_min, c_h
-        )
+        var f_star = num_flux(q_n, q_nbr, Real(0.0), Real(1.0), Real(0.0))
         comptime for c in range(NC):
             surface[c] += (fy_n[c] - f_star[c]) / (jacobian_y * w_P)
     if kn == 0:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_DOWN_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
         var q_nbr = _load_node[P](q, nbr, P * P1 * P1 + jn * P1 + in_)
-        var f_star = ImhdGLM3D.numerical_flux_static(
-            q_nbr, q_n, Real(0.0), Real(0.0), Real(1.0), gamma, rho_min, press_min, c_h
-        )
+        var f_star = num_flux(q_nbr, q_n, Real(0.0), Real(0.0), Real(1.0))
         comptime for c in range(NC):
             surface[c] += (f_star[c] - fz_n[c]) / (jacobian_z * w_0)
     if kn == P:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_UP_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
         var q_nbr = _load_node[P](q, nbr, 0 * P1 * P1 + jn * P1 + in_)
-        var f_star = ImhdGLM3D.numerical_flux_static(
-            q_n, q_nbr, Real(0.0), Real(0.0), Real(1.0), gamma, rho_min, press_min, c_h
-        )
+        var f_star = num_flux(q_n, q_nbr, Real(0.0), Real(0.0), Real(1.0))
         comptime for c in range(NC):
             surface[c] += (fz_n[c] - f_star[c]) / (jacobian_z * w_P)
 
@@ -184,8 +186,13 @@ def _imhd_glm_rhs_kernel_3d[
         rhs[base + c] = rebind[rhs.ElementType](v)
 
 
-struct DGImhdGLMSolver3D[P: Int]:
-    """Host-side launcher for the 3D MixedGLM-MHD DG kernel."""
+struct DGImhdGLMSolver3D[P: Int, USE_HLLD: Bool = False]:
+    """Host-side launcher for the 3D MixedGLM-MHD DG kernel.
+
+    `USE_HLLD = False` (default) uses Rusanov with c_max bumped to `c_h`;
+    `USE_HLLD = True` uses Miyoshi-Kusano HLLD for the 8 MHD components and
+    the exact (B_n, ψ) 2x2 Riemann solver for the GLM block on top.
+    """
 
     var app: ImhdGLM3D
 
@@ -212,7 +219,8 @@ struct DGImhdGLMSolver3D[P: Int]:
         var ef_view = TileTensor(mesh.elem_face_dir_buf, ef_layout)
 
         comptime kernel = _imhd_glm_rhs_kernel_3d[
-            Self.P, type_of(q_layout), type_of(q_layout),
+            Self.P, Self.USE_HLLD,
+            type_of(q_layout), type_of(q_layout),
             type_of(face_layout), type_of(ef_layout),
         ]
         ctx.enqueue_function[kernel](

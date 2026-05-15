@@ -14,13 +14,13 @@
 
 from std.collections import InlineArray
 
-from warpxm.apps.imhd_3d import IMHD3D
 from warpxm.apps.imhd_2d import (
     MHD_NC,
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
     IDX_BX, IDX_BY, IDX_BZ,
     _fast_speed,
 )
+from warpxm.apps.imhd_3d import IMHD3D
 from warpxm.core.math_compat import fabs, fmax, sqrt
 from warpxm.core.types import Real
 
@@ -138,4 +138,42 @@ struct ImhdGLM3D(ImplicitlyCopyable, Movable):
             var f_n_l = nx * fx_l[c] + ny * fy_l[c] + nz * fz_l[c]
             var f_n_r = nx * fx_r[c] + ny * fy_r[c] + nz * fz_r[c]
             f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
+        return f
+
+    # ------------------------------------------------------------------
+    # HLLD with GLM divergence cleaning. See `imhd_glm_2d.mojo` for the
+    # 2x2 (B·n, ψ) Riemann derivation; 3D differs only in carrying the
+    # nz·B_z contribution into B_n and adding nz·ψ̃ to F[B_z].
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def numerical_flux_hlld_static(
+        q_l: InlineArray[Real, MHD_GLM_NC_3D],
+        q_r: InlineArray[Real, MHD_GLM_NC_3D],
+        nx: Real, ny: Real, nz: Real,
+        gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
+    ) -> InlineArray[Real, MHD_GLM_NC_3D]:
+        var q_l_mhd: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+        var q_r_mhd: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+        comptime for c in range(MHD_NC):
+            q_l_mhd[c] = q_l[c]
+            q_r_mhd[c] = q_r[c]
+        var f_mhd = IMHD3D.numerical_flux_hlld_static(
+            q_l_mhd, q_r_mhd, nx, ny, nz, gamma, rho_min, press_min,
+        )
+
+        var B_n_l = q_l[IDX_BX] * nx + q_l[IDX_BY] * ny + q_l[IDX_BZ] * nz
+        var B_n_r = q_r[IDX_BX] * nx + q_r[IDX_BY] * ny + q_r[IDX_BZ] * nz
+        var psi_l = q_l[IDX_PSI_3D]
+        var psi_r = q_r[IDX_PSI_3D]
+        var psi_hat = Real(0.5) * (psi_l + psi_r) - Real(0.5) * c_h * (B_n_r - B_n_l)
+        var B_n_hat = Real(0.5) * (B_n_l + B_n_r) - Real(0.5) * (psi_r - psi_l) / c_h
+
+        var f: InlineArray[Real, MHD_GLM_NC_3D] = InlineArray[Real, MHD_GLM_NC_3D](fill=Real(0.0))
+        comptime for c in range(MHD_NC):
+            f[c] = f_mhd[c]
+        f[IDX_BX] += nx * psi_hat
+        f[IDX_BY] += ny * psi_hat
+        f[IDX_BZ] += nz * psi_hat
+        f[IDX_PSI_3D] = c_h * c_h * B_n_hat
         return f

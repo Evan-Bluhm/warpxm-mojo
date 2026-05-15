@@ -142,6 +142,50 @@ struct ImhdGLM2D(ImplicitlyCopyable, Movable):
             f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
         return f
 
+    # ------------------------------------------------------------------
+    # HLLD numerical flux with GLM divergence cleaning. The (B_n, ψ)
+    # subsystem is a 2x2 linear hyperbolic block decoupled from the
+    # standard MHD waves (Dedner et al. 2002 §3.2; Mignone & Tzeferacos
+    # 2010 §4). Its exact Riemann solution at the interface is
+    #     ψ̃   = ½(ψ_L + ψ_R) − ½·c_h·(B_n_R − B_n_L)
+    #     B̃_n = ½(B_n_L + B_n_R) − (ψ_R − ψ_L)/(2·c_h)
+    # giving fluxes F[B_n] += ψ̃ and F[ψ] = c_h²·B̃_n. The remaining
+    # 8 conservative MHD components use the standard IMHD HLLD.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def numerical_flux_hlld_static(
+        q_l: InlineArray[Real, MHD_GLM_NC],
+        q_r: InlineArray[Real, MHD_GLM_NC],
+        nx: Real, ny: Real,
+        gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
+    ) -> InlineArray[Real, MHD_GLM_NC]:
+        # Slice off the first 8 components and dispatch to the regular HLLD.
+        var q_l_mhd: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+        var q_r_mhd: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+        comptime for c in range(MHD_NC):
+            q_l_mhd[c] = q_l[c]
+            q_r_mhd[c] = q_r[c]
+        var f_mhd = IMHD2D.numerical_flux_hlld_static(
+            q_l_mhd, q_r_mhd, nx, ny, gamma, rho_min, press_min,
+        )
+
+        # GLM block: decoupled 2x2 Riemann on (B·n, ψ) at speeds ±c_h.
+        var B_n_l = q_l[IDX_BX] * nx + q_l[IDX_BY] * ny
+        var B_n_r = q_r[IDX_BX] * nx + q_r[IDX_BY] * ny
+        var psi_l = q_l[IDX_PSI]
+        var psi_r = q_r[IDX_PSI]
+        var psi_hat = Real(0.5) * (psi_l + psi_r) - Real(0.5) * c_h * (B_n_r - B_n_l)
+        var B_n_hat = Real(0.5) * (B_n_l + B_n_r) - Real(0.5) * (psi_r - psi_l) / c_h
+
+        var f: InlineArray[Real, MHD_GLM_NC] = InlineArray[Real, MHD_GLM_NC](fill=Real(0.0))
+        comptime for c in range(MHD_NC):
+            f[c] = f_mhd[c]
+        f[IDX_BX] += nx * psi_hat
+        f[IDX_BY] += ny * psi_hat
+        f[IDX_PSI] = c_h * c_h * B_n_hat
+        return f
+
 
 # ---------------------------------------------------------------------------
 # GLM-flavoured versions of the IMHD helper functions (operate on 9-component
