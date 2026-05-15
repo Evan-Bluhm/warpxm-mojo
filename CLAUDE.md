@@ -113,6 +113,8 @@ Supporting infrastructure:
 | Adaptive DP45 (2D MHD Alfvén)   | 169 steps for t=1 (vs 1000 SSPRK3), L2 ~4.3e-6 on B/u  |
 | Adaptive DP45 (2D Maxwell)      | 76 steps for t=1/√2 (vs ~1414 SSPRK3), L2 ~1e-4 on E/B |
 | Adaptive DP45 (3D advection)    | 64 steps for t=1, dt 0.008..0.016, L2 1.76e-3          |
+| Adaptive DP45 (3D MHD Alfvén)   | 131 steps for t=1 (vs 1000 SSPRK3), L2 ~2.4e-5 on B/u  |
+| Adaptive DP45 (3D Maxwell)      | 50 steps for t=1 (vs ~2000 SSPRK3), L2 ~8e-4 on E/B    |
 
 Plus 25 more in `tests/`. Run the suite via:
 ```fish
