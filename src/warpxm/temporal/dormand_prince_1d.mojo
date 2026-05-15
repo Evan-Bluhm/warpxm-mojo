@@ -27,8 +27,6 @@ from layout import TileTensor, TensorLayout, Idx, row_major
 from std.math import ceildiv
 
 from warpxm.core.types import Real, WXM_DTYPE
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.spatial.dg_1d import DGSpatialSolver1D
 from warpxm.variable.state_1d import DGState1D
 
 
@@ -181,11 +179,14 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
         self.k7 = DGState1D[Self.P, Self.NC](ctx, num_elements)
         self.err_buf = DGState1D[Self.P, Self.NC](ctx, num_elements)
 
-    def step(
+    def step[
+        compute_rhs_fn: def(
+            mut DGState1D[Self.P, Self.NC],
+            mut DGState1D[Self.P, Self.NC],
+        ) raises capturing [_] -> None,
+    ](
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh1D[Self.P],
-        spatial: DGSpatialSolver1D[Self.P, Self.NC],
         mut u: DGState1D[Self.P, Self.NC],
         dt: Real,
     ) raises:
@@ -202,7 +203,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
         ctx.enqueue_copy(dst_buf=self.u_save.buf, src_buf=u.buf)
 
         # k1 = f(u^n)
-        spatial.compute_rhs(ctx, mesh, self.u_save, self.k1)
+        compute_rhs_fn(self.u_save, self.k1)
 
         # k2 = f(u + dt*(1/5)*k1)
         ctx.enqueue_function[k_c1](
@@ -212,7 +213,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             Real(1.0) / Real(5.0), dt, size,
             grid_dim=grid, block_dim=BLOCK,
         )
-        spatial.compute_rhs(ctx, mesh, self.y_stage, self.k2)
+        compute_rhs_fn(self.y_stage, self.k2)
 
         # k3 = f(u + dt*(3/40*k1 + 9/40*k2))
         ctx.enqueue_function[k_c2](
@@ -224,7 +225,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             Real(9.0) / Real(40.0),
             dt, size, grid_dim=grid, block_dim=BLOCK,
         )
-        spatial.compute_rhs(ctx, mesh, self.y_stage, self.k3)
+        compute_rhs_fn(self.y_stage, self.k3)
 
         # k4 = f(u + dt*(44/45*k1 - 56/15*k2 + 32/9*k3))
         ctx.enqueue_function[k_c3](
@@ -238,7 +239,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             Real(32.0) / Real(9.0),
             dt, size, grid_dim=grid, block_dim=BLOCK,
         )
-        spatial.compute_rhs(ctx, mesh, self.y_stage, self.k4)
+        compute_rhs_fn(self.y_stage, self.k4)
 
         # k5 = f(u + dt*(19372/6561*k1 - 25360/2187*k2 + 64448/6561*k3 - 212/729*k4))
         ctx.enqueue_function[k_c4](
@@ -254,7 +255,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             -Real(212.0) / Real(729.0),
             dt, size, grid_dim=grid, block_dim=BLOCK,
         )
-        spatial.compute_rhs(ctx, mesh, self.y_stage, self.k5)
+        compute_rhs_fn(self.y_stage, self.k5)
 
         # k6 = f(u + dt*(9017/3168*k1 - 355/33*k2 + 46732/5247*k3 + 49/176*k4 - 5103/18656*k5))
         ctx.enqueue_function[k_c5](
@@ -272,7 +273,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             -Real(5103.0) / Real(18656.0),
             dt, size, grid_dim=grid, block_dim=BLOCK,
         )
-        spatial.compute_rhs(ctx, mesh, self.y_stage, self.k6)
+        compute_rhs_fn(self.y_stage, self.k6)
 
         # u^{n+1} = u + dt*(35/384*k1 + 500/1113*k3 + 125/192*k4 - 2187/6784*k5 + 11/84*k6)
         ctx.enqueue_function[k_c5](
@@ -291,11 +292,14 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             dt, size, grid_dim=grid, block_dim=BLOCK,
         )
 
-    def step_adaptive(
+    def step_adaptive[
+        compute_rhs_fn: def(
+            mut DGState1D[Self.P, Self.NC],
+            mut DGState1D[Self.P, Self.NC],
+        ) raises capturing [_] -> None,
+    ](
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh1D[Self.P],
-        spatial: DGSpatialSolver1D[Self.P, Self.NC],
         mut u: DGState1D[Self.P, Self.NC],
         dt_init: Real,
         atol: Real = Real(1.0e-6),
@@ -326,10 +330,10 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             # the previous loop iteration. self.step writes a fresh u^{n+1}
             # using u_save (snapshot) as the starting point.
             ctx.enqueue_copy(dst_buf=u.buf, src_buf=self.u_save.buf)
-            self.step(ctx, mesh, spatial, u, dt)
+            self.step[compute_rhs_fn](ctx, u, dt)
 
             # k7 = f(y_5)
-            spatial.compute_rhs(ctx, mesh, u, self.k7)
+            compute_rhs_fn(u, self.k7)
             ctx.enqueue_function[k_err](
                 TileTensor(self.k1.buf, lay),
                 TileTensor(self.k3.buf, lay),

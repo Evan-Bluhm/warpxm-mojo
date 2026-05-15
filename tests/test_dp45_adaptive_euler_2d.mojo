@@ -18,7 +18,7 @@ from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
-from warpxm.temporal.dormand_prince_euler_2d import DormandPrince45_Euler_2D
+from warpxm.temporal.dormand_prince_2d import DormandPrince45_2D
 from warpxm.variable.state_2d import DGState2D
 
 
@@ -72,7 +72,14 @@ def main() raises:
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )
     var spatial = DGEulerSolver2D[P](app)
-    var stepper = DormandPrince45_Euler_2D[P](ctx, mesh.num_elements)
+    var stepper = DormandPrince45_2D[P, EULER_NC](ctx, mesh.num_elements)
+
+    @parameter
+    def compute_rhs(
+        mut q_in: DGState2D[P, EULER_NC],
+        mut q_out: DGState2D[P, EULER_NC],
+    ) raises:
+        spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
     var t: Real = 0.0
     var dt = DT_INIT
@@ -81,8 +88,8 @@ def main() raises:
     var max_dt: Real = 0.0
     while t < T_FINAL - Real(1.0e-12):
         var dt_try = dt if (t + dt) < T_FINAL else (T_FINAL - t)
-        var ret = stepper.step_adaptive(
-            ctx, mesh, spatial, q, dt_try, atol=ATOL, rtol=RTOL,
+        var ret = stepper.step_adaptive[compute_rhs](
+            ctx, q, dt_try, atol=ATOL, rtol=RTOL,
         )
         var dt_used = ret[0]
         var dt_next = ret[1]
