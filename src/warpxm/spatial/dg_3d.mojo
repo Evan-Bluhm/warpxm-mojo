@@ -1,0 +1,252 @@
+# 3D nodal DG spatial solver for scalar advection.
+#
+# Tensor-product extension of `dg_2d.mojo` to 3D. One thread block per
+# element, `(P+1)³` threads laid out as `block_dim = (P+1, P+1, P+1)`. The
+# block cooperates through shared memory to evaluate the three directional
+# derivatives `(Dx ⊗ I ⊗ I) f_x`, `(I ⊗ Dy ⊗ I) f_y`, `(I ⊗ I ⊗ Dz) f_z`,
+# then adds surface corrections from the 6 element faces.
+#
+# Today: periodic boundaries only; advection physics. Euler / MHD / Maxwell
+# 3D variants follow the same pattern.
+
+from std.collections import InlineArray
+from std.gpu import block_idx, thread_idx
+from std.gpu.host import DeviceContext
+from std.gpu.sync import barrier
+from std.gpu.memory import AddressSpace
+from layout import TileTensor, TensorLayout, Idx, row_major, stack_allocation
+
+# Layout imports already cover what we need on the host side.
+
+from warpxm.apps.advection_3d import Advection3D
+from warpxm.basis.nodal_basis_1d import NodalBasis1D
+from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
+from warpxm.mesh.block_3d import (
+    BlockMesh3D,
+    FACE_DIR_LEFT_3D, FACE_DIR_RIGHT_3D,
+    FACE_DIR_BOTTOM_3D, FACE_DIR_TOP_3D,
+    FACE_DIR_DOWN_3D, FACE_DIR_UP_3D,
+)
+from warpxm.variable.state_3d import DGState3D
+
+
+@always_inline
+def _load_node[
+    P: Int, NC: Int, QLayout: TensorLayout,
+](
+    q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
+    elem: Int,
+    local_node: Int,
+) -> InlineArray[Real, NC]:
+    comptime assert q.flat_rank == 1
+    comptime num_nodes_per_elem = (P + 1) ** 3
+    var base = (elem * num_nodes_per_elem + local_node) * NC
+    var out: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    comptime for c in range(NC):
+        out[c] = rebind[Scalar[WXM_DTYPE]](q[base + c])
+    return out
+
+
+def _advection_rhs_kernel_3d[
+    P: Int, NC: Int,
+    QLayout: TensorLayout, RhsLayout: TensorLayout,
+    FaceLayout: TensorLayout, EFLayout: TensorLayout,
+](
+    q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
+    rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
+    face_neg_elem: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
+    face_pos_elem: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
+    elem_face_dir: TileTensor[INDEX_DTYPE, EFLayout, MutAnyOrigin],
+    velocity_x: Real, velocity_y: Real, velocity_z: Real,
+    jacobian_x: Real, jacobian_y: Real, jacobian_z: Real,
+    num_elements: Int,
+):
+    comptime P1 = P + 1
+    comptime nodes_per_elem = P1 * P1 * P1
+    comptime assert q.flat_rank == 1
+    comptime assert rhs.flat_rank == 1
+    comptime assert face_neg_elem.flat_rank == 1
+    comptime assert face_pos_elem.flat_rank == 1
+    comptime assert elem_face_dir.flat_rank == 1
+
+    var e = Int(block_idx.x)
+    var in_ = Int(thread_idx.x)
+    var jn = Int(thread_idx.y)
+    var kn = Int(thread_idx.z)
+    if e >= num_elements or in_ >= P1 or jn >= P1 or kn >= P1:
+        return
+
+    var local_n = kn * P1 * P1 + jn * P1 + in_
+
+    # Shared flux storage: [node, comp, axis] with axis ∈ {0 = f_x, 1 = f_y, 2 = f_z}.
+    var f_shared = stack_allocation[
+        WXM_DTYPE, address_space=AddressSpace.SHARED,
+    ](row_major[P1 * P1 * P1, NC, 3]())
+
+    var q_n = _load_node[P, NC](q, e, local_n)
+    var fx_n = Advection3D[NC].internal_flux_x_static(q_n, velocity_x)
+    var fy_n = Advection3D[NC].internal_flux_y_static(q_n, velocity_y)
+    var fz_n = Advection3D[NC].internal_flux_z_static(q_n, velocity_z)
+    comptime for c in range(NC):
+        f_shared[local_n, c, 0] = rebind[f_shared.ElementType](fx_n[c])
+        f_shared[local_n, c, 1] = rebind[f_shared.ElementType](fy_n[c])
+        f_shared[local_n, c, 2] = rebind[f_shared.ElementType](fz_n[c])
+
+    barrier()
+
+    var d_flat = NodalBasis1D[P].diff_matrix_flat()
+    var dfdx: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var dgdy: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var dhdz: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+
+    # (Dx ⊗ I ⊗ I)
+    comptime for kx in range(P1):
+        var d_in_kx: Scalar[WXM_DTYPE] = d_flat[in_ * P1 + kx]
+        var k_node = kn * P1 * P1 + jn * P1 + kx
+        comptime for c in range(NC):
+            var v = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 0])
+            dfdx[c] += d_in_kx * v
+
+    # (I ⊗ Dy ⊗ I)
+    comptime for ky in range(P1):
+        var d_jn_ky: Scalar[WXM_DTYPE] = d_flat[jn * P1 + ky]
+        var k_node = kn * P1 * P1 + ky * P1 + in_
+        comptime for c in range(NC):
+            var v = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 1])
+            dgdy[c] += d_jn_ky * v
+
+    # (I ⊗ I ⊗ Dz)
+    comptime for kz in range(P1):
+        var d_kn_kz: Scalar[WXM_DTYPE] = d_flat[kn * P1 + kz]
+        var k_node = kz * P1 * P1 + jn * P1 + in_
+        comptime for c in range(NC):
+            var v = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 2])
+            dhdz[c] += d_kn_kz * v
+
+    var weights = NodalBasis1D[P].weights()
+    var w_0: Scalar[WXM_DTYPE] = weights[0]
+    var w_P: Scalar[WXM_DTYPE] = weights[P]
+    var surface: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+
+    # 6 face corrections. For each, identify the neighbor's mirrored local
+    # node index (the one geometrically coincident with this node on the
+    # adjacent element's face).
+
+    if in_ == 0:
+        # left face → axis 0, neighbor's mirror node has in_ = P
+        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_LEFT_3D]))
+        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
+        var q_nbr = _load_node[P, NC](q, nbr, kn * P1 * P1 + jn * P1 + P)
+        var f_star = Advection3D[NC].numerical_flux_static(
+            q_nbr, q_n, Real(1.0), Real(0.0), Real(0.0),
+            velocity_x, velocity_y, velocity_z,
+        )
+        comptime for c in range(NC):
+            surface[c] += (f_star[c] - fx_n[c]) / (jacobian_x * w_0)
+
+    if in_ == P:
+        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_RIGHT_3D]))
+        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
+        var q_nbr = _load_node[P, NC](q, nbr, kn * P1 * P1 + jn * P1 + 0)
+        var f_star = Advection3D[NC].numerical_flux_static(
+            q_n, q_nbr, Real(1.0), Real(0.0), Real(0.0),
+            velocity_x, velocity_y, velocity_z,
+        )
+        comptime for c in range(NC):
+            surface[c] += (fx_n[c] - f_star[c]) / (jacobian_x * w_P)
+
+    if jn == 0:
+        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_BOTTOM_3D]))
+        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
+        var q_nbr = _load_node[P, NC](q, nbr, kn * P1 * P1 + P * P1 + in_)
+        var f_star = Advection3D[NC].numerical_flux_static(
+            q_nbr, q_n, Real(0.0), Real(1.0), Real(0.0),
+            velocity_x, velocity_y, velocity_z,
+        )
+        comptime for c in range(NC):
+            surface[c] += (f_star[c] - fy_n[c]) / (jacobian_y * w_0)
+
+    if jn == P:
+        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_TOP_3D]))
+        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
+        var q_nbr = _load_node[P, NC](q, nbr, kn * P1 * P1 + 0 * P1 + in_)
+        var f_star = Advection3D[NC].numerical_flux_static(
+            q_n, q_nbr, Real(0.0), Real(1.0), Real(0.0),
+            velocity_x, velocity_y, velocity_z,
+        )
+        comptime for c in range(NC):
+            surface[c] += (fy_n[c] - f_star[c]) / (jacobian_y * w_P)
+
+    if kn == 0:
+        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_DOWN_3D]))
+        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
+        var q_nbr = _load_node[P, NC](q, nbr, P * P1 * P1 + jn * P1 + in_)
+        var f_star = Advection3D[NC].numerical_flux_static(
+            q_nbr, q_n, Real(0.0), Real(0.0), Real(1.0),
+            velocity_x, velocity_y, velocity_z,
+        )
+        comptime for c in range(NC):
+            surface[c] += (f_star[c] - fz_n[c]) / (jacobian_z * w_0)
+
+    if kn == P:
+        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_UP_3D]))
+        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
+        var q_nbr = _load_node[P, NC](q, nbr, 0 * P1 * P1 + jn * P1 + in_)
+        var f_star = Advection3D[NC].numerical_flux_static(
+            q_n, q_nbr, Real(0.0), Real(0.0), Real(1.0),
+            velocity_x, velocity_y, velocity_z,
+        )
+        comptime for c in range(NC):
+            surface[c] += (fz_n[c] - f_star[c]) / (jacobian_z * w_P)
+
+    var base = (e * nodes_per_elem + local_n) * NC
+    comptime for c in range(NC):
+        var v: Scalar[WXM_DTYPE] = (
+            -dfdx[c] / jacobian_x
+            - dgdy[c] / jacobian_y
+            - dhdz[c] / jacobian_z
+            + surface[c]
+        )
+        rhs[base + c] = rebind[rhs.ElementType](v)
+
+
+struct DGSpatialSolver3D[P: Int, NC: Int]:
+    """Host-side launcher for the 3D advection DG kernel."""
+
+    var app: Advection3D[Self.NC]
+
+    def __init__(out self, app: Advection3D[Self.NC]):
+        self.app = app
+
+    def compute_rhs(
+        self,
+        var ctx: DeviceContext,
+        mut mesh: BlockMesh3D[Self.P],
+        mut q: DGState3D[Self.P, Self.NC],
+        mut rhs: DGState3D[Self.P, Self.NC],
+    ) raises:
+        comptime P1 = Self.P + 1
+
+        var q_layout = row_major(Idx(q.buf_len))
+        var face_layout = row_major(Idx(mesh.num_faces))
+        var ef_layout = row_major(Idx(mesh.num_elements * 6))
+
+        var q_view = TileTensor(q.buf, q_layout)
+        var rhs_view = TileTensor(rhs.buf, q_layout)
+        var fn_view = TileTensor(mesh.face_neg_elem_buf, face_layout)
+        var fp_view = TileTensor(mesh.face_pos_elem_buf, face_layout)
+        var ef_view = TileTensor(mesh.elem_face_dir_buf, ef_layout)
+
+        comptime kernel = _advection_rhs_kernel_3d[
+            Self.P, Self.NC,
+            type_of(q_layout), type_of(q_layout),
+            type_of(face_layout), type_of(ef_layout),
+        ]
+        ctx.enqueue_function[kernel](
+            q_view, rhs_view, fn_view, fp_view, ef_view,
+            self.app.velocity_x, self.app.velocity_y, self.app.velocity_z,
+            mesh.jacobian_x, mesh.jacobian_y, mesh.jacobian_z,
+            mesh.num_elements,
+            grid_dim=mesh.num_elements,
+            block_dim=(P1, P1, P1),
+        )

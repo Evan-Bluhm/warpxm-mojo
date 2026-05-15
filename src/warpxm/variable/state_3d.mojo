@@ -1,0 +1,32 @@
+# 3D multi-component DG solver state.
+#
+# Tensor-product extension of `DGState2D[P, NC]`. Owns one flat device
+# buffer of length `num_elements · (P+1)³ · NC`, indexed
+#
+#     buf[((e · (P+1)³ + n) · NC) + c]
+#
+# where `e` is the element index and
+#     n = kn · (P+1)² + jn · (P+1) + in_
+# is the row-major 3D node index inside the element (ζ outer, then η, then ξ).
+
+from std.gpu.host import DeviceBuffer, DeviceContext
+from warpxm.core.types import Real
+
+
+struct DGState3D[P: Int, NC: Int]:
+    """A 3D DG field with `NC` components on (P+1)³ GLL nodes per element."""
+
+    comptime num_nodes_per_elem: Int = (Self.P + 1) ** 3
+    comptime num_components: Int = Self.NC
+
+    var num_elements: Int
+    var total_nodes: Int
+    var buf_len: Int
+    var buf: DeviceBuffer[Real.dtype]
+
+    def __init__(out self, var ctx: DeviceContext, num_elements: Int) raises:
+        self.num_elements = num_elements
+        self.total_nodes = num_elements * Self.num_nodes_per_elem
+        self.buf_len = self.total_nodes * Self.num_components
+        self.buf = ctx.enqueue_create_buffer[Real.dtype](self.buf_len)
+        self.buf.enqueue_fill(Real(0.0))

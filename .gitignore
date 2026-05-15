@@ -1,0 +1,22 @@
+# pixi
+.pixi/
+
+# Mojo build artifacts
+*.mojopkg
+__pycache__/
+
+# Documentation build output
+site/
+
+# Test scratch dirs (examples write here by default)
+/tmp/
+
+# Claude Code / agent runtime state (per-machine, never source)
+.claude/*.lock
+.claude/scheduled_tasks.lock
+.claude/memory/
+
+# Editor cruft
+.vscode/.*.swp
+*.swp
+.DS_Store

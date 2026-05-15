@@ -1,0 +1,74 @@
+# Zensical configuration for the warpxm-mojo documentation site.
+#
+# Build / preview:
+#     pixi run --environment docs docs-serve   # http://localhost:8000
+#     pixi run --environment docs docs-build   # output in ./site/
+
+[project]
+site_name = "warpxm-mojo"
+site_description = "GPU-only nodal discontinuous Galerkin solvers for hyperbolic plasma fluid equations, rewritten in Mojo."
+site_author = "warpxm-mojo contributors"
+docs_dir = "docs"
+site_dir = "site"
+
+# Navigation tree — sections in the order they appear in the sidebar.
+nav = [
+  "index.md",
+  { "Getting Started" = [
+    "getting-started/index.md",
+    { "Installation" = "getting-started/installation.md" },
+    { "Running your first example" = "getting-started/first-example.md" },
+    { "Viewing output in ParaView" = "getting-started/paraview.md" },
+  ] },
+  { "Concepts" = [
+    "concepts/index.md",
+    { "Design departures from upstream" = "concepts/design-departures.md" },
+    { "Nodal DG basics" = "concepts/nodal-dg.md" },
+    { "GPU architecture in Mojo" = "concepts/gpu-architecture.md" },
+    { "Time integration" = "concepts/time-integration.md" },
+  ] },
+  { "Physics" = [
+    "physics/index.md",
+    { "Scalar advection" = "physics/advection.md" },
+    { "5-moment Euler" = "physics/euler.md" },
+    { "Maxwell's equations" = "physics/maxwell.md" },
+    { "Ideal MHD" = "physics/mhd.md" },
+    { "Two-fluid plasma" = "physics/plasma.md" },
+  ] },
+  { "Numerical Methods" = [
+    "numerical-methods/index.md",
+    { "Rusanov / Lax-Friedrichs flux" = "numerical-methods/rusanov.md" },
+    { "HLLD flux for MHD" = "numerical-methods/hlld.md" },
+    { "Moe-Rossmanith slope limiter" = "numerical-methods/moe-rossmanith.md" },
+    { "Zhang-Shu positivity preserver" = "numerical-methods/positivity.md" },
+    { "Dedner GLM divergence cleaning" = "numerical-methods/dedner-glm.md" },
+    { "SSPRK3 time stepper" = "numerical-methods/ssprk3.md" },
+    { "Dormand-Prince adaptive RK45" = "numerical-methods/dormand-prince.md" },
+  ] },
+  { "Tutorials" = [
+    "tutorials/index.md",
+    { "Sod tube (Euler)" = "tutorials/sod-tube.md" },
+    { "Orszag-Tang vortex (MHD)" = "tutorials/orszag-tang.md" },
+    { "TM cavity mode (Maxwell)" = "tutorials/cavity-mode.md" },
+    { "Sedov blast with positivity" = "tutorials/sedov-blast.md" },
+  ] },
+  { "API Reference" = [
+    "api/index.md",
+    { "core" = "api/core.md" },
+    { "basis" = "api/basis.md" },
+    { "mesh" = "api/mesh.md" },
+    { "variable (state)" = "api/variable.md" },
+    { "apps (physics)" = "api/apps.md" },
+    { "spatial (DG solvers)" = "api/spatial.md" },
+    { "temporal (steppers)" = "api/temporal.md" },
+    { "adjusters (limiters + positivity)" = "api/adjusters.md" },
+    { "driver (VTU + FrameWriter)" = "api/driver.md" },
+  ] },
+  { "Contributing" = [
+    "contributing/index.md",
+    { "Repository tour" = "contributing/repo-tour.md" },
+    { "Adding a new physics module" = "contributing/adding-a-physics.md" },
+    { "Mojo style notes" = "contributing/style.md" },
+    { "Tests" = "contributing/tests.md" },
+  ] },
+]

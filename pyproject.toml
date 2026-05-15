@@ -1,0 +1,44 @@
+[project]
+name = "warpxm-mojo"
+version = "0.0.1"
+description = "GPU-only rewrite of WARPXM in Mojo: nodal discontinuous Galerkin solvers for hyperbolic plasma fluid equations"
+readme = "README.md"
+requires-python = ">=3.11"
+
+# ----------------------------------------------------------------------
+# Pixi project management.
+#
+# Setup:
+#     pixi install               # materialize .pixi/envs/default
+#     pixi run mojo --version    # sanity check
+#     pixi run build             # compile all examples
+#     pixi run test              # run the test suite
+# ----------------------------------------------------------------------
+
+[tool.pixi.workspace]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.dependencies]
+mojo = "*"
+numpy = ">=2.0"
+
+# --- Optional documentation feature ---
+# `pixi run --environment docs docs-serve` (or `pixi run docs-serve` if the
+# `docs` env is active) builds and serves the Zensical site at
+# http://localhost:8000. The dependency is gated behind a feature so the
+# default GPU-runtime environment doesn't drag in the docs toolchain.
+[tool.pixi.feature.docs.pypi-dependencies]
+zensical = "*"
+
+[tool.pixi.feature.docs.tasks]
+docs-serve = "zensical serve"
+docs-build = "zensical build"
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+docs = { features = ["docs"], solve-group = "default" }
+
+[tool.pixi.tasks]
+mojo-version = "mojo --version"
+test = "mojo run tests/run_all.mojo"
