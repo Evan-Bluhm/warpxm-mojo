@@ -110,6 +110,8 @@ Supporting infrastructure:
 | 3D Brio-Wu (HLLD)               | exact y/z-extrusion (drifts 0), passes Rusanov tolerances |
 | Adaptive DP45 (smooth advection)| 187 steps (vs ~2000 SSPRK3), L2 1.2e-7, dt up to 0.008  |
 | Adaptive DP45 (2D entropy wave) | 199 steps for t=1, dt 4.4e-3..1e-2, ρ L2 7e-7          |
+| Adaptive DP45 (2D MHD Alfvén)   | 169 steps for t=1 (vs 1000 SSPRK3), L2 ~4.3e-6 on B/u  |
+| Adaptive DP45 (3D advection)    | 64 steps for t=1, dt 0.008..0.016, L2 1.76e-3          |
 
 Plus 25 more in `tests/`. Run the suite via:
 ```fish
