@@ -46,15 +46,25 @@ $s = 0$ falls in the wave fan.
 
 ```mojo
 var spatial = DGImhdSolver2D[P, USE_HLLD=True](app)
-var stepper = SSPRK3_IMHD_Limited_2D[P](ctx, mesh.num_elements)
-...
-stepper.step[USE_HLLD=True](ctx, mesh, spatial, limiter, q, dt)
+var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)
+
+@parameter
+def compute_rhs(mut q_in, mut q_out) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+
+@parameter
+def adjust(mut q_) raises:
+    limiter.apply(ctx, mesh, q_)
+
+stepper.step[compute_rhs, adjust](ctx, q, dt)
 ```
 
-`USE_HLLD: Bool` is a `comptime` parameter on both the DG solver and
-the stepper. At `False` (the default) the kernel calls
-`IMHD2D.numerical_flux_static` (Rusanov); at `True` it calls
-`IMHD2D.numerical_flux_hlld_static`. Zero runtime cost for the switch.
+`USE_HLLD: Bool` is a `comptime` parameter on the DG solver only. At
+`False` (the default) the spatial RHS uses
+`IMHD2D.numerical_flux_static` (Rusanov); at `True` it uses
+`IMHD2D.numerical_flux_hlld_static`. The flux choice is captured by the
+`compute_rhs` closure, so the stepper doesn't need to know about it —
+zero runtime cost.
 
 The 3D version, `DGImhdSolver3D[P, USE_HLLD=True]`, uses a permutation-
 based core (`_hlld_core_3d` in `apps/imhd_3d.mojo`) so all three axis-

@@ -68,11 +68,22 @@ ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
 var app = Maxwell2D(c_light=1.0, cfl_max=0.5)
 var spatial = DGMaxwellSolver2D[P](app)
-var stepper = SSPRK3_Maxwell_2D[P](ctx, mesh.num_elements)
+var stepper = SSPRK3_2D[P, MAXWELL_NC](ctx, mesh.num_elements)
+
+@parameter
+def compute_rhs(
+    mut q_in: DGState2D[P, MAXWELL_NC],
+    mut q_out: DGState2D[P, MAXWELL_NC],
+) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+
+@parameter
+def no_adjust(mut q_: DGState2D[P, MAXWELL_NC]) raises:
+    pass
 ```
 
-No limiter is needed — Maxwell in vacuum has no shocks. The Maxwell
-stepper is a minimal SSPRK3 with no adjusters, no source terms.
+No limiter is needed — Maxwell in vacuum has no shocks, so `no_adjust`
+is a no-op and the stepper does pure SSPRK3.
 
 ### Diagnostics
 

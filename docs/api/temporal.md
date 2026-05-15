@@ -1,107 +1,126 @@
 # `warpxm.temporal`
 
-Explicit time integrators. Two families: SSPRK3 (three-stage Shu-Osher
-strong-stability-preserving) and Dormand-Prince 5(4).
+Explicit time integrators. The architecture mirrors upstream WARPXM's
+`spatial_solver + variable_adjuster` separation: one generic stepper
+per dimension; the spatial RHS evaluation and the adjuster list (slope
+limiter, positivity preserver, GLM damping, source terms, …) are
+composed at the call site via `@parameter def` closures.
 
-## SSPRK3 variants
+## Files
 
-| File | Stepper struct | Use |
-| ---- | -------------- | --- |
-| `ssprk3.mojo` | `SSPRK3[P, NC]` | Generic 1D, no adjuster |
-| `ssprk3_euler_limited_1d.mojo` | `SSPRK3_Euler_Limited_1D[P]` | 1D Euler + limiter |
-| `ssprk3_euler_limited_2d.mojo` | `SSPRK3_Euler_Limited_2D[P]` | 2D Euler + limiter |
-| `ssprk3_euler_limited_3d.mojo` | `SSPRK3_Euler_Limited_3D[P]` | 3D Euler + limiter |
-| `ssprk3_euler_positive_1d.mojo` | `SSPRK3_Euler_Positive_1D[P]` | Above + positivity preserver |
-| `ssprk3_euler_positive_2d.mojo` | `SSPRK3_Euler_Positive_2D[P]` | … |
-| `ssprk3_euler_positive_3d.mojo` | `SSPRK3_Euler_Positive_3D[P]` | … |
-| `ssprk3_maxwell_2d.mojo` | `SSPRK3_Maxwell_2D[P]` | 2D Maxwell |
-| `ssprk3_maxwell_3d.mojo` | `SSPRK3_Maxwell_3D[P]` | 3D Maxwell |
-| `ssprk3_imhd_limited_2d.mojo` | `SSPRK3_IMHD_Limited_2D[P]` | 2D MHD + limiter |
-| `ssprk3_imhd_limited_3d.mojo` | `SSPRK3_IMHD_Limited_3D[P]` | 3D MHD + limiter |
-| `ssprk3_imhd_positive_2d.mojo` | `SSPRK3_IMHD_Positive_2D[P]` | Above + MHD positivity preserver |
-| `ssprk3_imhd_positive_3d.mojo` | `SSPRK3_IMHD_Positive_3D[P]` | … |
-| `ssprk3_imhd_glm_limited_2d.mojo` | `SSPRK3_IMHD_GLM_Limited_2D[P]` | 2D GLM-MHD + limiter |
-| `ssprk3_imhd_glm_limited_3d.mojo` | `SSPRK3_IMHD_GLM_Limited_3D[P]` | 3D GLM-MHD + limiter |
-| `ssprk3_plasma_2d.mojo` | `SSPRK3_Plasma_2D[P]` | Two-species plasma (Euler × 2 + Maxwell) |
-| `ssprk3_plasma_3d.mojo` | `SSPRK3_Plasma_3D[P]` | … |
+| File | Stepper(s) | Use |
+| ---- | ---------- | --- |
+| `ssprk3.mojo` | `_euler_step_kernel`, `_ssprk3_combine_kernel` | Shared dimension-agnostic combine kernels imported by every SSPRK3 variant. No struct. |
+| `ssprk3_1d.mojo` | `SSPRK3_1D[P, NC]` | Every 1D problem (advection, Euler, …) |
+| `ssprk3_2d.mojo` | `SSPRK3_2D[P, NC]` | Every 2D problem (Euler, Maxwell, MHD, GLM-MHD, …) |
+| `ssprk3_3d.mojo` | `SSPRK3_3D[P, NC]` | Every 3D problem |
+| `dormand_prince_1d.mojo` | `DormandPrince45_1D[P, NC]` | Adaptive 5(4) RK in 1D |
+| `dormand_prince_euler_2d.mojo` | `DormandPrince45_Euler_2D[P]` | Adaptive 5(4) RK for 2D Euler |
+| `ssprk3_plasma_{2,3}d.mojo` | `SSPRK3_Plasma_{2,3}D[P]` | Two-species plasma — three coupled states, kept specialized |
+| `ssprk3_twofluid_{2,3}d.mojo` | `SSPRK3_Twofluid_{2,3}D[P]` | Single-fluid plasma (one fluid + Maxwell) |
 
-### Generic API
+## The two-closure pattern
+
+`SSPRK3_{1,2,3}D[P, NC].step` takes two comptime closure parameters:
 
 ```mojo
-from warpxm.temporal.ssprk3 import SSPRK3
-
-var stepper = SSPRK3[P, NC](ctx, mesh.num_elements)
-stepper.step(ctx, mesh, spatial, q, dt)
+def step[
+    compute_rhs_fn: def(mut DGStateNd[P, NC], mut DGStateNd[P, NC])
+                      raises capturing[_] -> None,
+    adjust_fn:      def(mut DGStateNd[P, NC])
+                      raises capturing[_] -> None,
+](mut self, var ctx, mut u, dt) raises
 ```
 
-### Limited / positive Euler 2D
+`compute_rhs_fn(q_in, q_out)` evaluates the spatial RHS for the supplied
+input and writes it to `q_out`. `adjust_fn(q)` runs after each RK stage
+value is written. Both closures capture whatever the driver needs
+(`spatial`, `mesh`, `limiter`, `positivity`, source-kernel parameters,
+etc.).
+
+This is the upstream WARPXM `spatial_solver + variable_adjuster`
+pattern expressed in Mojo: the library has no per-physics knowledge,
+the driver composes physics, sources, limiters, and positivity steps
+in a few lines at the call site.
+
+## Driver pattern (every problem looks like this)
 
 ```mojo
-var spatial = DGEulerSolver2D[P](app)
-var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)
-var stepper = SSPRK3_Euler_Limited_2D[P](ctx, mesh.num_elements)
-stepper.step(ctx, mesh, spatial, limiter, q, dt)
+var spatial = DG<Physics>Solver<D>D[P](app)
+var stepper = SSPRK3_<D>D[P, <Physics>_NC](ctx, mesh.num_elements)
 
-# Positivity version: same plus a PositivityEuler2D.
-var positivity = PositivityEuler2D[P](num_elements=..., gamma=...)
-var stepper = SSPRK3_Euler_Positive_2D[P](ctx, mesh.num_elements)
-stepper.step(ctx, mesh, spatial, limiter, positivity, q, dt)
+@parameter
+def compute_rhs(
+    mut q_in: DGState<D>D[P, <Physics>_NC],
+    mut q_out: DGState<D>D[P, <Physics>_NC],
+) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+    # ... add source kernels here (gravity, GLM damping, Lorentz, …)
+
+@parameter
+def adjust(mut q_: DGState<D>D[P, <Physics>_NC]) raises:
+    limiter.apply(ctx, mesh, q_)        # zero, one, or many
+    positivity.apply(ctx, mesh, q_)
+
+# Time loop
+while t < t_final:
+    stepper.step[compute_rhs, adjust](ctx, q, dt)
+    t += dt
 ```
 
-### MHD with HLLD
+For smooth problems (advection, Maxwell, smooth Euler), supply a no-op
+adjuster:
+
+```mojo
+@parameter
+def no_adjust(mut q_: DGState<D>D[P, <Physics>_NC]) raises:
+    pass
+```
+
+## Source-coupled problems
+
+The "multi-app" composition from upstream is just multiple kernel calls
+inside `compute_rhs`:
+
+```mojo
+# Euler with gravity:
+@parameter
+def compute_rhs(mut q_in, mut q_out) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+    apply_gravity_source_2d[P](ctx, q_in, q_out, gx, gy)
+
+# Ideal MHD with GLM cleaning:
+@parameter
+def compute_rhs(mut q_in, mut q_out) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+    apply_glm_damping_2d[P](ctx, q_in, q_out, c_h, c_p_sq)
+```
+
+## MHD with HLLD vs Rusanov
+
+`HLLD` selection is on the spatial-solver type, not the stepper:
 
 ```mojo
 var spatial = DGImhdSolver2D[P, USE_HLLD=True](app)
-var stepper = SSPRK3_IMHD_Limited_2D[P](ctx, mesh.num_elements)
-stepper.step[USE_HLLD=True](ctx, mesh, spatial, limiter, q, dt)
+var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)
+# ... compute_rhs / adjust closures ...
+stepper.step[compute_rhs, adjust](ctx, q, dt)
 ```
 
-The `[USE_HLLD=True]` comptime parameter is forwarded so the stepper
-internally calls the HLLD flux at every face evaluation.
+The closure picks up `spatial`, so whether you used `USE_HLLD=True` or
+the default is captured automatically.
 
-### Plasma 2D
+## Adaptive RK45 (Dormand-Prince)
 
-```mojo
-var stepper = SSPRK3_Plasma_2D[P](ctx, mesh.num_elements)
-stepper.step(
-    ctx, mesh, fluid_spatial, maxwell_spatial,
-    q_s1, q_s2, q_maxwell,
-    alpha_s1, alpha_s2, eps0, dt,
-)
-```
+`DormandPrince45_1D[P, NC]` and `DormandPrince45_Euler_2D[P]` keep their
+direct API for now (they pre-date the closure pattern and have an
+embedded fixed-shape error estimator). Migration to the same
+closure-based API is a follow-up. See
+[Dormand-Prince](../numerical-methods/dormand-prince.md).
 
-## Dormand-Prince 5(4)
+## Plasma steppers
 
-```mojo
-from warpxm.temporal.dormand_prince_1d import DormandPrince45_1D
-from warpxm.temporal.dormand_prince_euler_2d import DormandPrince45_Euler_2D
-
-var stepper = DormandPrince45_1D[P, NC](ctx, mesh.num_elements)
-# or DormandPrince45_Euler_2D[P]
-
-# Fixed-step:
-stepper.step(ctx, mesh, spatial, q, dt)
-
-# Adaptive:
-var ret = stepper.step_adaptive(ctx, mesh, spatial, q, dt_try,
-                                atol=Real(1.0e-8), rtol=Real(1.0e-6))
-var dt_used = ret[0]
-var dt_next = ret[1]
-```
-
-Currently shipped for 1D generic and 2D Euler. See
-[Dormand-Prince](../numerical-methods/dormand-prince.md) for the
-algorithm; porting to other 2D / 3D physics is ~100 lines per module.
-
-## Internal helpers
-
-The two basic combination kernels live in `ssprk3.mojo`:
-
-```mojo
-def _euler_step_kernel(...)  # out[i] = x[i] + dt * rhs[i]
-def _ssprk3_combine_kernel(...)  # out[i] = a*u0[i] + b*(u_stage[i] + dt*rhs[i])
-```
-
-Both are dimension-agnostic (flat 1D buffers) and reused by every
-SSPRK3 variant. Six specialised combine kernels for DP45 (1-, 2-, 3-,
-4-, 5-input arities) live in `dormand_prince_1d.mojo`.
+`SSPRK3_Plasma_{2,3}D[P]` and `SSPRK3_Twofluid_{2,3}D[P]` are kept
+specialised because they juggle three coupled states (two fluid species
+plus Maxwell) and a fixed-shape Lorentz / current-source coupling. They
+don't fit the single-`u`-buffer signature of `SSPRK3_{1,2,3}D`.

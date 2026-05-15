@@ -26,8 +26,12 @@ src/warpxm/
   core/        # real-type alias, math helpers, BC enum
   driver/      # VTU writers (Euler 2D/3D, MHD 2D/3D, Maxwell 2D/3D) + FrameWriter for time series
   mesh/        # BlockMesh{1,2,3}D with periodic + per-side BC catalog
-  spatial/     # DG kernels per (app, dimension); source kernels (gravity, Lorentz, current, GLM damping)
-  temporal/    # SSPRK3 steppers per (app, dimension), with optional limiter / GLM / source variants
+  spatial/     # dg_core_{1,2,3}d.mojo: shared DG cores. Per-physics dg_<phys>_<N>d.mojo
+               # wrappers supply flux/BC closures. Plus source kernels (gravity, Lorentz,
+               # current, GLM damping).
+  temporal/    # ssprk3_{1,2,3}d.mojo: one generic stepper per dimension. Driver supplies
+               # compute_rhs and adjust closures. dormand_prince_{...}.mojo for adaptive RK45.
+               # ssprk3_plasma_{2,3}d.mojo kept specialised (three coupled states).
   variable/    # DGState{1,2,3}D[P, NC] device buffers
 examples/      # polished driver programs (one .mojo per physics setup)
 tests/         # 49 regression tests covering every (physics, dimension) combination
@@ -165,14 +169,23 @@ writing Mojo. The most common pretraining-era mistakes:
 
 When adding a new (physics, dimension) combination, the proven recipe is:
 
-1. App: write `apps/<phys>_<N>d.mojo` with `internal_flux_{x,y[,z]}_static` and
-   a Rusanov / central+LF `numerical_flux_static` taking a unit normal.
-2. DG kernel: clone `spatial/dg_<existing>_<N>d.mojo`, swap the flux helpers.
-3. Stepper: clone `temporal/ssprk3_<existing>_<N>d.mojo`, swap the spatial
-   solver type.
-4. BCs: add a `_apply_bc_<phys>_<N>d` helper, thread `face_bc` through the
-   kernel, dispatch on the BC kind at each ghost-sentinel branch.
-5. Test: clone an analogous (phys, N±1) test, adjust the IC, run.
+1. **App**: write `apps/<phys>_<N>d.mojo` with `internal_flux_{x,y[,z]}_static`
+   and a Rusanov / central+LF `numerical_flux_static` taking a unit normal.
+2. **DG kernel**: write `spatial/dg_<phys>_<N>d.mojo` as a thin wrapper over
+   the shared `_dg_<N>d_compute_rhs_core` (in `spatial/dg_core_<N>d.mojo`).
+   The wrapper just declares four `@parameter def` closures — `flux_x`,
+   `flux_y`, `num_flux`, `apply_bc` — that dispatch to the app's static
+   methods, and calls the core with them.
+3. **Stepper**: nothing new. The generic `SSPRK3_<N>D[P, NC]` already handles
+   any single-state problem. Compose the limiter / positivity preserver /
+   source kernels at the call site via the driver's `adjust` and
+   `compute_rhs` closures.
+4. **BCs**: add a `_apply_bc_<phys>` helper in your `dg_<phys>_<N>d.mojo`
+   wrapper. It takes interior `q_n`, `bc_kind`, and `face_axis`, and returns
+   the ghost-side state. The shared DG core invokes it at every boundary
+   face.
+5. **Test**: clone an analogous (phys, N±1) test, adjust the IC, run.
 
-Source-term kernels and the slope limiter are NC-parameterized — they don't
-care about the physics, so a new app reuses them with the right NC value.
+Source-term kernels (gravity, Lorentz, GLM damping, etc.) and the slope
+limiter are NC-parameterised — a new app reuses them with the right NC
+value.

@@ -73,14 +73,26 @@ for j in range(NY):
 ```mojo
 var app = Euler2D(gas_gamma=Real(1.4), ...)
 var spatial = DGEulerSolver2D[P](app)
-var stepper = SSPRK3_Euler_Limited_2D[P](ctx, mesh.num_elements)
+var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)
+
+@parameter
+def compute_rhs(
+    mut q_in: DGState2D[P, EULER_NC],
+    mut q_out: DGState2D[P, EULER_NC],
+) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+
+@parameter
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    limiter.apply(ctx, mesh, q_)
 ```
 
-The **limited** stepper threads `limiter.apply(...)` between each RK
-stage — see [Moe-Rossmanith limiter](../numerical-methods/moe-rossmanith.md).
-The Sod problem isn't strong enough to need positivity preservation;
-for shock ratios > ~100 you'd switch to `SSPRK3_Euler_Positive_2D`.
+The `adjust` closure runs between each RK stage — see
+[Moe-Rossmanith limiter](../numerical-methods/moe-rossmanith.md). The
+Sod problem isn't strong enough to need positivity preservation; for
+shock ratios > ~100 you'd add `positivity.apply(ctx, mesh, q_)` inside
+`adjust`.
 
 ### Loop
 
@@ -131,8 +143,8 @@ the shock is at $x \approx 0.86$.
 ## Variations to try
 
 * Increase pressure ratio to 100:1 — at some point you'll start seeing
-  negative pressure failures. Switch to `SSPRK3_Euler_Positive_2D` +
-  `PositivityEuler2D` (see the [Sedov blast tutorial](sedov-blast.md)).
+  negative pressure failures. Add `PositivityEuler2D` to your `adjust`
+  closure (see the [Sedov blast tutorial](sedov-blast.md)).
 * Change $\gamma$ to 2.0 — analogous to the Brio-Wu MHD setup, useful if
   you want to compare hydrodynamic vs magnetised shock structure.
 * Refine the mesh to $\text{NX} = 400$ — the shock front becomes

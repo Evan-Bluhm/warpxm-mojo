@@ -40,24 +40,21 @@ the same property under the same CFL.
   dt · rhs)) is hand-written and identical across all
   `SSPRK3_*` variants.
 
-## Variants in `temporal/`
+## Steppers in `temporal/`
 
-The default `SSPRK3[P, NC]` (generic 1D, in `temporal/ssprk3.mojo`)
-handles any single-state problem. Specialised variants thread
-adjusters and source kernels:
+One generic stepper per dimension:
 
-| File | Adjuster / source |
-| ---- | ----------------- |
-| `ssprk3_euler_limited_{1,2,3}d` | Moe-Rossmanith limiter |
-| `ssprk3_euler_positive_{1,2,3}d` | Limiter + Zhang-Shu positivity |
-| `ssprk3_imhd_limited_{2,3}d` | Limiter for MHD |
-| `ssprk3_imhd_positive_{2,3}d` | Limiter + MHD positivity |
-| `ssprk3_imhd_glm_limited_{2,3}d` | Limiter for GLM-MHD |
-| `ssprk3_maxwell_{2,3}d` | (none — Maxwell is smooth) |
-| `ssprk3_plasma_{2,3}d` | Lorentz + current sources, two species + Maxwell |
+| File | Stepper | Use |
+| ---- | ------- | --- |
+| `ssprk3_1d.mojo` | `SSPRK3_1D[P, NC]` | Every 1D problem |
+| `ssprk3_2d.mojo` | `SSPRK3_2D[P, NC]` | Every 2D problem |
+| `ssprk3_3d.mojo` | `SSPRK3_3D[P, NC]` | Every 3D problem |
 
-All variants share the same per-stage skeleton — see
-[Time integration](../concepts/time-integration.md) for the picture.
+Limiters, positivity preservers, source kernels (gravity, GLM damping,
+…) are composed at the call site as `@parameter def` closures — see
+[Time integration](../concepts/time-integration.md). The plasma family
+(`ssprk3_plasma_{2,3}d`, `ssprk3_twofluid_{2,3}d`) is kept specialised
+because it juggles three coupled states.
 
 ## CFL constraint
 

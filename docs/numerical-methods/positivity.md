@@ -88,14 +88,20 @@ Usage (mirrors the limiter):
 
 ```mojo
 from warpxm.adjusters.positivity_euler_2d import PositivityEuler2D
-from warpxm.temporal.ssprk3_euler_positive_2d import SSPRK3_Euler_Positive_2D
+from warpxm.temporal.ssprk3_2d import SSPRK3_2D
 
 var positivity = PositivityEuler2D[P](
     num_elements=mesh.num_elements, gamma=GAMMA,
     rho_eps=Real(1.0e-10), p_eps=Real(1.0e-10),
 )
-var stepper = SSPRK3_Euler_Positive_2D[P](ctx, mesh.num_elements)
-stepper.step(ctx, mesh, spatial, limiter, positivity, q, dt)
+var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
+
+@parameter
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    limiter.apply(ctx, mesh, q_)
+    positivity.apply(ctx, mesh, q_)
+
+stepper.step[compute_rhs, adjust](ctx, q, dt)
 ```
 
 The positive stepper runs `limiter.apply(...)` then `positivity.apply(...)`

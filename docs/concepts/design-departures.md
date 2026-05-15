@@ -50,7 +50,7 @@ program that imports the solver modules and calls into them:
 from warpxm.apps.euler_2d import Euler2D, EULER_NC
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
-from warpxm.temporal.ssprk3_euler_limited_2d import SSPRK3_Euler_Limited_2D
+from warpxm.temporal.ssprk3_2d import SSPRK3_2D
 ...
 def main() raises:
     var mesh = BlockMesh2D[P](ctx, ...)

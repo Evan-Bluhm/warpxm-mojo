@@ -120,7 +120,14 @@ contributes; the implementation uses bisection.
 ```mojo
 from warpxm.adjusters.moe_rossmanith_2d import MoeRossmanith2D
 from warpxm.adjusters.positivity_mhd_2d import PositivityMHD2D
-from warpxm.temporal.ssprk3_imhd_positive_2d import SSPRK3_IMHD_Positive_2D
+from warpxm.temporal.ssprk3_2d import SSPRK3_2D
+
+var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)
+
+@parameter
+def adjust(mut q_: DGState2D[P, MHD_NC]) raises:
+    limiter.apply(ctx, mesh, q_)
+    positivity.apply(ctx, mesh, q_)
 ```
 
 ## Examples and tests

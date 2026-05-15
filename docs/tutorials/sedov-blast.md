@@ -58,13 +58,25 @@ var positivity = PositivityEuler2D[P](
     num_elements=mesh.num_elements, gamma=GAMMA,
     rho_eps=Real(1.0e-10), p_eps=Real(1.0e-10),
 )
-var stepper = SSPRK3_Euler_Positive_2D[P](ctx, mesh.num_elements)
+var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 
-stepper.step(ctx, mesh, spatial, limiter, positivity, q, dt_use)
+@parameter
+def compute_rhs(
+    mut q_in: DGState2D[P, EULER_NC],
+    mut q_out: DGState2D[P, EULER_NC],
+) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+
+@parameter
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    limiter.apply(ctx, mesh, q_)
+    positivity.apply(ctx, mesh, q_)
+
+stepper.step[compute_rhs, adjust](ctx, q, dt_use)
 ```
 
-Inside `SSPRK3_Euler_Positive_2D.step`, every RK stage is followed by
-`limiter.apply(...)` *then* `positivity.apply(...)`. The order matters:
+The `adjust` closure runs `limiter.apply(...)` then `positivity.apply(...)`
+after each RK stage. The order matters:
 
 * The **limiter** does shape-preservation (keep variation bounded by
   neighbour means). It guarantees conservation but not positivity.

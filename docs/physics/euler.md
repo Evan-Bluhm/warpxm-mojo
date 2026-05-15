@@ -92,15 +92,28 @@ For shock problems, wrap with the Moe-Rossmanith slope limiter:
 
 ```mojo
 from warpxm.adjusters.moe_rossmanith_2d import MoeRossmanith2D
-from warpxm.temporal.ssprk3_euler_limited_2d import SSPRK3_Euler_Limited_2D
+from warpxm.temporal.ssprk3_2d import SSPRK3_2D
+
+var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
+var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)
+
+@parameter
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    limiter.apply(ctx, mesh, q_)
 ```
 
 For strong shocks where the limiter alone can't keep ρ, P positive,
-add the Zhang-Shu positivity preserver:
+add the Zhang-Shu positivity preserver into the same `adjust` closure:
 
 ```mojo
 from warpxm.adjusters.positivity_euler_2d import PositivityEuler2D
-from warpxm.temporal.ssprk3_euler_positive_2d import SSPRK3_Euler_Positive_2D
+
+var positivity = PositivityEuler2D[P](mesh.num_elements, gamma=GAMMA)
+
+@parameter
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    limiter.apply(ctx, mesh, q_)
+    positivity.apply(ctx, mesh, q_)
 ```
 
 See [Time integration](../concepts/time-integration.md) and

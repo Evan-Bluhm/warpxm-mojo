@@ -1,8 +1,11 @@
 # Time integration
 
-warpxm-mojo ships two explicit Runge-Kutta integrators and a family of
-**source-coupled** and **adjuster-coupled** stepper variants for the
-problems that need them.
+warpxm-mojo ships two explicit Runge-Kutta integrators. The library
+exposes one **generic stepper per dimension** — the spatial-RHS
+evaluation, source terms, slope limiter, positivity preserver, and any
+other adjusters are composed at the call site via `@parameter def`
+closures. That's upstream WARPXM's `spatial_solver + variable_adjuster`
+pattern, expressed in Mojo's compile-time function-parameter system.
 
 ## SSPRK3 — the workhorse
 
@@ -12,25 +15,33 @@ property the forward-Euler step preserves — positivity, TVD bounds —
 SSPRK3 also preserves) and third-order accurate in time.
 
 ```mojo
-from warpxm.temporal.ssprk3 import SSPRK3
-var stepper = SSPRK3[P, NC](ctx, mesh.num_elements)
-stepper.step(ctx, mesh, spatial, q, dt)
+from warpxm.temporal.ssprk3_2d import SSPRK3_2D
+
+var stepper = SSPRK3_2D[P, NC](ctx, mesh.num_elements)
+
+@parameter
+def compute_rhs(mut q_in, mut q_out) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+
+@parameter
+def adjust(mut q_) raises:
+    limiter.apply(ctx, mesh, q_)
+    positivity.apply(ctx, mesh, q_)
+
+stepper.step[compute_rhs, adjust](ctx, q, dt)
 ```
 
-The generic `SSPRK3[P, NC]` is for 1D problems with a single state
-field. 2D / 3D and physics-specific variants live alongside it in
-`temporal/`:
+Three steppers cover every dimension:
 
 | Stepper | Used by |
 | ------- | ------- |
-| `SSPRK3[P, NC]` | 1D advection, generic |
-| `SSPRK3_Euler_Limited_1D/2D/3D` | Compressible Euler with shock limiter |
-| `SSPRK3_Euler_Positive_1D/2D/3D` | Above + Zhang-Shu positivity preserver |
-| `SSPRK3_Maxwell_2D/3D` | Maxwell, no limiter needed |
-| `SSPRK3_IMHD_Limited_2D/3D` | Ideal MHD with limiter |
-| `SSPRK3_IMHD_Positive_2D/3D` | MHD limiter + positivity preserver |
-| `SSPRK3_IMHD_GLM_Limited_2D/3D` | MHD with Dedner GLM cleaning |
-| `SSPRK3_Plasma_2D/3D` | Two-species plasma (Euler × 2 + Maxwell) |
+| `SSPRK3_1D[P, NC]` | Every 1D problem (advection, Euler) |
+| `SSPRK3_2D[P, NC]` | Every 2D problem (Euler, MHD, Maxwell, GLM-MHD) |
+| `SSPRK3_3D[P, NC]` | Every 3D problem |
+
+The plasma family (`SSPRK3_Plasma_{2,3}D`, `SSPRK3_Twofluid_{2,3}D`)
+stays specialised because it juggles three coupled states (two fluid
+species plus Maxwell) — see [Plasma](../physics/plasma.md).
 
 ## Dormand-Prince RK45 — adaptive
 
@@ -55,83 +66,71 @@ var dt_next = ret[1]
 On the smooth-advection benchmark adaptive DP45 converges in **~10×
 fewer steps than fixed-Δt SSPRK3** at the same error tolerance.
 
-DP45 currently exists for generic 1D fields and for 2D Euler. Other
-physics modules use SSPRK3.
+DP45 currently uses the pre-refactor direct-spatial-solver API; the
+2D Euler variant lives in `dormand_prince_euler_2d.mojo`. Other physics
+× dimension combinations and migration to the same closure pattern as
+SSPRK3 are open follow-ups.
 
-## Coupling sources and limiters
+## Composing sources and adjusters
 
-When time-integrating systems with sources (gravity, Lorentz force) or
-shape-preserving constraints (slope limiter, positivity), we have a
-choice about *where* in the SSPRK3 update to apply them.
+The two-closure pattern absorbs everything that was previously a
+specialised stepper variant.
 
-### Source terms
+### Sources (gravity, Lorentz, GLM damping, …)
 
-The plasma stepper (`SSPRK3_Plasma_2D/3D`) accumulates the source into
-the RHS of each RK stage:
+Fold them into `compute_rhs` after the main spatial RHS call:
 
 ```mojo
-spatial.compute_rhs(ctx, mesh, u, rhs)        # ∇·F only
-apply_lorentz_source_2d(..., u, m, rhs, ...)  # adds J×B / ρ to rhs
-apply_current_source_2d(..., u, m_rhs, ...)   # adds J onto Maxwell's ∂E/∂t
+@parameter
+def compute_rhs(mut q_in, mut q_out) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+    apply_gravity_source_2d[P](ctx, q_in, q_out, gx, gy)
+    apply_glm_damping_2d[P](ctx, q_in, q_out, c_h, c_p_sq)
 ```
 
-Because each RHS evaluation is fed the current stage values, this gives
-a coupled, second-order-accurate treatment of the source — see the pair-
-plasma Langmuir regression test for the demonstration.
+Sources add to `q_out` rather than overwriting, so the spatial RHS and
+each source contribute additively — same as the multi-app composition
+in upstream.
 
 ### Limiters and positivity preservers
 
-Slope limiters and the Zhang-Shu positivity preserver are *projection*
-operators on the state, not RHS modifiers. They're applied **between RK
-stages**:
+Apply between RK stages via `adjust`:
 
 ```mojo
-# Pseudocode for one SSPRK3 step with limiter + positivity
-u_save = u
-spatial.compute_rhs(ctx, mesh, u_save, rhs)
-stage1 = u_save + dt * rhs
-limiter.apply(ctx, mesh, stage1)
-positivity.apply(ctx, mesh, stage1)
-spatial.compute_rhs(ctx, mesh, stage1, rhs)
-stage2 = 0.75 * u_save + 0.25 * (stage1 + dt * rhs)
-limiter.apply(ctx, mesh, stage2)
-positivity.apply(ctx, mesh, stage2)
-# ... and so on for stage 3
+@parameter
+def adjust(mut q_) raises:
+    limiter.apply(ctx, mesh, q_)
+    positivity.apply(ctx, mesh, q_)
 ```
 
-Both adjusters are **cell-mean preserving**, so mass / momentum /
-energy stay conserved while ρ and P are bounded away from zero.
+Order matters: the limiter is shape-preserving on conserved variables;
+the positivity preserver enforces ρ > 0, P > 0 by checking primitives.
+The stepper calls `adjust` once on the input plus once after each of
+the three RK stages — every spatial RHS evaluation sees an adjusted
+state. See [Moe-Rossmanith limiter](../numerical-methods/moe-rossmanith.md)
+and [Zhang-Shu positivity preserver](../numerical-methods/positivity.md).
 
-See [Moe-Rossmanith limiter](../numerical-methods/moe-rossmanith.md)
-and [Zhang-Shu positivity preserver](../numerical-methods/positivity.md)
-for the algorithms.
+### No adjuster
 
-## Choosing a stepper for your driver
+Smooth problems (advection, Maxwell, smooth Euler) supply a no-op:
 
-A rough decision tree:
+```mojo
+@parameter
+def no_adjust(mut q_) raises:
+    pass
+```
+
+## Choosing a stepper
 
 ```text
-Smooth problem (advection, sound wave, smooth Euler)
-    → SSPRK3[P, NC]  (or DormandPrince45_1D if you want adaptive)
+Any single-state 1D / 2D / 3D problem (advection, Euler, Maxwell, MHD, GLM-MHD)
+    → SSPRK3_<D>D[P, NC]
+    → compose limiter / positivity / sources in the closures
 
-Compressible Euler with shocks (Sod, blast wave)
-    → SSPRK3_Euler_Limited_Nd  (NX_d = 1, 2, or 3)
-    → SSPRK3_Euler_Positive_Nd  if shocks are strong enough to drive ρ or P negative
+Smooth problem, want adaptive Δt
+    → DormandPrince45_1D[P, NC]  (1D)
+    → DormandPrince45_Euler_2D[P]  (2D Euler)
 
-Maxwell-only (cavity, plane wave)
-    → SSPRK3_Maxwell_2D / 3D
-
-Ideal MHD (Brio-Wu, Orszag-Tang, Alfvén waves)
-    → SSPRK3_IMHD_Limited_2D / 3D
-    → use DGImhdSolver2D[P, USE_HLLD=True] inside it for sharper shocks
-    → SSPRK3_IMHD_Positive_2D / 3D for strong shocks near vacuum
-
-MHD with divergence cleaning
-    → SSPRK3_IMHD_GLM_Limited_2D / 3D
-
-Plasma (two-species)
-    → SSPRK3_Plasma_2D / 3D
+Plasma (two species)
+    → SSPRK3_Plasma_{2,3}D[P]
 ```
-
-Each of these has at least one regression test exercising it — see
-[`tests/`](https://github.com/your-fork/warpxm-mojo/tree/main/tests).

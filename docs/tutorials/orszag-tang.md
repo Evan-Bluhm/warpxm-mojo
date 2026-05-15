@@ -8,7 +8,8 @@ structure over time. This tutorial runs the full
 * `ImhdGLM2D` with Dedner divergence cleaning,
 * `DGImhdGLMSolver2D` with Rusanov flux (HLLD is a one-line switch),
 * `MoeRossmanith2D[P, MHD_GLM_NC]` slope limiter,
-* `SSPRK3_IMHD_GLM_Limited_2D` time stepping,
+* `SSPRK3_2D[P, MHD_GLM_NC]` for time stepping, with the GLM damping
+  source composed into the `compute_rhs` closure,
 * `FrameWriter` + `dump_imhd_glm_2d_frame` for VTU output,
 * host-side integrated conservation diagnostics each frame.
 
@@ -92,13 +93,26 @@ var app = ImhdGLM2D(
     c_p_sq=Real(0.5),
 )
 var spatial = DGImhdGLMSolver2D[P](app)
-var stepper = SSPRK3_IMHD_GLM_Limited_2D[P](ctx, mesh.num_elements)
+var stepper = SSPRK3_2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
 var limiter = MoeRossmanith2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
+
+@parameter
+def compute_rhs(
+    mut q_in: DGState2D[P, MHD_GLM_NC],
+    mut q_out: DGState2D[P, MHD_GLM_NC],
+) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+    apply_glm_damping_2d[P](ctx, q_in, q_out, C_H, C_P_SQ)
+
+@parameter
+def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises:
+    limiter.apply(ctx, mesh, q_)
 ```
 
-The **GLM-specific** stepper and spatial solver thread the $\psi$
-equation through every stage. The limiter is generic (NC-parameterised)
-so it works at NC=9 without changes.
+The spatial solver handles the $\psi$-coupled flux; the parabolic GLM
+damping is composed into `compute_rhs` as a source kernel that adds
+$-\tfrac{c_h^{2}}{c_p^{2}}\psi$ to the $\psi$ RHS. The limiter is
+NC-parameterised and works at NC=9 without changes.
 
 ### Inside the time loop
 
@@ -144,6 +158,7 @@ Stone-Gardiner all show it.
 * **Mesh refinement**: $\text{NX} = 128$ — the shock network is much
   cleaner, and `psi^{2}` becomes a more aggressive lower bound on the
   divergence error magnitude.
-* **Removing GLM**: substitute `IMHD2D` for `ImhdGLM2D` and the
-  plain `SSPRK3_IMHD_Limited_2D` stepper. The simulation will
-  diverge within ~0.1 time units as $\nabla\cdot\mathbf{B}$ grows.
+* **Removing GLM**: substitute `IMHD2D` for `ImhdGLM2D`, drop the
+  `apply_glm_damping_2d` line from `compute_rhs`, and switch
+  `MHD_GLM_NC` → `MHD_NC` throughout. The simulation will diverge
+  within ~0.1 time units as $\nabla\cdot\mathbf{B}$ grows.
