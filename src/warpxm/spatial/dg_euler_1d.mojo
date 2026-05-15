@@ -126,7 +126,8 @@ def _euler_rhs_kernel_1d[
             q_neg = _load_node[P](q, le, num_nodes_per_elem - 1)
         var q_pos = q_i  # element e's leftmost node IS i = 0
         var f_star = Euler1D.numerical_flux_static(
-            q_neg, q_pos, Real(1.0), gamma, rho_min, press_min
+            q_neg, q_pos, Real(1.0), Real(0.0), Real(0.0),
+            gamma, rho_min, press_min,
         )
         var w0: Scalar[WXM_DTYPE] = weights[0]
         comptime for c in range(NC):
@@ -145,7 +146,8 @@ def _euler_rhs_kernel_1d[
         else:
             q_pos = _load_node[P](q, re, 0)
         var f_star = Euler1D.numerical_flux_static(
-            q_neg, q_pos, Real(1.0), gamma, rho_min, press_min
+            q_neg, q_pos, Real(1.0), Real(0.0), Real(0.0),
+            gamma, rho_min, press_min,
         )
         var wP: Scalar[WXM_DTYPE] = weights[num_nodes_per_elem - 1]
         comptime for c in range(NC):

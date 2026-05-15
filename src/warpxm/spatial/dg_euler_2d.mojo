@@ -78,7 +78,7 @@ def _euler_rhs_kernel_2d[
         nx: Real, ny: Real,
     ) -> InlineArray[Real, EULER_NC]:
         return Euler2D.numerical_flux_static(
-            q_l, q_r, nx, ny, gamma, rho_min, press_min,
+            q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min,
         )
 
     @parameter
