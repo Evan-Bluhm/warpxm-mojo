@@ -20,7 +20,12 @@ reference C++ codebase lives at `~/GitHub/warpxm`.
 
 ```
 src/warpxm/
-  apps/        # physics apps (advection, euler, maxwell, mhd, glm-mhd)
+  apps/        # One file per physics: advection, euler, maxwell, imhd,
+               # imhd_glm. Each exposes axis-parametric fluxes and a
+               # 3-component-normal numerical flux; the DG launcher owns
+               # dimensionality. Per-dim shim files (e.g. euler_1d.mojo)
+               # alias the unified struct as Euler1D/Euler2D/Euler3D for
+               # back-compat — see "Apps consolidation" below.
   adjusters/   # slope limiters (Moe-Rossmanith for 1D, 2D, 3D)
   basis/       # GLL nodal basis (P = 1..4)
   core/        # real-type alias, math helpers, BC enum
@@ -176,23 +181,50 @@ writing Mojo. The most common pretraining-era mistakes:
 - `from collections import …` → `from std.collections import …`
 - Struct-parameter access inside a struct → `Self.T`, not bare `T`
 
-When adding a new (physics, dimension) combination, the proven recipe is:
+### Apps consolidation
 
-1. **App**: write `apps/<phys>_<N>d.mojo` with `internal_flux_{x,y[,z]}_static`
-   and a Rusanov / central+LF `numerical_flux_static` taking a unit normal.
-2. **DG kernel**: write `spatial/dg_<phys>_<N>d.mojo` as a thin wrapper over
-   the shared `_dg_<N>d_compute_rhs_core` (in `spatial/dg_core_<N>d.mojo`).
-   The wrapper just declares four `@parameter def` closures — `flux_x`,
-   `flux_y`, `num_flux`, `apply_bc` — that dispatch to the app's static
-   methods, and calls the core with them.
-3. **Stepper**: nothing new. The generic `SSPRK3_<N>D[P, NC]` already handles
-   any single-state problem. Compose the limiter / positivity preserver /
-   source kernels at the call site via the driver's `adjust` and
-   `compute_rhs` closures.
-4. **BCs**: add a `_apply_bc_<phys>` helper in your `dg_<phys>_<N>d.mojo`
-   wrapper. It takes interior `q_n`, `bc_kind`, and `face_axis`, and returns
-   the ghost-side state. The shared DG core invokes it at every boundary
-   face.
+Each of the five core physics packages (advection, euler, maxwell, imhd,
+imhd_glm) is now a single file. The app exposes:
+
+- `internal_flux_x_static`, `internal_flux_y_static`, `internal_flux_z_static`
+  (or an axis-parametric `internal_flux_axis_static[axis]` where it pays off
+  — advection, euler).
+- `numerical_flux_static(q_l, q_r, nx, ny, nz, ...physics-params...)` taking a
+  3-component unit normal. 1D callers pass `(±1, 0, 0)`; 2D callers pass
+  `(nx, ny, 0)`. Unused lanes multiply by zero and are folded away.
+- Optionally `numerical_flux_hlld_static(...)` with the same shape (currently
+  IMHD and GLM-MHD; uses axis-aligned permutation dispatch into
+  `_hlld_core_3d`).
+
+This mirrors upstream WARPXM's pattern: the *flux launcher* owns
+dimensionality; the *app* operates on local node values. Per-dim DG kernel
+wrappers (`dg_<phys>_<N>d.mojo`) still exist because mesh layouts are
+dimension-specific, but they call into the shared app file.
+
+Per-dim shim files (`apps/<phys>_<N>d.mojo`) are kept short and alias the
+unified struct as `<Phys>1D`/`<Phys>2D`/`<Phys>3D` so existing test/example
+imports keep working.
+
+### Adding a new physics
+
+1. **App**: write `apps/<phys>.mojo` with `internal_flux_{x,y,z}_static`
+   methods on the struct and a `numerical_flux_static(q_l, q_r, nx, ny, nz,
+   ...)` taking a 3-component unit normal. Module-level helpers
+   (`_rho_floored`, `_gas_pressure_floored`, etc.) for the physics-specific
+   conversions.
+2. **DG kernel**: write `spatial/dg_<phys>_<N>d.mojo` for each dimension you
+   need as a thin wrapper over the shared `_dg_<N>d_compute_rhs_core` (in
+   `spatial/dg_core_<N>d.mojo`). The wrapper declares four `@parameter def`
+   closures — `flux_x`, `flux_y`, `num_flux`, `apply_bc` — that dispatch to
+   the app's static methods and pass the right normal triples
+   (e.g. 2D passes `(nx, ny, 0)`).
+3. **Stepper**: nothing new. The generic `SSPRK3_<N>D[P, NC]` and
+   `DormandPrince45_<N>D[P, NC]` already handle any single-state problem.
+   Compose the limiter / positivity preserver / source kernels at the call
+   site via the driver's `adjust` and `compute_rhs` closures.
+4. **BCs**: add a `_apply_bc_<phys>` helper in your DG-kernel wrapper. It
+   takes interior `q_n`, `bc_kind`, and `face_axis`, returns the ghost-side
+   state. The shared DG core invokes it at every boundary face.
 5. **Test**: clone an analogous (phys, N±1) test, adjust the IC, run.
 
 Source-term kernels (gravity, Lorentz, GLM damping, etc.) and the slope
