@@ -167,7 +167,7 @@ struct ImhdGLM2D(ImplicitlyCopyable, Movable):
             q_l_mhd[c] = q_l[c]
             q_r_mhd[c] = q_r[c]
         var f_mhd = IMHD2D.numerical_flux_hlld_static(
-            q_l_mhd, q_r_mhd, nx, ny, gamma, rho_min, press_min,
+            q_l_mhd, q_r_mhd, nx, ny, Real(0.0), gamma, rho_min, press_min,
         )
 
         # GLM block: decoupled 2x2 Riemann on (B·n, ψ) at speeds ±c_h.

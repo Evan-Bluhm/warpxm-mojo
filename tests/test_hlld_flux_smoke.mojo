@@ -39,7 +39,7 @@ def main() raises:
 
     var f_phys_x = IMHD2D.internal_flux_x_static(q, gamma, rho_min, p_min)
     var f_hlld_x = IMHD2D.numerical_flux_hlld_static(
-        q, q, Real(1.0), Real(0.0), gamma, rho_min, p_min,
+        q, q, Real(1.0), Real(0.0), Real(0.0), gamma, rho_min, p_min,
     )
     var max_err_x: Real = 0.0
     for c in range(MHD_NC):
@@ -48,7 +48,7 @@ def main() raises:
 
     var f_phys_y = IMHD2D.internal_flux_y_static(q, gamma, rho_min, p_min)
     var f_hlld_y = IMHD2D.numerical_flux_hlld_static(
-        q, q, Real(0.0), Real(1.0), gamma, rho_min, p_min,
+        q, q, Real(0.0), Real(1.0), Real(0.0), gamma, rho_min, p_min,
     )
     var max_err_y: Real = 0.0
     for c in range(MHD_NC):
@@ -76,7 +76,7 @@ def main() raises:
     q_r[IDX_E] = 0.1 / (Real(2.0) - Real(1.0)) + Real(0.5) * bsq_r
 
     var f_bw = IMHD2D.numerical_flux_hlld_static(
-        q_l, q_r, Real(1.0), Real(0.0), Real(2.0), rho_min, p_min,
+        q_l, q_r, Real(1.0), Real(0.0), Real(0.0), Real(2.0), rho_min, p_min,
     )
     print("(b) Brio-Wu HLLD flux:")
     print("    F_ρ  =", f_bw[IDX_RHO])
@@ -99,10 +99,10 @@ def main() raises:
         q_l2[c] = q[c] - eps_pert * Real(c + 1) * Real(0.1)
         q_r2[c] = q[c] + eps_pert * Real(c + 1) * Real(0.1)
     var f_rus = IMHD2D.numerical_flux_static(
-        q_l2, q_r2, Real(1.0), Real(0.0), gamma, rho_min, p_min,
+        q_l2, q_r2, Real(1.0), Real(0.0), Real(0.0), gamma, rho_min, p_min,
     )
     var f_hl = IMHD2D.numerical_flux_hlld_static(
-        q_l2, q_r2, Real(1.0), Real(0.0), gamma, rho_min, p_min,
+        q_l2, q_r2, Real(1.0), Real(0.0), Real(0.0), gamma, rho_min, p_min,
     )
     var max_diff: Real = 0.0
     for c in range(MHD_NC):
