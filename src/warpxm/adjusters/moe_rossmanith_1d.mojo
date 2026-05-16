@@ -2,10 +2,12 @@
 #
 # Mirrors `dfem/variable_adjusters/limiter/kokkos/moe_rossmanith_kokkos.{h,cc}`
 # from upstream, restricted to 1D and to conserved-variable bounds only.
-# The full upstream limiter also checks primitive-variable bounds (so
-# pressure positivity is enforced for Euler / MHD); we leave that as a
-# follow-up — the conserved-only cut is enough to tame moderate shocks like
-# Sod (8:1 density, 10:1 pressure) without NaNing out.
+# The upstream limiter additionally checks primitive-variable bounds
+# (pressure positivity for Euler / MHD); here we don't, because that role
+# is handled by the separate Zhang-Shu positivity preserver
+# (`adjusters/positivity_euler.mojo`) composed after this limiter in the
+# stepper's `adjust` closure. The conserved-only cut is enough on its own
+# to tame moderate shocks like Sod (8:1 density, 10:1 pressure).
 #
 # Reference: Moe, Rossmanith, Seal, "A SIMPLE AND EFFECTIVE HIGH-ORDER
 # SHOCK CAPTURING LIMITER FOR DISCONTINUOUS GALERKIN METHODS" (2015),
