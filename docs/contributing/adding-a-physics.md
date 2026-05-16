@@ -26,7 +26,7 @@ The five-step pattern (one shared app file across dimensions):
    problem. Compose the limiter / positivity preserver / source kernels
    at the call site via the driver's `adjust` and `compute_rhs`
    closures. The plasma steppers
-   (`ssprk3_plasma_{2,3}d`, `ssprk3_twofluid_{2,3}d`) are kept
+   (`ssprk3_plasma_{1,2,3}d`, `ssprk3_twofluid_{1,2,3}d`) are kept
    specialised because they juggle 3 (or 2) coupled states.
 
 4. **BCs** — add a `_apply_bc_<phys>_<N>d` helper in your DG-kernel

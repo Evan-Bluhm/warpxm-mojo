@@ -53,8 +53,8 @@ One generic stepper per dimension:
 Limiters, positivity preservers, source kernels (gravity, GLM damping,
 …) are composed at the call site as `@parameter def` closures — see
 [Time integration](../concepts/time-integration.md). The plasma family
-(`ssprk3_plasma_{2,3}d`, `ssprk3_twofluid_{2,3}d`) is kept specialised
-because it juggles three coupled states.
+(`ssprk3_plasma_{1,2,3}d`, `ssprk3_twofluid_{1,2,3}d`) is kept
+specialised because it juggles three (or two) coupled states.
 
 ## CFL constraint
 

@@ -17,8 +17,8 @@ composed at the call site via `@parameter def` closures.
 | `dormand_prince_1d.mojo` | `DormandPrince45_1D[P, NC]` + dimension-agnostic combine helpers `_combine1`–`_combine5`, the per-cell error kernel `_dp45_error_kernel`, and the single-block reduction kernel `_dp45_sum_sq_kernel` — all three reused by 2D/3D | Adaptive 5(4) RK in 1D |
 | `dormand_prince_2d.mojo` | `DormandPrince45_2D[P, NC]` | Adaptive 5(4) RK in 2D — any physics |
 | `dormand_prince_3d.mojo` | `DormandPrince45_3D[P, NC]` | Adaptive 5(4) RK in 3D — any physics |
-| `ssprk3_plasma_{2,3}d.mojo` | `SSPRK3_Plasma_{2,3}D[P]` | Two-species plasma — three coupled states, takes a single `compute_joint_rhs_fn` closure |
-| `ssprk3_twofluid_{2,3}d.mojo` | `SSPRK3_TwoFluid_{2,3}D[P]` | Single-fluid plasma (one fluid + Maxwell), takes a `compute_joint_rhs_fn` closure |
+| `ssprk3_plasma_{1,2,3}d.mojo` | `SSPRK3_Plasma_{1,2,3}D[P]` | Two-species plasma — three coupled states, takes a single `compute_joint_rhs_fn` closure |
+| `ssprk3_twofluid_{1,2,3}d.mojo` | `SSPRK3_TwoFluid_{1,2,3}D[P]` | Single-fluid plasma (one fluid + Maxwell), takes a `compute_joint_rhs_fn` closure |
 
 ## The two-closure pattern
 
