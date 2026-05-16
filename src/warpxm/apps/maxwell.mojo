@@ -1,10 +1,9 @@
 # Maxwell's equations — single dimension-agnostic app.
 #
-# Single dimension-agnostic Maxwell app. The 6-component conservative
-# formulation (E_x, E_y, E_z, B_x, B_y, B_z) carries the full 3D
-# Maxwell flux tensor. A 2D caller passes nz = 0 in the numerical
-# flux; the unused z-axis contribution multiplies by zero and is
-# folded away by the compiler.
+# The 6-component conservative formulation (E_x, E_y, E_z, B_x, B_y, B_z)
+# carries the full 3D Maxwell flux tensor. A 2D caller passes nz = 0 in
+# the numerical flux; the unused z-axis contribution multiplies by zero
+# and is folded away by the compiler.
 #
 #     ∂E/∂t = c² · ∇×B
 #     ∂B/∂t = −∇×E

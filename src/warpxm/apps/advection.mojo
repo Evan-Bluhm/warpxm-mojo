@@ -1,4 +1,4 @@
-# Scalar linear advection app — single dimension-agnostic version.
+# Linear advection app — single dimension-agnostic, NC-parametric version.
 #
 # Mirrors `src/apps/simple/advection.{h,cc}` upstream. The PDE is
 #
@@ -17,7 +17,7 @@ from warpxm.core.types import Real, WXM_INF, WXM_TINY
 
 
 struct Advection[NC: Int](ImplicitlyCopyable, Movable):
-    """Scalar linear advection of `NC` independent tracer fields."""
+    """Linear advection of `NC` independent tracer fields."""
 
     var velocity_x: Real
     var velocity_y: Real
