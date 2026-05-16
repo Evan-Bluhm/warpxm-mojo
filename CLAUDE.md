@@ -109,7 +109,7 @@ Supporting infrastructure:
 | 2D MHD Brio-Wu                  | 1D-extruded into 2D, y-drift 2.8e-13                    |
 | 2D Orszag-Tang vortex           | mass drift 6e-14, ψ² bounded                            |
 | 2D GLM ψ-bump decay             | 45000× decay over 4 time units                          |
-| 3D Alfvén wave                  | B_y / B_z L2 4e-6 bit-identical; ρ-drift 3e-5           |
+| 3D Alfvén wave (SSPRK3)         | B_y / B_z L2 2.4e-5 bit-identical; ρ-drift 2.2e-4       |
 | 3D MHD blast                    | ∫B_x dV preserved to 4e-15 (Faraday's law)              |
 | 3D cyclotron orbit              | ΔE = 3e-13 (magnetic force does no work)                |
 | 1D Einfeldt 1-2-3 problem       | near-vacuum centre survives (min ρ 1e-3, min P 6e-3)   |

@@ -143,7 +143,7 @@ Notable test results:
 
 * **Brio-Wu 2D + 3D** — y-drift 2.8 × 10⁻¹³ (2D); both y- and z-drift
   exactly 0 in 3D thanks to permutation-symmetric extrusion.
-* **Alfvén 3D** — B_y / B_z L2 4 × 10⁻⁶ bit-identical.
+* **Alfvén 3D** — B_y / B_z L2 2.4 × 10⁻⁵ bit-identical.
 * **Orszag-Tang** — mass drift 6 × 10⁻¹⁴, ψ² bounded.
 * **3D MHD blast** — $\int B_x\,dV$ preserved to 4 × 10⁻¹⁵
   (Faraday's law on periodic mesh).
