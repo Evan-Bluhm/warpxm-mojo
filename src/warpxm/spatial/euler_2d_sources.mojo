@@ -1,15 +1,22 @@
-# Source-term kernels for the 2D 5-moment Euler solver.
+# Euler-specific source-term kernels (uniform gravity).
 #
-# The DG kernel in `dg_euler_2d.mojo` writes `rhs = -∇·F(q)`. Anything that
-# adds to the right-hand side outside the divergence form — body forces,
-# Lorentz coupling, reaction sources, GLM cleaning — lives in this file as
-# a separate post-pass kernel. Each kernel reads `q` and `rhs` of the same
-# `DGState2D[P, NC]` and updates `rhs` in place.
+# The DG kernel in `dg_euler_2d.mojo` writes `rhs = -∇·F(q)`. Anything
+# that adds to the right-hand side outside the divergence form lives in
+# a separate post-pass kernel, dispatched from the driver's
+# `compute_rhs` closure after the spatial divergence kernel.
 #
-# Today's catalogue is intentionally minimal: just a uniform-gravity body
-# force. The Lorentz / two-fluid coupling and the MixedGLM source will
-# follow the same shape — one kernel each, dispatched from the stepper
-# after the spatial divergence kernel.
+# This file holds the Euler-only sources (currently a uniform-gravity
+# body force). The cross-physics couplings live next door:
+#
+#   * `lorentz_source_{1,2,3}d.mojo` — Maxwell → Euler (E and B push
+#     on charged fluid momentum + energy);
+#   * `maxwell_current_source_{1,2,3}d.mojo` — Euler → Maxwell
+#     (charge current contributes to ∂E/∂t);
+#   * `imhd_glm_source_{2,3}d.mojo` — parabolic ψ damping for
+#     Dedner MixedGLM cleaning.
+#
+# Each follows the same pattern: read q and rhs of matching
+# `DGStateNd[P, NC]`, update rhs in place.
 
 from std.gpu import global_idx
 from std.gpu.host import DeviceContext
