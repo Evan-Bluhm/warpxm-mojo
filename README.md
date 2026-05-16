@@ -20,8 +20,11 @@ pixi install
 pixi run mojo run -I src examples/advection_1d.mojo
 ```
 
-That last command runs a 1D advection convergence problem on the GPU.
-If you see a near-machine-zero L2 error and `PASSED`, you're set up.
+That last command runs a 1D periodic advection problem on the GPU
+and prints the L2 error after one period (~1e-5 at default settings).
+If the L2 line appears, you're set up. (For an actual convergence
+study across $P=1,2,3$, run
+`examples/convergence_advection_1d.mojo`.)
 
 Then:
 
