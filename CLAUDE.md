@@ -37,7 +37,7 @@ src/warpxm/
                # ssprk3_plasma_{2,3}d.mojo kept specialised (three coupled states).
   variable/    # DGState{1,2,3}D[P, NC] device buffers
 examples/      # polished driver programs (one .mojo per physics setup)
-tests/         # 49 regression tests covering every (physics, dimension) combination
+tests/         # 66 regression tests covering every (physics, dimension) combination
 scripts/       # tooling (GLL table generator, etc.)
 ```
 
