@@ -126,49 +126,58 @@ Supporting infrastructure:
 | Adaptive DP45 (3D MHD Alfvén)   | 131 steps for t=1 (vs 1000 SSPRK3), L2 ~2.4e-5 on B/u  |
 | Adaptive DP45 (3D Maxwell)      | 50 steps for t=1 (vs ~2000 SSPRK3), L2 ~8e-4 on E/B    |
 
-Plus 25 more in `tests/`. Run the suite via:
+Plus 30+ more in `tests/` (66 tests total). Run the suite via:
 ```fish
 pixi run test
 # or, for a single test:
 pixi run mojo run -I src tests/test_advection_1d.mojo
 ```
 
-## Remaining work
+## Open work
 
-Mostly *quality* and *scale* items, not feature gaps:
+Feature-matrix-complete (modulo 1D MHD, an intentional physical gap).
+Remaining items are scale and performance:
 
-1. **Primitive-bound limiting** — Zhang-Shu positivity preservers shipped
-   for Euler (1D / 2D / 3D) and ideal MHD (2D / 3D). 1D MHD doesn't exist
-   in the framework so there's no analogue there. The MHD preserver also
-   works with GLM-MHD (NC=9 ψ component is shrunk along with the rest).
-2. **~~Strang-style symmetric source splitting~~** (closed). Was motivated by
-   the 1.85e-3 antisymmetry residual on the 2D pair-plasma test. The
-   δ-scaling diagnostic in `tests/test_pair_plasma_asym_scaling.mojo`
-   shows the residual scales as δ² (ratio 100 between δ ∈
-   {0.01, 0.001, 0.0001}), confirming it's the *physical* O(δ²) coupling
-   from the ρ-dependent Lorentz force `F = α·ρ·E` — species 1 has
-   ρ ≈ 1+δ·sin, species 2 has ρ ≈ 1-δ·sin, so their force amplitudes
-   differ by 2·δ². No operator-splitting fix can eliminate this.
-3. **Kinetic Vlasov-Maxwell solver** — different architecture (phase-space DG
-   instead of configuration-space DG). Sizeable port.
-4. **MPI halo exchange** — multi-GPU support. Sizeable engineering effort.
-5. **Adaptive RK45 (Dormand-Prince)** — shipped as NC-parameterised
-   generic steppers for all three dimensions
-   (`temporal/dormand_prince_{1,2,3}d.mojo`,
-   `DormandPrince45_{1,2,3}D[P, NC]`). Fixed-dt `step` and adaptive
-   `step_adaptive` (embedded 4th-order estimate, dt clipped to [0.2·dt,
-   5·dt], atol/rtol scaled RMS norm). On smooth problems takes ~10× fewer
-   steps than fixed-dt SSPRK3 at the same tolerance.
-6. **HLLD numerical flux for MHD** — shipped in 2D and 3D
-   (`DGImhdSolver{2,3}D[P, USE_HLLD=True]`, Miyoshi-Kusano 2005 five-state
-   solver). 3D version uses a permutation-based core
-   (`_hlld_core_3d` in `apps/imhd.mojo`) so all three axis-aligned face
-   directions share one ~150-line implementation. Default path stays
-   Rusanov (no regression). HLLD is also available on GLM-MHD
-   (`DGImhdGLMSolver{2,3}D[P, USE_HLLD=True]`) — the 8 MHD components use
-   IMHD HLLD; the (B_n, ψ) GLM block is solved exactly as a decoupled 2x2
-   Riemann problem at ±c_h (Dedner et al. 2002 §3.2; Mignone & Tzeferacos
-   2010 §4).
+1. **Kinetic Vlasov-Maxwell solver** — different architecture
+   (phase-space DG instead of configuration-space DG). Sizeable port.
+2. **MPI halo exchange** — multi-GPU support. Sizeable engineering.
+3. **GPU-side reduction for the DP45 error norm** — currently the
+   per-step error norm is computed via `map_to_host` of three full
+   state buffers; the bottleneck on very large meshes.
+
+## Capability inventory
+
+What's shipped (so it's easy to see at a glance):
+
+- **Primitive-bound limiting** — Zhang-Shu positivity preservers for
+  Euler (1D / 2D / 3D) and ideal MHD (2D / 3D). MHD preserver also
+  works with GLM-MHD (NC=9 ψ component shrunk along with the rest).
+- **Slope limiter** — Moe-Rossmanith conserved-variable limiter,
+  NDIM-parametric (2D + 3D) and NC-parameterised. 1D variant
+  (Euler-only) lives in `adjusters/moe_rossmanith_1d.mojo`.
+- **Adaptive RK45 (Dormand-Prince)** — NC-parameterised generic
+  steppers for all three dimensions
+  (`DormandPrince45_{1,2,3}D[P, NC]`). Fixed-dt `step` and adaptive
+  `step_adaptive` (embedded 4th-order estimate, dt clipped to
+  [0.2·dt, 5·dt], atol/rtol scaled RMS norm). On smooth problems
+  takes 6–40× fewer steps than fixed-dt SSPRK3.
+- **HLLD numerical flux** — shipped on `DGImhdSolver{2,3}D` and
+  `DGImhdGLMSolver{2,3}D` (`USE_HLLD=True`, Miyoshi-Kusano 2005
+  five-state solver). Permutation-based core
+  (`_hlld_core_3d` in `apps/imhd.mojo`) handles all three
+  axis-aligned face directions in ~150 lines. Default path stays
+  Rusanov (no regression). GLM-MHD path composes IMHD HLLD with the
+  exact (B_n, ψ) 2x2 Riemann block (Dedner et al. 2002 §3.2;
+  Mignone & Tzeferacos 2010 §4).
+- **Pair-plasma diagnostic** — the 1.85e-3 antisymmetry residual on
+  the 2D pair-plasma test was originally listed as a Strang-splitting
+  motivation. `tests/test_pair_plasma_asym_scaling.mojo` shows the
+  residual scales as δ² (ratio 100 between successive δ values),
+  confirming it's the *physical* O(δ²) coupling from the ρ-dependent
+  Lorentz force `F = α·ρ·E` — species 1 has ρ ≈ 1+δ·sin, species 2
+  has ρ ≈ 1−δ·sin, so their force amplitudes differ by 2·δ². No
+  operator-splitting fix can eliminate it; closed as "physical, not
+  algorithmic."
 
 ## Key references in upstream
 
