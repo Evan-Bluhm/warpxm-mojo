@@ -34,7 +34,7 @@ CFL limit is on $c\,\Delta t / \Delta x$.
 from warpxm.apps.maxwell import (
     MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
-# MAXWELL_NC = 8 (six fields + two padding slots reserved for future use)
+# MAXWELL_NC = 6  (Ex, Ey, Ez, Bx, By, Bz — no padding)
 ```
 
 The 3D module re-uses these constants.
