@@ -31,9 +31,15 @@ hit a parse error.
 
 ### File names
 
-* Apps, spatial solvers, steppers, adjusters, writers all end in
-  `_1d.mojo` / `_2d.mojo` / `_3d.mojo`. Dimensionless modules (basis,
-  core, generic SSPRK3, DP45) don't have the suffix.
+* Spatial solvers, steppers, adjusters, writers all end in
+  `_1d.mojo` / `_2d.mojo` / `_3d.mojo`. Apps (`advection.mojo`,
+  `euler.mojo`, `maxwell.mojo`, `imhd.mojo`, `imhd_glm.mojo`) are
+  single canonical files — the DG launcher owns dimensionality.
+  Dimensionless support modules (basis, core, the SSPRK3 combine
+  kernels in `ssprk3.mojo`) also drop the suffix. The DP45 family
+  has no standalone dimensionless file: its shared combine /
+  error / reduction kernels live inside `dormand_prince_1d.mojo`
+  and are imported from there by the 2D and 3D wrappers.
 * Underscored prefixes mark "internal helpers": `_load_node`,
   `_combine1`, `_apply_bc_imhd_3d`, etc. These aren't expected to be
   called from outside the file.
