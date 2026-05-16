@@ -49,7 +49,8 @@ from warpxm.core.bc import (
     BC_INTERIOR,    # 0 — face is between two real elements (default)
     BC_COPYOUT,     # 1 — zero-gradient outflow
     BC_WALL_FREESLIP,  # 2 — reflective wall (normal momentum flipped)
-    BC_DIRICHLET,   # 3 — fixed boundary state (rarely used)
+    BC_DIRICHLET,   # 3 — reserved (no spatial-kernel branch yet; passing
+                    # it currently falls through to copyout)
     BC_PEC_WALL,    # 4 — perfectly-conducting wall (Maxwell, MHD)
     BC_PMC_WALL,    # 5 — perfectly-magnetic wall (Maxwell)
 )
