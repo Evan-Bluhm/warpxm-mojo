@@ -130,9 +130,11 @@ dimension.
 
 * Mojo's aliasing checker forbids passing the same buffer to multiple
   `MutAnyOrigin` arguments. The combine step that would naively take
-  "up to 7 contribution buffers" is split into six specialised
-  kernels with 1, 2, 3, 4, and 5 (twice — used at two different
-  stages) contribution buffers.
+  "up to 7 contribution buffers" is split into five specialised
+  kernels `_combine1`–`_combine5` with 1, 2, 3, 4, and 5 contribution
+  buffers respectively. `_combine5` is dispatched twice per step
+  (once for k6, once for the final u^{n+1}); the other four are
+  called exactly once.
 * The RMS scaled error norm is computed fully on the GPU.
   `_dp45_sum_sq_kernel` (in `dormand_prince_1d.mojo`, shared by the
   2D and 3D wrappers) launches one block of 256 threads that

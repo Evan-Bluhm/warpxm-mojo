@@ -80,8 +80,9 @@ ctx.enqueue_function[kernel](q_view, ..., grid_dim=..., block_dim=...)
 layout) and works with Mojo's aliasing checker. The trade-off: identical
 buffers passed twice to a kernel as `MutAnyOrigin` arguments are
 *rejected* by the checker, which is why the Dormand-Prince stepper has
-six specialised combine kernels for `(1, 2, 3, 4, 5, 5)`-input arities
-rather than one variadic kernel.
+five specialised combine kernels (`_combine1`–`_combine5`, for 1–5
+input arities) rather than one variadic kernel; `_combine5` is the
+only one called from two stages.
 
 ## Index types
 
@@ -121,6 +122,6 @@ are a few percent of wall-clock time.
 The same Mojo source compiles for NVIDIA, AMD CDNA, and Apple silicon
 without conditional compilation. Vendor differences in warp size,
 shared-memory size etc. don't matter for our small-block-size kernels.
-We have *not* yet validated AMD / Apple at the full 49-test scale;
+We have *not* yet validated AMD / Apple at the full 66-test scale;
 NVIDIA (A100, H100, RTX) is the primary CI target. If you hit a vendor-
 specific issue, please open a bug.
