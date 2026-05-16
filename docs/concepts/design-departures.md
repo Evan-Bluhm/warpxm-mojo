@@ -27,9 +27,12 @@ means:
 
 * one implementation to maintain per kernel,
 * no risk of CPU / GPU drift,
-* aggressive use of Mojo's `comptime if is_nvidia_gpu()` for backend
-  specialisations where they matter (rare so far — most kernels are
-  portable across vendors).
+* room to use Mojo's `comptime if is_nvidia_gpu()` for backend
+  specialisations where they matter — though so far no kernel needs
+  one. The same Mojo source compiles unchanged for NVIDIA, AMD, and
+  Apple silicon (the lone vendor accommodation is the `sqrt` shim in
+  `core/math_compat.mojo`, which routes around a missing float64
+  NVIDIA intrinsic for everyone).
 
 If you need a CPU fallback for development on a laptop without a GPU,
 the recommended path is to run the same Mojo programs on an Apple
