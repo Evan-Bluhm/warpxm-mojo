@@ -14,8 +14,9 @@ pixi install
 pixi run mojo run -I src examples/advection_1d.mojo
 ```
 
-If the last command prints a periodic-advection convergence run, you're
-fully set up.
+If the last command prints node values and an L2 error after one
+period, you're fully set up. (For an actual convergence study across
+$P = 1, 2, 3$, run `examples/convergence_advection_1d.mojo` instead.)
 
 ## Three pages from here
 
