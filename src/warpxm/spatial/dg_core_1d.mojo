@@ -1,0 +1,135 @@
+# Unified 1D nodal DG spatial solver core. Mirror of `dg_core_2d.mojo`
+# and `dg_core_3d.mojo`: a generic NC-parametric kernel template taking
+# per-physics flux and BC closures.
+#
+# Two face corrections per element (left + right). The closure
+# signatures match the higher-dim versions: numerical flux takes a
+# 3-component normal `(nx, ny, nz)` with `(ny, nz) = (0, 0)` for 1D
+# callers — the 0 lanes fold away.
+
+from std.collections import InlineArray
+from std.gpu import block_idx, thread_idx
+from std.gpu.sync import barrier
+from std.gpu.memory import AddressSpace
+from layout import TileTensor, TensorLayout, row_major, stack_allocation
+
+from warpxm.basis.nodal_basis_1d import NodalBasis1D
+from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
+from warpxm.mesh.block_1d import GHOST_LEFT, GHOST_RIGHT
+
+
+@always_inline
+def _load_node_1d[
+    P: Int, NC: Int, QLayout: TensorLayout,
+](
+    q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
+    elem: Int,
+    node: Int,
+) -> InlineArray[Real, NC]:
+    comptime assert q.flat_rank == 1
+    comptime num_nodes_per_elem = P + 1
+    var base = (elem * num_nodes_per_elem + node) * NC
+    var out: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    comptime for c in range(NC):
+        out[c] = rebind[Scalar[WXM_DTYPE]](q[base + c])
+    return out
+
+
+@always_inline
+def _dg_1d_compute_rhs_core[
+    P: Int, NC: Int,
+    flux_x_fn: def(InlineArray[Real, NC]) capturing [_] -> InlineArray[Real, NC],
+    num_flux_fn: def(
+        InlineArray[Real, NC], InlineArray[Real, NC], Real, Real, Real,
+    ) capturing [_] -> InlineArray[Real, NC],
+    apply_bc_fn: def(
+        InlineArray[Real, NC], Int,
+    ) capturing [_] -> InlineArray[Real, NC],
+    QLayout: TensorLayout, RhsLayout: TensorLayout,
+    ElemFaceLayout: TensorLayout,
+](
+    q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
+    rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
+    elem_left_face: TileTensor[INDEX_DTYPE, ElemFaceLayout, MutAnyOrigin],
+    elem_right_face: TileTensor[INDEX_DTYPE, ElemFaceLayout, MutAnyOrigin],
+    face_left: TileTensor[INDEX_DTYPE, ElemFaceLayout, MutAnyOrigin],
+    face_right: TileTensor[INDEX_DTYPE, ElemFaceLayout, MutAnyOrigin],
+    face_bc: TileTensor[INDEX_DTYPE, ElemFaceLayout, MutAnyOrigin],
+    jacobian: Real,
+    num_elements: Int,
+):
+    """Generic per-node DG residual for a 1D NC-component conservation
+    law. Volume term via GLL differentiation; surface term via the
+    supplied numerical-flux closure on a 3-component unit normal (1D
+    callers always pass `(±1, 0, 0)`).
+    """
+    comptime num_nodes_per_elem = P + 1
+    comptime assert q.flat_rank == 1
+    comptime assert rhs.flat_rank == 1
+    comptime assert elem_left_face.flat_rank == 1
+    comptime assert elem_right_face.flat_rank == 1
+    comptime assert face_left.flat_rank == 1
+    comptime assert face_right.flat_rank == 1
+    comptime assert face_bc.flat_rank == 1
+
+    var e = Int(block_idx.x)
+    var i = Int(thread_idx.x)
+    if e >= num_elements or i >= num_nodes_per_elem:
+        return
+
+    var f_shared = stack_allocation[
+        WXM_DTYPE, address_space=AddressSpace.SHARED,
+    ](row_major[num_nodes_per_elem, NC]())
+
+    var q_i = _load_node_1d[P, NC](q, e, i)
+    var f_i = flux_x_fn(q_i)
+    comptime for c in range(NC):
+        f_shared[i, c] = rebind[f_shared.ElementType](f_i[c])
+
+    barrier()
+
+    # --- Volume term: (D @ f)_i ----------------------------------------
+    var d_flat = NodalBasis1D[P].diff_matrix_flat()
+    var dfdxi: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    comptime for j in range(num_nodes_per_elem):
+        var d_ij: Scalar[WXM_DTYPE] = d_flat[i * num_nodes_per_elem + j]
+        comptime for c in range(NC):
+            var fj_c = rebind[Scalar[WXM_DTYPE]](f_shared[j, c])
+            dfdxi[c] += d_ij * fj_c
+
+    # --- Surface term: left and right faces ----------------------------
+    var weights = NodalBasis1D[P].weights()
+    var surface: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+
+    if i == 0:
+        var fL = Int(rebind[Scalar[INDEX_DTYPE]](elem_left_face[e]))
+        var le = Int(rebind[Scalar[INDEX_DTYPE]](face_left[fL]))
+        var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fL]))
+        var q_neg: InlineArray[Real, NC]
+        if le == Int(GHOST_LEFT):
+            q_neg = apply_bc_fn(q_i, bc_kind)
+        else:
+            q_neg = _load_node_1d[P, NC](q, le, num_nodes_per_elem - 1)
+        var f_star = num_flux_fn(q_neg, q_i, Real(1.0), Real(0.0), Real(0.0))
+        var w0: Scalar[WXM_DTYPE] = weights[0]
+        comptime for c in range(NC):
+            surface[c] = (f_star[c] - f_i[c]) / (jacobian * w0)
+
+    if i == (num_nodes_per_elem - 1):
+        var fR = Int(rebind[Scalar[INDEX_DTYPE]](elem_right_face[e]))
+        var re = Int(rebind[Scalar[INDEX_DTYPE]](face_right[fR]))
+        var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fR]))
+        var q_pos: InlineArray[Real, NC]
+        if re == Int(GHOST_RIGHT):
+            q_pos = apply_bc_fn(q_i, bc_kind)
+        else:
+            q_pos = _load_node_1d[P, NC](q, re, 0)
+        var f_star = num_flux_fn(q_i, q_pos, Real(1.0), Real(0.0), Real(0.0))
+        var wP: Scalar[WXM_DTYPE] = weights[num_nodes_per_elem - 1]
+        comptime for c in range(NC):
+            surface[c] = (f_i[c] - f_star[c]) / (jacobian * wP)
+
+    var base = (e * num_nodes_per_elem + i) * NC
+    comptime for c in range(NC):
+        var v: Scalar[WXM_DTYPE] = -dfdxi[c] / jacobian + surface[c]
+        rhs[base + c] = rebind[rhs.ElementType](v)
