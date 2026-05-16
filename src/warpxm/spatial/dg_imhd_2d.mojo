@@ -9,7 +9,6 @@ from std.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, Idx, row_major
 
 from warpxm.apps.imhd import IMHD, MHD_NC
-from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_core_2d import _dg_2d_compute_rhs_core

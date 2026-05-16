@@ -11,7 +11,7 @@ from layout import TileTensor, TensorLayout, Idx, row_major
 from warpxm.apps.maxwell import (
     Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
-from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_PEC_WALL, BC_PMC_WALL
+from warpxm.core.bc import BC_PEC_WALL, BC_PMC_WALL
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_core_2d import _dg_2d_compute_rhs_core

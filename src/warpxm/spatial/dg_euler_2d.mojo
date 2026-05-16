@@ -15,7 +15,7 @@ from warpxm.apps.euler import (
     Euler, EULER_NC,
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
 )
-from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_WALL_FREESLIP
+from warpxm.core.bc import BC_WALL_FREESLIP
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_core_2d import _dg_2d_compute_rhs_core

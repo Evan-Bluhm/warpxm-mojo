@@ -6,7 +6,7 @@ from std.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, Idx, row_major
 
 from warpxm.apps.euler import Euler, EULER_NC, IDX_MX, IDX_MY, IDX_MZ
-from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_WALL_FREESLIP
+from warpxm.core.bc import BC_WALL_FREESLIP
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_3d import BlockMesh3D
 from warpxm.spatial.dg_core_3d import _dg_3d_compute_rhs_core

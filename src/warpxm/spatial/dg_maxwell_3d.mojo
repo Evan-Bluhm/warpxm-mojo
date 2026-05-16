@@ -9,7 +9,7 @@ from warpxm.apps.maxwell import (
     Maxwell, MAXWELL_NC,
     IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
-from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_PEC_WALL, BC_PMC_WALL
+from warpxm.core.bc import BC_PEC_WALL, BC_PMC_WALL
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_3d import BlockMesh3D
 from warpxm.spatial.dg_core_3d import _dg_3d_compute_rhs_core
