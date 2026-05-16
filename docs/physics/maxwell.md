@@ -89,11 +89,17 @@ The reverse coupling (Lorentz force on fluid momentum) is in
 
 Tests:
 
+* `tests/test_maxwell_1d_cavity.mojo` — 1D TM cavity (E_z + B_y on $x$),
+  one period; L2 E_z ~ 8e-6.
+* `tests/test_maxwell_1d_plane_wave.mojo` — 1D transverse plane wave
+  propagating along $\hat{x}$ with E_z / B_y; one period returns to IC.
 * `tests/test_maxwell_2d_cavity.mojo` — TM₁₁ standing wave; unexcited
   components stay at 0.0 exactly.
 * `tests/test_maxwell_2d_plane_wave.mojo` — vacuum plane wave.
 * `tests/test_maxwell_3d_cavity.mojo`, `tests/test_maxwell_3d_plane_wave.mojo`.
 
-A 1D Maxwell solver isn't implemented — the lowest-rank Maxwell
-problem (transverse plane wave) genuinely needs at least two spatial
-dimensions.
+The 1D Maxwell solver lives in `spatial/dg_maxwell_1d.mojo` and uses
+the canonical `Maxwell` app from `apps/maxwell.mojo` — the 1D DG kernel
+just passes the normal $(\pm 1, 0, 0)$ into the same numerical flux
+the 2D and 3D solvers use. A TM wave with E_z and B_y propagating
+along $\hat{x}$ is a perfectly valid 1D Maxwell problem.
