@@ -11,10 +11,13 @@ fly.
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 
 comptime P = 2
-var nodes = NodalBasis1D[P].nodes()           # InlineArray[Real, P+1]
-var weights = NodalBasis1D[P].weights()       # InlineArray[Real, P+1]
-var deriv = NodalBasis1D[P].deriv_matrix()    # ? × ? InlineArray
-var num_nodes = NodalBasis1D[P].num_nodes     # = P + 1
+var nodes = NodalBasis1D[P].nodes()                # InlineArray[Real, P+1]
+var weights = NodalBasis1D[P].weights()            # InlineArray[Real, P+1]
+var D_flat = NodalBasis1D[P].diff_matrix_flat()    # InlineArray[Real, (P+1)*(P+1)]
+                                                   # row-major D[i,j] = l_j'(ξ_i)
+var i_left  = NodalBasis1D[P].left_face_node()     # = 0
+var i_right = NodalBasis1D[P].right_face_node()    # = P
+var num_nodes = NodalBasis1D[P].num_nodes          # = P + 1
 ```
 
 ## Supported orders
