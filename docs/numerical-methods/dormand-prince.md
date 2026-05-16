@@ -100,7 +100,7 @@ Compared to fixed-Δt SSPRK3 at the same final error level:
 | Test | Steps (SSPRK3) | Steps (DP45 adaptive) |
 | ---- | -------------- | --------------------- |
 | 1D advection smooth, P=3, T=1 (dt=5e-4) | ~2000 | **187** |
-| 2D Euler entropy wave smooth, T=1 (dt=1e-3) | ~2000 | **199** |
+| 2D Euler entropy wave smooth, T=1 (dt=1e-3) | ~2000 | **200** |
 | 2D MHD Alfvén wave, T=1 (dt=1e-3) | 1000 | **169** |
 | 2D Maxwell plane wave, T=1/√2 (dt=5e-4) | ~1414 | **76** |
 | 3D advection smooth, T=1 (dt=1e-3) | ~1000 | **64** |
@@ -133,7 +133,13 @@ dimension.
   "up to 7 contribution buffers" is split into six specialised
   kernels with 1, 2, 3, 4, and 5 (twice — used at two different
   stages) contribution buffers.
-* The host-side error reduction (RMS across all GPU buffer elements)
-  is done by mapping the err / u / u_save buffers to host and looping.
-  For very large meshes this becomes a bottleneck — a future
-  optimisation is a GPU-side reduction kernel.
+* The RMS scaled error norm is computed fully on the GPU.
+  `_dp45_sum_sq_kernel` (in `dormand_prince_1d.mojo`, shared by the
+  2D and 3D wrappers) launches one block of 256 threads that
+  stride-loops over the flat buffer, tree-reduces `(err/sc)²` in
+  shared memory, and writes the total to a one-element device
+  buffer. The host then maps one scalar — no `map_to_host` of the
+  full state, err, or u_save buffers. On large meshes this is
+  several × faster than the original three-buffer host-side loop;
+  on small meshes (~10⁴ DOFs) the controller is fast enough either
+  way and the win is mainly in cleaner architecture.

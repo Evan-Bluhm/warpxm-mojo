@@ -14,7 +14,7 @@ composed at the call site via `@parameter def` closures.
 | `ssprk3_1d.mojo` | `SSPRK3_1D[P, NC]` | Every 1D problem (advection, Euler, …) |
 | `ssprk3_2d.mojo` | `SSPRK3_2D[P, NC]` | Every 2D problem (Euler, Maxwell, MHD, GLM-MHD, …) |
 | `ssprk3_3d.mojo` | `SSPRK3_3D[P, NC]` | Every 3D problem |
-| `dormand_prince_1d.mojo` | `DormandPrince45_1D[P, NC]` + dimension-agnostic combine helpers `_combine1`–`_combine5` and `_dp45_error_kernel` reused by 2D/3D | Adaptive 5(4) RK in 1D |
+| `dormand_prince_1d.mojo` | `DormandPrince45_1D[P, NC]` + dimension-agnostic combine helpers `_combine1`–`_combine5`, the per-cell error kernel `_dp45_error_kernel`, and the single-block reduction kernel `_dp45_sum_sq_kernel` — all three reused by 2D/3D | Adaptive 5(4) RK in 1D |
 | `dormand_prince_2d.mojo` | `DormandPrince45_2D[P, NC]` | Adaptive 5(4) RK in 2D — any physics |
 | `dormand_prince_3d.mojo` | `DormandPrince45_3D[P, NC]` | Adaptive 5(4) RK in 3D — any physics |
 | `ssprk3_plasma_{2,3}d.mojo` | `SSPRK3_Plasma_{2,3}D[P]` | Two-species plasma — three coupled states, takes a single `compute_joint_rhs_fn` closure |
@@ -116,10 +116,15 @@ the default is captured automatically.
 `DormandPrince45_{1,2,3}D[P, NC]` use the same two-closure pattern as
 SSPRK3 — `step[compute_rhs_fn]` for fixed-dt and
 `step_adaptive[compute_rhs_fn]` for embedded 4th-order error control.
-The combine kernels (`_combine1`–`_combine5`) and error kernel live in
-`dormand_prince_1d.mojo` and are shared across dimensions because they
-operate on flat buffers. Validated bit-comparable across all 5
-physics × all dimensions; see [Dormand-Prince](../numerical-methods/dormand-prince.md).
+The combine kernels (`_combine1`–`_combine5`) and the per-cell error
+kernel live in `dormand_prince_1d.mojo` and are shared across
+dimensions because they operate on flat buffers. The RMS scaled
+error norm `√(Σ(err/sc)²/N)` is reduced fully on the GPU by a single
+block tree-reduction (`_dp45_sum_sq_kernel`); only the final scalar
+`Σ(err/sc)²` lands on the host per attempt — no `map_to_host` of the
+full state buffers. Validated bit-comparable (modulo floating-point
+sum-order on one test) across all 5 physics × all dimensions; see
+[Dormand-Prince](../numerical-methods/dormand-prince.md).
 
 ## Plasma steppers
 
