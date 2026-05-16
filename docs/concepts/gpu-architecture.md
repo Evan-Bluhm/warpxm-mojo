@@ -15,17 +15,23 @@ i.e. one CUDA / HIP / Metal **thread** per GLL node, one **block** per
 element. With $P = 2$ and a 2D problem that's a $3 \times 3$ block of 9
 threads. Each thread:
 
-1. Loads its own node into a register-resident `InlineArray[Real, NC]`.
-2. Computes its contribution to the volume term by reading the *other*
-   nodes in the same element (a small constant number — $P+1$ on each
-   tensor axis).
-3. If it's a face node (e.g., `in_ == 0` for the left face), reads its
-   neighbour's face node and adds the surface term.
-4. Writes back its share of the new RHS.
+1. Loads its own conserved-variable values into a register-resident
+   `InlineArray[Real, NC]` and evaluates the flux $\mathbf{F}(\mathbf{q})$
+   at its node.
+2. Writes those flux values into a per-element **shared-memory** stage
+   (`f_shared` in `dg_core_{1,2,3}d.mojo`); a `barrier()` then makes
+   them visible to the rest of the block.
+3. Reads the flux values written by the other $P$ threads along each
+   tensor axis and accumulates the volume-derivative contribution.
+4. If it's a face node (e.g., `in_ == 0` for the left face), reads its
+   neighbour element's face-node state and adds the surface term.
+5. Writes its share of the new RHS back to global memory.
 
-No shared memory, no warp shuffles, no atomics. The block size is
-small ($(P+1)^d$ is between 4 and 125 across our supported orders),
-which means low occupancy but very high arithmetic-to-load ratio.
+No warp shuffles, no atomics — but shared memory + a small number of
+`barrier()` calls are how the tensor-product derivative is fanned
+across the block. The block size is small ($(P+1)^d$ is between 4 and
+125 across our supported orders), which means low occupancy but very
+high arithmetic-to-load ratio.
 
 ## `comptime` everywhere
 
