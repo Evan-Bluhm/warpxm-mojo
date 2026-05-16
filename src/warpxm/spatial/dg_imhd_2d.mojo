@@ -21,9 +21,15 @@ def _apply_bc_imhd(
     bc_kind: Int,
     face_axis: Int,
 ) -> InlineArray[Real, MHD_NC]:
-    """Copyout-style ghost state for ideal MHD. We deliberately don't model
-    a perfectly-conducting wall yet — the open-domain tests are the active
-    cases."""
+    """Ghost-state synthesis for 2D ideal MHD. Currently a copyout
+    fallback for every `bc_kind` — the 2D MHD tests that pass
+    `BC_WALL_FREESLIP` (Brio-Wu y-walls, etc.) happen to have $v_y = 0$
+    along the relevant boundary by construction, so copyout and
+    free-slip give the same ghost state. The 3D analog
+    (`_apply_bc_imhd_3d`) does flip normal momentum on
+    `BC_WALL_FREESLIP` and normal momentum + normal B on
+    `BC_PEC_WALL`; we'd port the same dispatch here if a 2D test
+    needs genuine wall behaviour."""
     return q_interior
 
 
