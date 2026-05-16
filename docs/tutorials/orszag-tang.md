@@ -151,10 +151,11 @@ Stone-Gardiner all show it.
 
 * **HLLD flux**: change `DGImhdGLMSolver2D[P](app)` to
   `DGImhdGLMSolver2D[P, USE_HLLD=True](app)`. The shock structure
-  sharpens noticeably; integrated quantities drift more slowly.
-  (Note: HLLD wiring for the GLM solver is pending — currently it's
-  only on the plain `DGImhdSolver2D`. Track this in
-  [Roadmap](../contributing/index.md#roadmap).)
+  sharpens noticeably; integrated quantities drift more slowly. The
+  GLM path composes the IMHD HLLD solver with the exact 2x2
+  (B_n, ψ) Riemann block — see
+  [HLLD](../numerical-methods/hlld.md) — and is regression-tested
+  by `tests/test_imhd_glm_decay_2d_hlld.mojo`.
 * **Mesh refinement**: $\text{NX} = 128$ — the shock network is much
   cleaner, and `psi^{2}` becomes a more aggressive lower bound on the
   divergence error magnitude.
