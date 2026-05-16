@@ -65,22 +65,23 @@ The five-step pattern (one shared app file across dimensions):
   Maxwell flips tangential E; free-slip for Euler flips normal
   momentum).
 
-## Pattern: 1D Maxwell would look like
+## Worked example: how 1D Maxwell was added
 
-If you wanted to add 1D Maxwell (we don't ship it — the lowest-rank
-plane wave is 2D):
+The 1D Maxwell solver is a small worked example of the recipe above.
+What was needed:
 
 ```text
 src/warpxm/
-  apps/maxwell.mojo              # already exists — covers 1D too
-  spatial/dg_maxwell_1d.mojo     # NEW: thin wrapper over dg_core_1d
-tests/test_maxwell_1d_plane_wave.mojo  # smooth plane-wave decay
+  apps/maxwell.mojo               # already existed — covers all 3 dims
+  spatial/dg_maxwell_1d.mojo      # NEW: thin wrapper over dg_core_1d
+tests/test_maxwell_1d_plane_wave.mojo  # transverse plane wave
+tests/test_maxwell_1d_cavity.mojo      # TM cavity
 ```
 
-The app file is reused unchanged from the existing canonical
-`maxwell.mojo` (works because it takes a 3-component normal); the
-1D DG wrapper is ~100 lines of closure plumbing. The whole port is
-under an hour.
+The `Maxwell` app struct was reused unchanged because its
+`numerical_flux_static` takes a 3-component normal — the 1D DG kernel
+just passes $(\pm 1, 0, 0)$. The 1D DG wrapper itself is ~100 lines of
+closure plumbing. Total port effort: under an hour.
 
 ## Don't add: 1D MHD
 
