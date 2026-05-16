@@ -50,6 +50,9 @@ src/warpxm/
 * Static methods on `apps/*` structs: `internal_flux_*_static`,
   `numerical_flux_static` (Rusanov), `numerical_flux_hlld_static`
   (MHD only). Used by DG kernels.
-* Index constants: each physics module exports `IDX_*` constants
-  (e.g. `IDX_RHO`, `IDX_MX`, `IDX_BX`) and an `NC` constant. Single
-  source of truth per physics — no per-dimension copies.
+* Index constants: each fixed-NC physics module (`euler`, `maxwell`,
+  `imhd`, `imhd_glm`) exports `IDX_*` constants (e.g. `IDX_RHO`,
+  `IDX_MX`, `IDX_BX`) and a `*_NC` constant. Single source of truth
+  per physics — no per-dimension copies. The `advection` app is the
+  exception: `Advection[NC: Int]` is NC-parametric, so it carries no
+  module-level `ADVECTION_NC` or `IDX_*` symbols.
