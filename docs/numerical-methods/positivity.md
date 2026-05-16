@@ -106,9 +106,12 @@ between each RK stage.
 
 ## Validation
 
-* **Einfeldt 1-2-3 (1D, 2D, 3D)** — Two-rarefaction near-vacuum: both
-  preserver passes activate, ρ and P clamp to floor (10⁻¹⁰).
-  Cell-mean conservation: exact to 10⁻¹⁴.
+* **Einfeldt 1-2-3 (1D, 2D, 3D)** — Two-rarefaction near-vacuum: the
+  preserver passes activate to keep ρ and $P_{\text{gas}}$ positive. The
+  measured minima stay comfortably above the $10^{-10}$ floor
+  (min ρ in $[3\times10^{-4},\ 2\times10^{-3}]$, min $P$ in
+  $[9\times10^{-4},\ 6\times10^{-3}]$ across the 1D / 2D / 3D variants) —
+  without the preserver these collapse through zero and the run NaN's.
 * **Strong MHD blast (2D, 3D)** — Δ$P$/$P_{\text{amb}} = 1000$ in
   a strong B₀ = 5 background. `min P_gas` hits `p_eps = 10⁻¹⁰` exactly,
   proving the cubic-bisection branch fires correctly. Mass and
