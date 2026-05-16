@@ -13,8 +13,9 @@
 #
 # Reads the per-node (E, B) directly from a `DGState2D[P, MAXWELL_NC]` so
 # the same kernel works whether the EM field is statically prescribed or
-# being evolved by Maxwell. (The current source on Maxwell that closes the
-# coupling lives in a separate kernel and is a follow-up commit.)
+# being evolved by Maxwell. The reverse-direction current source on Maxwell
+# (Euler → Maxwell, closing the two-fluid plasma coupling) lives in
+# `maxwell_current_source_2d.mojo`.
 
 from std.gpu import global_idx
 from std.gpu.host import DeviceContext

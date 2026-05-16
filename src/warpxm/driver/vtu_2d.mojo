@@ -33,9 +33,11 @@ def dump_euler_2d_frame[P: Int](
     """Write an Euler 2D field at `path` as a ParaView-readable `.vtu`.
 
     Dumps the (ρ, u, v, P) primitive scalars at every DG node, with each
-    element subdivided into P² linear quads for connectivity. The exact set
-    of fields is hardcoded to the 5-moment Euler conserved layout for now;
-    a follow-up commit will generalise this with a small `Field` adapter.
+    element subdivided into P² linear quads for connectivity. The field
+    set is hardcoded to the 5-moment Euler primitive layout; sibling
+    writers (`vtu_imhd_2d.mojo`, `vtu_maxwell_2d.mojo`, and the 3D
+    family) follow the same per-physics pattern with their own field
+    lists.
     """
     comptime P1 = P + 1
     comptime nodes_per_elem = P1 * P1
