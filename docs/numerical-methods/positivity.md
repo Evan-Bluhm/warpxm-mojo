@@ -76,13 +76,10 @@ problem (two-rarefaction near-vacuum), because the cell mean is the
 
 ## In code
 
-| File | Dim | Physics |
-| ---- | --- | ------- |
-| `adjusters/positivity_euler_1d.mojo` | 1D | Euler (NC=5) |
-| `adjusters/positivity_euler_2d.mojo` | 2D | Euler |
-| `adjusters/positivity_euler_3d.mojo` | 3D | Euler |
-| `adjusters/positivity_mhd_2d.mojo` | 2D | MHD (NC=8 or 9 with ψ) |
-| `adjusters/positivity_mhd_3d.mojo` | 3D | MHD |
+| File | Dims | Physics | Struct(s) |
+| ---- | ---- | ------- | --------- |
+| `adjusters/positivity_euler.mojo` | 1D, 2D, 3D | Euler (NC=5) | `PositivityEuler{1,2,3}D[P]` |
+| `adjusters/positivity_mhd.mojo`   | 2D, 3D | MHD (NC=8 or 9 with ψ) | `PositivityMHD{2,3}D[P, NC]` |
 
 Usage (mirrors the limiter):
 

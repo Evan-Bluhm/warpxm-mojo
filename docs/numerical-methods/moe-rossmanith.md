@@ -79,11 +79,10 @@ the Moe-Rossmanith limiter.
 
 ## In code
 
-| File | Dim |
-| ---- | --- |
-| `adjusters/moe_rossmanith_1d.mojo` | 1D |
-| `adjusters/moe_rossmanith_2d.mojo` | 2D, NC-parameterised |
-| `adjusters/moe_rossmanith_3d.mojo` | 3D, NC-parameterised |
+| File | Dims | Struct(s) | Notes |
+| ---- | ---- | --------- | ----- |
+| `adjusters/moe_rossmanith.mojo`    | 2D, 3D | `MoeRossmanith{2,3}D[P, NC]` | NDIM-parametric, NC-parameterised |
+| `adjusters/moe_rossmanith_1d.mojo` | 1D     | `MoeRossmanith1D[P]`         | Euler-only (NC=5 hard-coded); uses the 1D mesh's split left/right face arrays |
 
 Usage:
 

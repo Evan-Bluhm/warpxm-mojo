@@ -67,7 +67,7 @@ stepper.step[compute_rhs, adjust](ctx, q, dt)
 zero runtime cost.
 
 The 3D version, `DGImhdSolver3D[P, USE_HLLD=True]`, uses a permutation-
-based core (`_hlld_core_3d` in `apps/imhd_3d.mojo`) so all three axis-
+based core (`_hlld_core_3d` in `apps/imhd.mojo`) so all three axis-
 aligned face directions share one ~150-line implementation.
 
 ## Algorithm sketch

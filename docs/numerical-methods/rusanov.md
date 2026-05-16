@@ -54,14 +54,14 @@ with $c_A^{2} = |\mathbf{B}|^{2} / \rho$, $c_A^{n} = B_n/\sqrt{\rho}$.
 ## In the code
 
 Every physics module exposes `numerical_flux_static(...)` as the
-Rusanov implementation. Example from `apps/imhd_2d.mojo`:
+Rusanov implementation. Example from `apps/imhd.mojo`:
 
 ```mojo
 @staticmethod
 def numerical_flux_static(
     q_l: InlineArray[Real, MHD_NC],
     q_r: InlineArray[Real, MHD_NC],
-    nx: Real, ny: Real,
+    nx: Real, ny: Real, nz: Real,
     gamma: Real, rho_min: Real, press_min: Real,
 ) -> InlineArray[Real, MHD_NC]:
     ...
@@ -71,5 +71,8 @@ def numerical_flux_static(
         f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
     return f
 ```
+
+1D callers pass `(±1, 0, 0)` for the normal; 2D callers pass `(nx, ny, 0)`.
+The unused lanes multiply by zero and the compiler folds them away.
 
 DG kernels call this once per face per RK stage.

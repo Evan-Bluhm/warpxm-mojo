@@ -160,7 +160,7 @@ Mostly *quality* and *scale* items, not feature gaps:
 6. **HLLD numerical flux for MHD** — shipped in 2D and 3D
    (`DGImhdSolver{2,3}D[P, USE_HLLD=True]`, Miyoshi-Kusano 2005 five-state
    solver). 3D version uses a permutation-based core
-   (`_hlld_core_3d` in `apps/imhd_3d.mojo`) so all three axis-aligned face
+   (`_hlld_core_3d` in `apps/imhd.mojo`) so all three axis-aligned face
    directions share one ~150-line implementation. Default path stays
    Rusanov (no regression). HLLD is also available on GLM-MHD
    (`DGImhdGLMSolver{2,3}D[P, USE_HLLD=True]`) — the 8 MHD components use
