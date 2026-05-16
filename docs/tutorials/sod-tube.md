@@ -37,7 +37,7 @@ ParaView (see [Viewing output in ParaView](../getting-started/paraview.md)).
 
 ```mojo
 var mesh = BlockMesh2D[P](
-    ctx, 0.0, 1.0, 0.0, 0.1, nx=200, ny=4,
+    ctx, 0.0, 1.0, 0.0, 0.1, nx=200, ny=8,
     periodic_x=False, periodic_y=False,
     bc_left=BC_COPYOUT, bc_right=BC_COPYOUT,
     bc_bottom=BC_WALL_FREESLIP, bc_top=BC_WALL_FREESLIP,
@@ -46,7 +46,7 @@ var q = DGState2D[P, EULER_NC](ctx, mesh.num_elements)
 ```
 
 Notice the **anisotropic mesh**: 200 cells in $x$ where the physics
-lives, 4 cells in $y$ just to make the example 2D so the VTU writer
+lives, 8 cells in $y$ just to make the example 2D so the VTU writer
 has something to draw. The y-direction has free-slip walls so the
 solution stays 1D-extruded — the y-drift in $\rho$ stays at 10⁻¹³.
 
