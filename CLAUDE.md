@@ -70,7 +70,7 @@ All cells with a check have an end-to-end regression test passing on the GPU.
 | Advection                  | ✅  | ✅  | ✅  |
 | 5-moment Euler             | ✅  | ✅  | ✅  |
 | Maxwell                    | ✅  | ✅  | ✅  |
-| Single-fluid plasma        | —   | ✅  | ✅  |
+| Single-fluid plasma        | ✅  | ✅  | ✅  |
 | Two-species plasma         | —   | ✅  | ✅  |
 | Ideal MHD                  | —   | ✅  | ✅  |
 | MHD + Dedner GLM cleaning  | —   | ✅  | ✅  |
@@ -98,6 +98,7 @@ Supporting infrastructure:
 | 1D advection convergence        | observed rates 1.98 / 3.01 / 3.99 (theoretical P+1)     |
 | 2D Euler hydrostatic balance    | \|v\| ~ 4e-16 after 50 steps (well-balanced source)     |
 | 2D Sod tube                     | analytic plateaus match to 3e-3                         |
+| 1D Langmuir (single-fluid)      | mass drift 2.73e-13, ρ at sample within 7e-6 of IC after period |
 | 2D pair-plasma Langmuir         | mass conserved per species to machine epsilon           |
 | Pair-plasma asym δ-scaling      | ratio 100.0 / 100.0 between δ ∈ {0.01, 0.001, 0.0001} — physical O(δ²) |
 | 2D Maxwell PEC cavity TM₁₁      | unexcited components stay at 0.0 exactly                |
