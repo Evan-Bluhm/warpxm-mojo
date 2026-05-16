@@ -41,4 +41,4 @@ docs = { features = ["docs"], solve-group = "default" }
 
 [tool.pixi.tasks]
 mojo-version = "mojo --version"
-test = "mojo run tests/run_all.mojo"
+test = "./scripts/run_tests.sh"

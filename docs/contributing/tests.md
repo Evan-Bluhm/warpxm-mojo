@@ -12,17 +12,24 @@ test in `tests/`. Each test is a standalone `main()` that:
 ## Running the suite
 
 ```fish
-for t in tests/*.mojo; do pixi run mojo run -I src "$t"; done
+pixi run test               # full suite, tally pass/fail at the end
+pixi run test -k            # stop at first failure
+pixi run test -v            # verbose: print full output of failing tests
 ```
 
-Or the whole-suite runner (sequential):
+The `test` pixi task wraps `scripts/run_tests.sh` — a shell loop with
+robust pass detection (grep for `^PASSED$`) so noise like build
+warnings or trailing newlines doesn't confuse the tally. Exit code 1
+on any failure.
+
+To run a single test directly:
 
 ```fish
-pixi run test
+pixi run mojo run -I src tests/test_advection_1d.mojo
 ```
 
-There is no parallel test driver yet — tests run sequentially. Each
-takes a few seconds on a modern GPU.
+Tests run sequentially. Each takes a few seconds on a modern GPU; the
+full 66-test sweep is ~5 minutes.
 
 ## A "good" test
 

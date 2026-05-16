@@ -128,7 +128,9 @@ Supporting infrastructure:
 
 Plus 25 more in `tests/`. Run the suite via:
 ```fish
-for t in tests/*.mojo; do pixi run mojo run -I src "$t"; done
+pixi run test
+# or, for a single test:
+pixi run mojo run -I src tests/test_advection_1d.mojo
 ```
 
 ## Remaining work
