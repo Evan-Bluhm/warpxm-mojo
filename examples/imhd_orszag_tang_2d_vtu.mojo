@@ -17,7 +17,7 @@
 #     pixi run mojo run -I src examples/imhd_orszag_tang_2d_vtu.mojo
 #     # Then open /tmp/orszag_tang/orszag_tang.pvd in ParaView.
 
-from std.math import cos, sin
+from std.math import sin
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 

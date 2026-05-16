@@ -15,7 +15,6 @@
 #     pixi run mojo run -I src examples/imhd_briowu_2d_hlld_vtu.mojo
 #     # Open /tmp/briowu_hlld_2d/briowu.pvd in ParaView.
 
-from std.math import isnan
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 

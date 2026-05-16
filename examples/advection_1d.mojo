@@ -11,7 +11,7 @@
 # This is a compiled input file — there is no runtime input parsing. Edit the
 # constants near the top to change the run.
 
-from std.math import ceildiv, sin
+from std.math import sin
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 

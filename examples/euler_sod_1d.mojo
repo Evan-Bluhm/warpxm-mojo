@@ -19,7 +19,6 @@
 # the contact, and the rarefaction structure should appear at the correct
 # locations at `t = 0.2`.
 
-from std.math import exp
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 
