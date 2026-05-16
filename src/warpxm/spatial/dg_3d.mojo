@@ -1,13 +1,16 @@
-# 3D nodal DG spatial solver for scalar advection.
+# 3D nodal DG spatial solver for linear advection.
 #
-# Tensor-product extension of `dg_2d.mojo` to 3D. One thread block per
-# element, `(P+1)³` threads laid out as `block_dim = (P+1, P+1, P+1)`. The
-# block cooperates through shared memory to evaluate the three directional
-# derivatives `(Dx ⊗ I ⊗ I) f_x`, `(I ⊗ Dy ⊗ I) f_y`, `(I ⊗ I ⊗ Dz) f_z`,
-# then adds surface corrections from the 6 element faces.
+# Tensor-product extension of `dg_2d.mojo` to 3D. NC-parameterised over
+# the tracer count. One thread block per element, `(P+1)³` threads laid
+# out as `block_dim = (P+1, P+1, P+1)`. The block cooperates through
+# shared memory to evaluate the three directional derivatives
+# `(Dx ⊗ I ⊗ I) f_x`, `(I ⊗ Dy ⊗ I) f_y`, `(I ⊗ I ⊗ Dz) f_z`, then adds
+# surface corrections from the 6 element faces.
 #
-# Today: periodic boundaries only; advection physics. Euler / MHD / Maxwell
-# 3D variants follow the same pattern.
+# Used with periodic meshes in the test suite; the `apply_bc` closure is
+# a copyout fallback for completeness. Euler / MHD / Maxwell 3D variants
+# follow the same pattern and are shipped as
+# `dg_{euler,maxwell,imhd,imhd_glm}_3d.mojo`.
 
 from std.collections import InlineArray
 from std.gpu import block_idx, thread_idx

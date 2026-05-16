@@ -1,9 +1,10 @@
-# 2D nodal DG spatial solver for scalar advection.
+# 2D nodal DG spatial solver for linear advection.
 #
 # Thin wrapper over the shared `_dg_2d_compute_rhs_core` kernel core.
-# `NC`-parameterised — every colour gets the same uniform velocity.
-# Used with periodic meshes in the test suite; the `apply_bc` closure
-# is a copyout fallback for completeness.
+# `NC`-parameterised over the tracer count — every component advects
+# with the same uniform velocity. Used with periodic meshes in the
+# test suite; the `apply_bc` closure is a copyout fallback for
+# completeness.
 
 from std.collections import InlineArray
 from std.gpu.host import DeviceContext
