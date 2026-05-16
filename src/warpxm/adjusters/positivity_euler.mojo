@@ -1,5 +1,5 @@
 # Zhang-Shu positivity-preserving limiter for 5-moment Euler — single
-# NDIM-parametric version. Consolidates the 1D / 2D / 3D variants.
+# NDIM-parametric version covering 1D / 2D / 3D.
 #
 # Runs after the Moe-Rossmanith conserved-variable limiter and reduces
 # each element's deviation from the cell mean (linearly, with a per-

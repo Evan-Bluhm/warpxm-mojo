@@ -23,9 +23,7 @@ src/warpxm/
   apps/        # One file per physics: advection, euler, maxwell, imhd,
                # imhd_glm. Each exposes axis-parametric fluxes and a
                # 3-component-normal numerical flux; the DG launcher owns
-               # dimensionality. Per-dim shim files (e.g. euler_1d.mojo)
-               # alias the unified struct as Euler1D/Euler2D/Euler3D for
-               # back-compat — see "Apps consolidation" below.
+               # dimensionality. See "Apps architecture" below.
   adjusters/   # slope limiters (Moe-Rossmanith for 1D, 2D, 3D)
   basis/       # GLL nodal basis (P = 1..4)
   core/        # real-type alias, math helpers, BC enum
@@ -194,10 +192,11 @@ writing Mojo. The most common pretraining-era mistakes:
 - `from collections import …` → `from std.collections import …`
 - Struct-parameter access inside a struct → `Self.T`, not bare `T`
 
-### Apps consolidation
+### Apps architecture
 
 Each of the five core physics packages (advection, euler, maxwell, imhd,
-imhd_glm) is now a single file. The app exposes:
+imhd_glm) is a single file with a dimension-agnostic struct. The app
+exposes:
 
 - `internal_flux_x_static`, `internal_flux_y_static`, `internal_flux_z_static`
   (or an axis-parametric `internal_flux_axis_static[axis]` where it pays off
@@ -212,11 +211,9 @@ imhd_glm) is now a single file. The app exposes:
 This mirrors upstream WARPXM's pattern: the *flux launcher* owns
 dimensionality; the *app* operates on local node values. Per-dim DG kernel
 wrappers (`dg_<phys>_<N>d.mojo`) still exist because mesh layouts are
-dimension-specific, but they call into the shared app file.
-
-Per-dim shim files (`apps/<phys>_<N>d.mojo`) are kept short and alias the
-unified struct as `<Phys>1D`/`<Phys>2D`/`<Phys>3D` so existing test/example
-imports keep working.
+dimension-specific, but they call into the shared app file. Callers import
+the canonical struct directly: `from warpxm.apps.euler import Euler`,
+`from warpxm.apps.imhd import IMHD`, etc.
 
 ### Adding a new physics
 

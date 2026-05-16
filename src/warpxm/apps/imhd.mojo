@@ -1,8 +1,8 @@
 # Ideal MHD — single dimension-agnostic app.
 #
-# Consolidates `apps/imhd_2d.mojo` and `apps/imhd_3d.mojo`. 8 conserved
-# variables: q = (ρ, ρu_x, ρu_y, ρu_z, E, B_x, B_y, B_z). γ-law EOS,
-# μ₀ = 1 in normalised units.
+# Single dimension-agnostic ideal MHD app. 8 conserved variables:
+# q = (ρ, ρu_x, ρu_y, ρu_z, E, B_x, B_y, B_z). γ-law EOS, μ₀ = 1
+# in normalised units.
 #
 # The 2D in-plane-rotation HLLD has been replaced by the 3D axis-aligned
 # permutation-based core (`_hlld_core_3d`); the DG launcher always passes

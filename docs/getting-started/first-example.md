@@ -87,8 +87,8 @@ var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
 * **App** describes the physics — for advection that's just the wave
   speed. Other apps (`Euler`, `Maxwell`, `IMHD`, …) carry their own
   parameters like γ-law indices or speed of light. Each physics has a
-  single canonical struct; the `<Phys>1D`/`<Phys>2D`/`<Phys>3D` names
-  are aliases.
+  single canonical struct shared across all dimensions; the per-dim DG
+  kernel supplies the right normal triples.
 * **Spatial solver** wraps the app and knows how to compute the DG
   spatial RHS (volume + face fluxes). Each (physics, dimension)
   combination has its own spatial solver type.

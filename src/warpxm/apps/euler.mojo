@@ -1,11 +1,10 @@
 # 5-moment Euler gas dynamics — single dimension-agnostic app.
 #
-# This is the consolidated version of the per-dimension Euler files
-# (`euler_1d.mojo`, `euler_2d.mojo`, `euler_3d.mojo`). It mirrors the
-# upstream `src/apps/5-moment/euler.{h,cc}` design: the app exposes axis-
-# parametric internal-flux helpers and a single Rusanov numerical-flux
-# function that takes a full 3-component unit normal. The DG launcher
-# owns the dimension — the app just operates on local node values.
+# Mirrors the upstream `src/apps/5-moment/euler.{h,cc}` design: the app
+# exposes axis-parametric internal-flux helpers and a single Rusanov
+# numerical-flux function that takes a full 3-component unit normal.
+# The DG launcher (`dg_core_{1,2,3}d.mojo`) owns the dimension — the
+# app just operates on local node values.
 #
 # Conserved variables (NC = 5):
 #

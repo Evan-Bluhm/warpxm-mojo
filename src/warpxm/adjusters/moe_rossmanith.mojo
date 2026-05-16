@@ -1,8 +1,7 @@
 # Moe-Rossmanith slope limiter for 2D + 3D DG fields — NDIM-parametric.
 #
-# Consolidates `moe_rossmanith_2d.mojo` and `moe_rossmanith_3d.mojo`.
 # The 1D variant uses a different mesh API (separate left/right face
-# arrays and Euler-only NC) and is kept separate.
+# arrays and Euler-only NC) and lives in `moe_rossmanith_1d.mojo`.
 #
 # Algorithm: per element compute cell average + conserved-variable
 # bounds (min, max) via GLL quadrature; gather all 2·NDIM face
