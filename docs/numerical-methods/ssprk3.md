@@ -36,9 +36,14 @@ the same property under the same CFL.
   forward Euler.
 * **Three RHS evaluations** per step (one per stage).
 * **GPU-friendly**: each stage is a kernel launch + an `enqueue_copy`
-  for the snapshot. The "combine" kernel (a · u₀ + b · (u_stage +
-  dt · rhs)) is hand-written and identical across all
-  `SSPRK3_*` variants.
+  for the snapshot. Two shared kernels live in
+  `temporal/ssprk3.mojo` and are reused by every `SSPRK3_*` variant
+  (including the plasma / two-fluid steppers):
+    * `_euler_step_kernel` — `output[i] = x[i] + dt · rhs[i]` (used
+      for stage 1, where aliasing prevents the more general combine).
+    * `_ssprk3_combine_kernel` — `output[i] = a · u₀[i] + b · (u_stage[i]
+      + dt · rhs[i])` (used for stages 2 and 3 with $(a, b) = (3/4,
+      1/4)$ then $(1/3, 2/3)$).
 
 ## Steppers in `temporal/`
 
