@@ -52,9 +52,9 @@ This is exact for advection, so there's no Rusanov / HLLD choice.
 
 ## Tests
 
-* `tests/test_advection_1d.mojo`
-* `tests/test_advection_2d.mojo`
-* `tests/test_advection_3d.mojo`
+* `tests/test_advection_1d.mojo`, `..._2d.mojo`, `..._3d.mojo` — single-component returns to IC after one period.
 * `tests/test_advection_copyout_1d.mojo` — verifies the BC_COPYOUT path.
-* `tests/test_advection_multi_component.mojo` — same velocity, multiple colours.
+* `tests/test_advection_multi_component.mojo` (1D), `..._2d.mojo`, `..._3d.mojo` — same velocity field, multiple independent colours.
 * `tests/test_dg_convergence_1d.mojo` — measured $h^{P+1}$ rates (1.98 / 3.01 / 3.99 for $P = 1, 2, 3$).
+* `tests/test_dg_convergence_2d.mojo` — measured rates 1.90 / 3.03 / 4.00 for $P = 1, 2, 3$.
+* `tests/test_dg_convergence_3d.mojo` — measured rates 3.12 / 3.99 at $P = 2, 3$.
