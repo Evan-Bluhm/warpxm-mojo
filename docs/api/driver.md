@@ -7,13 +7,17 @@ time-series.
 
 One writer per (physics, dimension):
 
+Field names below are the exact ParaView `DataArray Name=` strings
+written by each writer (case-sensitive — type them in verbatim
+when colouring).
+
 | Module | Function | Fields |
 | ------ | -------- | ------ |
-| `driver/vtu_2d.mojo` | `dump_euler_2d_frame[P]` | ρ, u, v, w, P |
-| `driver/vtu_3d.mojo` | `dump_euler_3d_frame[P]` | ρ, u, v, w, P |
-| `driver/vtu_imhd_2d.mojo` | `dump_imhd_2d_frame[P]` (NC=8) / `dump_imhd_glm_2d_frame[P, NC]` (NC=9) | ρ, u, v, P_gas, B_x, B_y, B²/2, ψ |
-| `driver/vtu_imhd_3d.mojo` | `dump_imhd_3d_frame[P]` / `dump_imhd_glm_3d_frame[P, NC]` | as above + B_z, w |
-| `driver/vtu_maxwell_2d.mojo` | `dump_maxwell_2d_frame[P]` | E_x, E_y, E_z, B_x, B_y, B_z, E_energy, B_energy |
+| `driver/vtu_2d.mojo` | `dump_euler_2d_frame[P]` | `rho`, `u`, `v`, `P` |
+| `driver/vtu_3d.mojo` | `dump_euler_3d_frame[P]` | `rho`, `u`, `v`, `w`, `P` |
+| `driver/vtu_imhd_2d.mojo` | `dump_imhd_2d_frame[P]` (NC=8) / `dump_imhd_glm_2d_frame[P, NC]` (NC=9) | `rho`, `u`, `v`, `P`, `Bx`, `By`, `B2_over_2`, `psi` (NC=9 only) |
+| `driver/vtu_imhd_3d.mojo` | `dump_imhd_3d_frame[P]` / `dump_imhd_glm_3d_frame[P, NC]` | as 2D + `w`, `Bz` |
+| `driver/vtu_maxwell_2d.mojo` | `dump_maxwell_2d_frame[P]` | `E_x`, `E_y`, `E_z`, `B_x`, `B_y`, `B_z`, `E_energy`, `B_energy` |
 | `driver/vtu_maxwell_3d.mojo` | `dump_maxwell_3d_frame[P]` | same as 2D |
 
 Each writer:
