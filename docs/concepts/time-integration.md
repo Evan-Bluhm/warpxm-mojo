@@ -50,26 +50,29 @@ adds an embedded fourth-order error estimate so the step size can shrink
 near steep gradients and relax in smooth regions.
 
 ```mojo
-from warpxm.temporal.dormand_prince_1d import DormandPrince45_1D
-var stepper = DormandPrince45_1D[P, NC](ctx, mesh.num_elements)
+from warpxm.temporal.dormand_prince_2d import DormandPrince45_2D
+var stepper = DormandPrince45_2D[P, NC](ctx, mesh.num_elements)
+
+@parameter
+def compute_rhs(mut q_in, mut q_out) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
 # Fixed-step:
-stepper.step(ctx, mesh, spatial, q, dt)
+stepper.step[compute_rhs](ctx, q, dt)
 
 # Adaptive:
-var ret = stepper.step_adaptive(ctx, mesh, spatial, q, dt_try,
-                                atol=1e-8, rtol=1e-6)
+var ret = stepper.step_adaptive[compute_rhs](
+    ctx, q, dt_try, atol=1e-8, rtol=1e-6,
+)
 var dt_used = ret[0]
 var dt_next = ret[1]
 ```
 
-On the smooth-advection benchmark adaptive DP45 converges in **~10×
-fewer steps than fixed-Δt SSPRK3** at the same error tolerance.
-
-DP45 currently uses the pre-refactor direct-spatial-solver API; the
-2D Euler variant lives in `dormand_prince_euler_2d.mojo`. Other physics
-× dimension combinations and migration to the same closure pattern as
-SSPRK3 are open follow-ups.
+DP45 uses the same two-closure pattern as SSPRK3 and is available in
+all three dimensions (`DormandPrince45_{1,2,3}D[P, NC]`). On smooth
+problems the controller takes **6-40× fewer steps** than fixed-dt
+SSPRK3 at comparable error tolerance — biggest wins on linear systems
+like Maxwell (40× in 3D).
 
 ## Composing sources and adjusters
 

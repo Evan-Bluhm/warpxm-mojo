@@ -55,17 +55,25 @@ A standard PI-free controller:
 ## API
 
 ```mojo
-from warpxm.temporal.dormand_prince_1d import DormandPrince45_1D
-# or DormandPrince45_Euler_2D for 2D Euler
+from warpxm.temporal.dormand_prince_2d import DormandPrince45_2D
+# or DormandPrince45_1D / DormandPrince45_3D for other dimensions
 
-var stepper = DormandPrince45_1D[P, NC](ctx, mesh.num_elements)
+var stepper = DormandPrince45_2D[P, NC](ctx, mesh.num_elements)
+
+@parameter
+def compute_rhs(
+    mut q_in: DGState2D[P, NC],
+    mut q_out: DGState2D[P, NC],
+) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+    # add source kernels here if needed
 
 # Fixed-step (same dt every call):
-stepper.step(ctx, mesh, spatial, q, dt)
+stepper.step[compute_rhs](ctx, q, dt)
 
 # Adaptive (dt floats):
-var ret = stepper.step_adaptive(
-    ctx, mesh, spatial, q, dt_try,
+var ret = stepper.step_adaptive[compute_rhs](
+    ctx, q, dt_try,
     atol=Real(1.0e-8), rtol=Real(1.0e-6),
 )
 var dt_used = ret[0]
@@ -79,8 +87,8 @@ var t: Real = 0.0
 var dt = DT_INIT
 while t < T_FINAL - 1e-12:
     var dt_try = dt if (t + dt) < T_FINAL else (T_FINAL - t)
-    var ret = stepper.step_adaptive(ctx, mesh, spatial, q, dt_try,
-                                     atol=ATOL, rtol=RTOL)
+    var ret = stepper.step_adaptive[compute_rhs](ctx, q, dt_try,
+                                                  atol=ATOL, rtol=RTOL)
     t += ret[0]
     dt = ret[1]
 ```
@@ -89,28 +97,34 @@ while t < T_FINAL - 1e-12:
 
 Compared to fixed-Δt SSPRK3 at the same final error level:
 
-| Test | Steps (SSPRK3, dt=5e-4) | Steps (DP45 adaptive) |
-| ---- | ----------------------- | --------------------- |
-| 1D advection smooth, P=3, T=1 | ~2000 | **187** |
-| 2D Euler entropy wave smooth, T=1 | ~2000 | **199** |
+| Test | Steps (SSPRK3) | Steps (DP45 adaptive) |
+| ---- | -------------- | --------------------- |
+| 1D advection smooth, P=3, T=1 (dt=5e-4) | ~2000 | **187** |
+| 2D Euler entropy wave smooth, T=1 (dt=1e-3) | ~2000 | **199** |
+| 2D MHD Alfvén wave, T=1 (dt=1e-3) | 1000 | **169** |
+| 2D Maxwell plane wave, T=1/√2 (dt=5e-4) | ~1414 | **76** |
+| 3D advection smooth, T=1 (dt=1e-3) | ~1000 | **64** |
+| 3D MHD Alfvén wave, T=1 (dt=1e-3) | 1000 | **131** |
+| 3D Maxwell plane wave, T=1 (dt=5e-4) | ~2000 | **50** |
 
-A ~10× saving on smooth problems. On problems with sharp transitions
-the controller pulls back to a smaller $\Delta t$ near gradients and
-relaxes elsewhere — savings are smaller but you also don't have to
-hand-tune $\Delta t$.
+Savings of 6–40× on smooth problems. On problems with sharp transitions
+the controller pulls back near gradients and relaxes elsewhere — savings
+are smaller but you don't have to hand-tune $\Delta t$.
 
 ## Coverage
 
 | Module | Status |
 | ------ | ------ |
-| `dormand_prince_1d.mojo` (generic 1D `[P, NC]`) | ✅ fixed + adaptive |
-| `dormand_prince_euler_2d.mojo` | ✅ fixed + adaptive |
-| 2D / 3D MHD, Maxwell, plasma | Pending |
+| `dormand_prince_1d.mojo` — `DormandPrince45_1D[P, NC]` | ✅ fixed + adaptive |
+| `dormand_prince_2d.mojo` — `DormandPrince45_2D[P, NC]` | ✅ fixed + adaptive |
+| `dormand_prince_3d.mojo` — `DormandPrince45_3D[P, NC]` | ✅ fixed + adaptive |
+| Plasma (3 coupled states) | Not in scope — plasma steppers use SSPRK3 only |
 
-The DP45 architecture is dimension-agnostic — the combine kernels in
-`dormand_prince_1d.mojo` operate on flat buffers and are reused
-unchanged by the 2D Euler variant. Porting to other 2D / 3D physics is
-roughly a 100-line copy of the existing 2D Euler driver.
+All three steppers use the same two-closure pattern (`step[compute_rhs_fn]`,
+`step_adaptive[compute_rhs_fn]`). The combine kernels and error kernel
+live in `dormand_prince_1d.mojo` and are imported unchanged by the 2D
+and 3D variants — they operate on flat buffers and don't care about
+dimension.
 
 ## Implementation notes
 

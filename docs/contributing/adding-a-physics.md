@@ -1,30 +1,39 @@
 # Adding a new physics module
 
-A proven recipe for adding a new (physics, dimension) combination.
-Source-term-only additions (gravity, drag, …) are simpler and don't
-need every step.
+A proven recipe for adding a new physics. Source-term-only additions
+(gravity, drag, …) are simpler and don't need every step.
 
-The five-step pattern:
+The five-step pattern (one shared app file across dimensions):
 
-1. **App** — `apps/<phys>_<N>d.mojo`. Define `<PHYS>_NC`, the
-   `IDX_*` constants, and a struct with `internal_flux_{x,y[,z]}_static`
-   plus a `numerical_flux_static` (Rusanov / Lax-Friedrichs taking a
-   unit normal).
+1. **App** — `apps/<phys>.mojo`. Define `<PHYS>_NC`, the `IDX_*`
+   constants, and a struct with `internal_flux_{x,y,z}_static` methods
+   that compute the per-axis flux at a single state, plus a
+   `numerical_flux_static(q_l, q_r, nx, ny, nz, ...)` taking a
+   3-component unit normal (a 1D caller passes `(±1, 0, 0)`; 2D
+   passes `(nx, ny, 0)`). Module-level helpers for the physics-specific
+   conversions (`_rho_floored`, `_gas_pressure_floored`, etc.).
 
-2. **DG kernel** — `spatial/dg_<phys>_<N>d.mojo`. Clone the closest
-   existing spatial solver (e.g. `dg_euler_2d.mojo`) and swap the
-   flux helpers. The volume + surface skeleton is the same for every
-   physics.
+2. **DG kernel** — `spatial/dg_<phys>_<N>d.mojo` for each dimension you
+   need. Thin wrapper over the shared
+   `_dg_<N>d_compute_rhs_core` template in
+   `spatial/dg_core_<N>d.mojo`. The wrapper declares four
+   `@parameter def` closures — `flux_x`, `flux_y` (+ `flux_z` in 3D),
+   `num_flux`, `apply_bc` — that dispatch to the app's static methods
+   with the right normal triples (e.g. 2D passes `(nx, ny, 0)`).
 
-3. **Stepper** — `temporal/ssprk3_<phys>_<N>d.mojo`. Clone the
-   matching limited or non-limited SSPRK3 variant, swap the spatial
-   solver type. If your physics needs sources, model after
-   `ssprk3_plasma_2d.mojo`.
+3. **Stepper** — nothing new. The generic `SSPRK3_<N>D[P, NC]` and
+   `DormandPrince45_<N>D[P, NC]` already handle any single-state
+   problem. Compose the limiter / positivity preserver / source kernels
+   at the call site via the driver's `adjust` and `compute_rhs`
+   closures. The plasma steppers
+   (`ssprk3_plasma_{2,3}d`, `ssprk3_twofluid_{2,3}d`) are kept
+   specialised because they juggle 3 (or 2) coupled states.
 
-4. **BCs** — add a `_apply_bc_<phys>_<N>d` helper in the DG kernel
-   file, thread `face_bc` through the kernel, dispatch on the BC kind
-   at each ghost-sentinel branch. The helper takes the interior
-   `q_n` and returns a ghost state.
+4. **BCs** — add a `_apply_bc_<phys>_<N>d` helper in your DG-kernel
+   wrapper. It takes the interior `q_n`, the BC kind, and a `face_axis`
+   ∈ {0, 1, 2} (which mesh normal direction this face is on), and
+   returns the ghost-side state. The shared DG core invokes it at every
+   boundary face.
 
 5. **Test** — clone an analogous (phys, N±1) test, adjust the IC, run.
 
@@ -44,8 +53,8 @@ The five-step pattern:
 
 * **Numerical flux** beyond Rusanov — HLLC, HLLD, Roe, AUSM all need
   per-physics work because they exploit the eigenstructure of the
-  system. See `IMHD2D.numerical_flux_hlld_static` for the
-  Miyoshi-Kusano example.
+  system. See `IMHD.numerical_flux_hlld_static` for the Miyoshi-Kusano
+  example (axis-aligned permutation into a shared `_hlld_core_3d`).
 * **Positivity preserver** — the algorithm is generic but the
   primitive recovery formula isn't. Each "positive primitive" has its
   own quadratic or cubic in θ.
@@ -54,20 +63,22 @@ The five-step pattern:
   Maxwell flips tangential E; free-slip for Euler flips normal
   momentum).
 
-## Pattern: a 1D Maxwell example
+## Pattern: 1D Maxwell would look like
 
-If you wanted to add 1D Maxwell:
+If you wanted to add 1D Maxwell (we don't ship it — the lowest-rank
+plane wave is 2D):
 
 ```text
 src/warpxm/
-  apps/maxwell_1d.mojo           # NC=8 reused, copy of maxwell_2d.mojo, drop ny
-  spatial/dg_maxwell_1d.mojo     # clone dg_euler_1d.mojo, swap fluxes
-  temporal/ssprk3_maxwell_1d.mojo  # clone ssprk3_maxwell_2d.mojo
+  apps/maxwell.mojo              # already exists — covers 1D too
+  spatial/dg_maxwell_1d.mojo     # NEW: thin wrapper over dg_core_1d
 tests/test_maxwell_1d_plane_wave.mojo  # smooth plane-wave decay
 ```
 
-Each file is ~150 lines. The whole port is a few hours, dominated by
-debugging the BC adjustment for PEC walls.
+The app file is reused unchanged from the existing canonical
+`maxwell.mojo` (works because it takes a 3-component normal); the
+1D DG wrapper is ~100 lines of closure plumbing. The whole port is
+under an hour.
 
 ## Don't add: 1D MHD
 

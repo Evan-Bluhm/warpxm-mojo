@@ -14,8 +14,9 @@ composed at the call site via `@parameter def` closures.
 | `ssprk3_1d.mojo` | `SSPRK3_1D[P, NC]` | Every 1D problem (advection, Euler, …) |
 | `ssprk3_2d.mojo` | `SSPRK3_2D[P, NC]` | Every 2D problem (Euler, Maxwell, MHD, GLM-MHD, …) |
 | `ssprk3_3d.mojo` | `SSPRK3_3D[P, NC]` | Every 3D problem |
-| `dormand_prince_1d.mojo` | `DormandPrince45_1D[P, NC]` | Adaptive 5(4) RK in 1D |
-| `dormand_prince_euler_2d.mojo` | `DormandPrince45_Euler_2D[P]` | Adaptive 5(4) RK for 2D Euler |
+| `dormand_prince_1d.mojo` | `DormandPrince45_1D[P, NC]` + dimension-agnostic combine helpers `_combine1`–`_combine5` and `_dp45_error_kernel` reused by 2D/3D | Adaptive 5(4) RK in 1D |
+| `dormand_prince_2d.mojo` | `DormandPrince45_2D[P, NC]` | Adaptive 5(4) RK in 2D — any physics |
+| `dormand_prince_3d.mojo` | `DormandPrince45_3D[P, NC]` | Adaptive 5(4) RK in 3D — any physics |
 | `ssprk3_plasma_{2,3}d.mojo` | `SSPRK3_Plasma_{2,3}D[P]` | Two-species plasma — three coupled states, kept specialized |
 | `ssprk3_twofluid_{2,3}d.mojo` | `SSPRK3_Twofluid_{2,3}D[P]` | Single-fluid plasma (one fluid + Maxwell) |
 
@@ -112,11 +113,13 @@ the default is captured automatically.
 
 ## Adaptive RK45 (Dormand-Prince)
 
-`DormandPrince45_1D[P, NC]` and `DormandPrince45_Euler_2D[P]` keep their
-direct API for now (they pre-date the closure pattern and have an
-embedded fixed-shape error estimator). Migration to the same
-closure-based API is a follow-up. See
-[Dormand-Prince](../numerical-methods/dormand-prince.md).
+`DormandPrince45_{1,2,3}D[P, NC]` use the same two-closure pattern as
+SSPRK3 — `step[compute_rhs_fn]` for fixed-dt and
+`step_adaptive[compute_rhs_fn]` for embedded 4th-order error control.
+The combine kernels (`_combine1`–`_combine5`) and error kernel live in
+`dormand_prince_1d.mojo` and are shared across dimensions because they
+operate on flat buffers. Validated bit-comparable across all 5
+physics × all dimensions; see [Dormand-Prince](../numerical-methods/dormand-prince.md).
 
 ## Plasma steppers
 

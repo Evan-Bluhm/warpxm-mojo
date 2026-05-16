@@ -1,69 +1,86 @@
 # `warpxm.apps`
 
-Physics modules. Each app struct carries the physics parameters (γ,
-speed of light, …) and exposes static flux methods that the DG kernels
-call.
+Physics modules. Each physics is a **single file** that defines an app
+struct (parameters: γ, speed of light, …) and exposes static flux
+methods that the DG kernels call. The DG launcher owns dimensionality;
+the app operates on local node values via 3-component-normal numerical
+fluxes and axis-named (or axis-parametric) internal fluxes.
+
+Per-dim shim files (`apps/<phys>_<N>d.mojo`) alias the canonical struct
+as `<Phys>1D`/`<Phys>2D`/`<Phys>3D` for back-compat with existing
+imports.
 
 ## Convention
 
 Every app has, at minimum:
 
-* `internal_flux_*_static(q, ...)` — the physical flux along axis `*`,
-  computed at a single state.
-* `numerical_flux_static(q_l, q_r, n_components, ..., gamma, ...)` —
-  Rusanov / Lax-Friedrichs numerical flux at an interface with a
-  given unit normal.
+* `internal_flux_x_static(q, ...)`, `internal_flux_y_static`,
+  `internal_flux_z_static` — the physical flux along that axis at a
+  single state. Some apps also expose `internal_flux_axis_static[axis]`.
+* `numerical_flux_static(q_l, q_r, nx, ny, nz, ...physics-params...)` —
+  Rusanov / central+LF numerical flux on a 3-component unit normal.
+  1D callers pass `(±1, 0, 0)`; 2D callers pass `(nx, ny, 0)`.
 
 MHD modules additionally have:
 
-* `numerical_flux_hlld_static(...)` — the HLLD five-state solver.
+* `numerical_flux_hlld_static(q_l, q_r, nx, ny, nz, ...)` — Miyoshi-
+  Kusano HLLD via axis-aligned permutation into a shared
+  `_hlld_core_3d`.
 
 All these methods are `@staticmethod` so they're callable without an
-instance — DG kernels invoke them as `IMHD2D.numerical_flux_static(...)`.
+instance — DG kernels invoke them as `Euler.numerical_flux_static(...)`.
 
 ## Index constants and NC
 
-Each app file exports `*_NC` (the component count) and an `IDX_*`
-constant per component. The 3D modules **re-use** the 2D constants —
-the state layout is identical, just on a 3D mesh.
+Each canonical app file exports `*_NC` (the component count) and an
+`IDX_*` constant per component.
 
 ## Module list
 
 ### `advection`
 
 ```mojo
-from warpxm.apps.advection import Advection1D, Advection2D, Advection3D
+from warpxm.apps.advection import Advection
+# Or via the back-compat shim:
+from warpxm.apps.advection_2d import Advection2D
 ```
 
-Parameters: `velocity`, `cfl_max`. NC is open (multi-component
-advection works). The "numerical flux" is exact upwinding, not Rusanov.
+Parameters: `velocity_x`, `velocity_y`, `velocity_z` (defaults 0),
+`cfl_max`. NC is open (multi-component advection works). The
+"numerical flux" is exact upwinding, not Rusanov.
 
-### `euler_{1d,2d,3d}`
+### `euler`
 
 ```mojo
-from warpxm.apps.euler_2d import Euler2D, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
+from warpxm.apps.euler import (
+    Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
+)
+# Or via shim:
+from warpxm.apps.euler_2d import Euler2D
 ```
 
 5-component compressible Euler. Parameters: `gas_gamma`, `min_density`,
-`min_pressure`, `cfl_max`.
+`min_pressure`, `cfl_max`. `Euler1D`/`Euler2D`/`Euler3D` are aliases for
+`Euler`.
 
-### `maxwell_{2d,3d}`
+### `maxwell`
 
 ```mojo
-from warpxm.apps.maxwell_2d import (
-    Maxwell2D, MAXWELL_NC,
+from warpxm.apps.maxwell import (
+    Maxwell, MAXWELL_NC,
     IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 ```
 
-8-component (six fields + two reserved). Parameters: `c_light`,
-`cfl_max`. No 1D Maxwell (the lowest-rank plane wave is 2D).
+6-component electromagnetic. Parameters: `c_light`, `cfl_max`. No 1D
+Maxwell (the lowest-rank plane wave is 2D). `Maxwell2D`/`Maxwell3D`
+are aliases for `Maxwell`.
 
-### `imhd_{2d,3d}`
+### `imhd`
 
 ```mojo
-from warpxm.apps.imhd_2d import (
-    IMHD2D, MHD_NC,
+from warpxm.apps.imhd import (
+    IMHD, MHD_NC,
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
 )
 ```
@@ -71,16 +88,18 @@ from warpxm.apps.imhd_2d import (
 8-component ideal MHD. Parameters: `gas_gamma`, `min_density`,
 `min_pressure`, `cfl_max`. Has both `numerical_flux_static` (Rusanov)
 and `numerical_flux_hlld_static` (HLLD); selection via the DG solver's
-`USE_HLLD` comptime parameter.
+`USE_HLLD` comptime parameter. `IMHD2D`/`IMHD3D` are aliases for `IMHD`.
 
-### `imhd_glm_{2d,3d}`
+### `imhd_glm`
 
 ```mojo
-from warpxm.apps.imhd_glm_2d import ImhdGLM2D, MHD_GLM_NC, IDX_PSI
+from warpxm.apps.imhd_glm import ImhdGLM, MHD_GLM_NC, IDX_PSI
 ```
 
 9-component MHD with Dedner GLM cleaning. Adds `c_h`, `c_p_sq`
-parameters and the `IDX_PSI` component at index 8.
+parameters and the `IDX_PSI` component at index 8. HLLD path composes
+IMHD HLLD with the exact 2x2 (B·n, ψ) Riemann block.
+`ImhdGLM2D`/`ImhdGLM3D` are aliases for `ImhdGLM`.
 
 ## Switching MHD flux
 
@@ -92,5 +111,4 @@ var spatial = DGImhdSolver2D[P](app)
 var spatial = DGImhdSolver2D[P, USE_HLLD=True](app)
 ```
 
-Same for 3D and for `DGImhdGLMSolver*` once the HLLD wiring is
-extended (currently only on plain `DGImhdSolver*`).
+Same for 3D and for `DGImhdGLMSolver*` (HLLD is wired into GLM-MHD).
