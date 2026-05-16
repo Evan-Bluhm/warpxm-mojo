@@ -8,7 +8,8 @@ condition enum.
 ```mojo
 from warpxm.core.types import (
     Real, WXM_DTYPE, INDEX_DTYPE,
-    TWO_PI, PI, WXM_INF,
+    TWO_PI, PI, HALF_PI,
+    WXM_INF, WXM_TINY,
 )
 ```
 
@@ -17,9 +18,9 @@ from warpxm.core.types import (
 | `Real` | `Scalar[DType.float64]`. Everything physics-related is double precision. |
 | `WXM_DTYPE` | `DType.float64`. Used for `TileTensor[WXM_DTYPE, ...]`. |
 | `INDEX_DTYPE` | `DType.int32`. Used for face / element index buffers. |
-| `TWO_PI` | $2\pi$ as `Real`. |
-| `PI` | $\pi$. |
-| `WXM_INF` | Sentinel for "no neighbour" in face-index buffers. |
+| `TWO_PI`, `PI`, `HALF_PI` | $2\pi$, $\pi$, $\pi/2$ as `Real`. |
+| `WXM_INF` | `1e308` as `Real`. Used as the "no CFL constraint" return from per-app `dt_max` queries when the relevant signal speed underflows. |
+| `WXM_TINY` | `1e-14` as `Real`. Used as the underflow threshold when computing dt limits — speeds below this return `WXM_INF` instead of dividing by zero. |
 
 Switching the framework to single precision would mean editing this one
 file. No bare `Float32` / `Float64` literals appear in physics code.
