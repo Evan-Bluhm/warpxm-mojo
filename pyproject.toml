@@ -42,3 +42,4 @@ docs = { features = ["docs"], solve-group = "default" }
 [tool.pixi.tasks]
 mojo-version = "mojo --version"
 test = "./scripts/run_tests.sh"
+build = "./scripts/build_examples.sh"
