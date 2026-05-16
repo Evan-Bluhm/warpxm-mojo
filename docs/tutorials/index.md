@@ -11,6 +11,7 @@ closest to what you want to do.
 | [TM cavity mode](cavity-mode.md) | Maxwell 2D / 3D | PEC walls, energy conservation, ∫E_energy ↔ ∫B_energy oscillation |
 | [Sedov blast with positivity](sedov-blast.md) | Euler 2D | Strong shock, Zhang-Shu positivity preserver, conservation diagnostics |
 | [Kelvin-Helmholtz instability](kelvin-helmholtz.md) | Euler 2D | Smooth-IC shear layer, vortex rollup, long-time conservation |
+| [Langmuir oscillation](langmuir-oscillation.md) | Plasma 2D | Closure-based fluid+Maxwell stepper, bidirectional coupling, two synchronised PVD streams |
 
 If you haven't run anything yet, start with [Getting Started → First example](../getting-started/first-example.md)
 which walks through the simpler `examples/advection_1d.mojo`.
