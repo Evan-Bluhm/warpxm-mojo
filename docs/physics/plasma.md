@@ -82,6 +82,10 @@ species.
 
 ## Examples and tests
 
+| Example | Description |
+| ------- | ----------- |
+| [`examples/langmuir_2d_vtu.mojo`](https://github.com/your-fork/warpxm-mojo/blob/main/examples/langmuir_2d_vtu.mojo) | 2D single-fluid Langmuir oscillation against a static ion background, with VTU output across two periods. Walkthrough in [Tutorials](../tutorials/langmuir-oscillation.md). |
+
 | Test | Setup |
 | ---- | ----- |
 | `tests/test_langmuir_1d.mojo` | 1D single-fluid Langmuir oscillation against a static positive-ion background, $\omega = \omega_{pe}$. Returns to IC after one period; mass drift ~2.7e-13. |

@@ -128,6 +128,7 @@ algorithms.
 | [`examples/euler_entropy_wave_2d.mojo`](https://github.com/your-fork/warpxm-mojo/blob/main/examples/euler_entropy_wave_2d.mojo) | Smooth 2D entropy wave. |
 | [`examples/euler_sod_2d_vtu.mojo`](https://github.com/your-fork/warpxm-mojo/blob/main/examples/euler_sod_2d_vtu.mojo) | 2D Sod with VTU output. |
 | [`examples/euler_sedov_blast_2d_vtu.mojo`](https://github.com/your-fork/warpxm-mojo/blob/main/examples/euler_sedov_blast_2d_vtu.mojo) | Strong 2D Sedov blast exercising positivity preserver. |
+| [`examples/euler_kelvin_helmholtz_2d_vtu.mojo`](https://github.com/your-fork/warpxm-mojo/blob/main/examples/euler_kelvin_helmholtz_2d_vtu.mojo) | 2D Kelvin-Helmholtz shear-layer instability with the slope limiter. |
 | [`examples/euler_blast_3d_vtu.mojo`](https://github.com/your-fork/warpxm-mojo/blob/main/examples/euler_blast_3d_vtu.mojo) | 3D blast wave. |
 
 Regression tests cover Sod 1D / 2D / 3D, the 1D and 3D entropy waves,
