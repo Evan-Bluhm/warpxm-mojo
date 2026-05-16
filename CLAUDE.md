@@ -41,7 +41,9 @@ src/warpxm/
   variable/    # DGState{1,2,3}D[P, NC] device buffers
 examples/      # polished driver programs (one .mojo per physics setup)
 tests/         # 66 regression tests covering every (physics, dimension) combination
-scripts/       # tooling (GLL table generator, etc.)
+scripts/       # tooling: gll_tables.py (GLL basis table generator),
+               # run_tests.sh (pixi `test` task), build_examples.sh
+               # (pixi `build` task).
 ```
 
 The subtree organisation mirrors upstream's `src/apps/`,
