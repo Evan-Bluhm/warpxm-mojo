@@ -69,7 +69,7 @@ All cells with a check have an end-to-end regression test passing on the GPU.
 | -------------------------- | :-: | :-: | :-: |
 | Advection                  | ✅  | ✅  | ✅  |
 | 5-moment Euler             | ✅  | ✅  | ✅  |
-| Maxwell                    | —   | ✅  | ✅  |
+| Maxwell                    | ✅  | ✅  | ✅  |
 | Single-fluid plasma        | —   | ✅  | ✅  |
 | Two-species plasma         | —   | ✅  | ✅  |
 | Ideal MHD                  | —   | ✅  | ✅  |
@@ -117,6 +117,7 @@ Supporting infrastructure:
 | Adaptive DP45 (smooth advection)| 187 steps (vs ~2000 SSPRK3), L2 1.2e-7, dt up to 0.008  |
 | Adaptive DP45 (2D entropy wave) | 199 steps for t=1, dt 4.4e-3..1e-2, ρ L2 7e-7          |
 | Adaptive DP45 (2D MHD Alfvén)   | 169 steps for t=1 (vs 1000 SSPRK3), L2 ~4.3e-6 on B/u  |
+| Adaptive DP45 (1D Maxwell)      | 52 steps for t=1 (vs ~2000 SSPRK3), L2 1e-4, transv 0.0 |
 | Adaptive DP45 (2D Maxwell)      | 76 steps for t=1/√2 (vs ~1414 SSPRK3), L2 ~1e-4 on E/B |
 | Adaptive DP45 (3D advection)    | 64 steps for t=1, dt 0.008..0.016, L2 1.76e-3          |
 | Adaptive DP45 (3D MHD Alfvén)   | 131 steps for t=1 (vs 1000 SSPRK3), L2 ~2.4e-5 on B/u  |
