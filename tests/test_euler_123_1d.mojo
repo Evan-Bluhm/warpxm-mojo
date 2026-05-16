@@ -2,7 +2,7 @@
 # preservation in Euler. Two strong outward rarefactions create a region
 # where ρ and P collapse toward zero. The conserved-variable limiter
 # alone cannot prevent negative density or pressure here; the
-# Zhang-Shu positivity preserver in `adjusters/positivity_euler_1d.mojo`
+# Zhang-Shu positivity preserver in `adjusters/positivity_euler.mojo`
 # is what keeps the simulation valid.
 #
 # IC (Einfeldt et al. 1991):
