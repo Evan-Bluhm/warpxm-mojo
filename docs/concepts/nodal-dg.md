@@ -111,13 +111,14 @@ See the [`core.bc`](../api/core.md) module for the full enum and
 
 ## Where this lives in the code
 
-| Concept                  | File                                                          |
-| ------------------------ | ------------------------------------------------------------- |
-| GLL nodes + weights      | `src/warpxm/basis/nodal_basis_1d.mojo`                        |
-| 1D mesh + ghost wiring   | `src/warpxm/mesh/block_1d.mojo`                               |
-| Spatial DG kernel (1D)   | `src/warpxm/spatial/dg_1d.mojo`                               |
-| Spatial DG kernel (2D)   | `src/warpxm/spatial/dg_*_2d.mojo` (one per physics)           |
-| Volume vs surface split  | Each kernel — search for `dfdx` (volume) and `surface` (face) |
+| Concept                       | File                                                          |
+| ----------------------------- | ------------------------------------------------------------- |
+| GLL nodes + weights           | `src/warpxm/basis/nodal_basis_1d.mojo`                        |
+| Mesh + ghost wiring           | `src/warpxm/mesh/block_{1,2,3}d.mojo`                         |
+| Shared DG core (per dim)      | `src/warpxm/spatial/dg_core_{1,2,3}d.mojo`                    |
+| Advection DG kernel           | `src/warpxm/spatial/dg_{1,2,3}d.mojo` (the un-prefixed files) |
+| Per-physics DG kernels        | `src/warpxm/spatial/dg_{euler,maxwell,imhd,imhd_glm}_{N}d.mojo` |
+| Volume vs surface split       | Each kernel — search for `dfdx` (volume) and `surface` (face) |
 
 Reading just one DG kernel — `spatial/dg_euler_2d.mojo` is a good
 target — is usually enough to internalise the pattern.
