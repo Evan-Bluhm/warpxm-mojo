@@ -115,11 +115,13 @@ Adds $-\alpha\rho\mathbf{u}/\varepsilon_0$ to the Maxwell E-field RHS.
 ### GLM damping (MHD)
 
 ```mojo
-from warpxm.spatial.imhd_glm_2d import apply_glm_damping_2d
-apply_glm_damping_2d[P](ctx, q, rhs, c_h_sq, c_p_sq)
+from warpxm.spatial.imhd_glm_source_2d import apply_glm_damping_2d
+apply_glm_damping_2d[P](ctx, q, rhs, c_h, c_p_sq)
 ```
 
-Adds $-(c_h^{2}/c_p^{2})\psi$ to the $\psi$ RHS.
+Adds $-(c_h^{2}/c_p^{2})\psi$ to the $\psi$ RHS. The kernel squares
+`c_h` internally — pass the hyperbolic cleaning speed itself, not its
+square.
 
 ## All sources are NC-parameterised where it matters
 
