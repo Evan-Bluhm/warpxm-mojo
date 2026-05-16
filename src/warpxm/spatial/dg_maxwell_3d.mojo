@@ -1,31 +1,18 @@
-# 3D nodal DG spatial solver for Maxwell's equations.
-#
-# Tensor-product extension of `dg_maxwell_2d.mojo`. 6 face corrections per
-# hex element, three internal-flux directions. Periodic boundaries only
-# right now — PEC / PMC wall extension follows the same pattern as 2D.
+# 3D nodal DG spatial solver for Maxwell — thin wrapper over the shared
+# `_dg_3d_compute_rhs_core` template.
 
 from std.collections import InlineArray
-from std.gpu import block_idx, thread_idx
 from std.gpu.host import DeviceContext
-from std.gpu.sync import barrier
-from std.gpu.memory import AddressSpace
-from layout import TileTensor, TensorLayout, Idx, row_major, stack_allocation
+from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.maxwell_3d import Maxwell3D
-from warpxm.apps.maxwell_2d import (
-    MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
+from warpxm.apps.maxwell import (
+    Maxwell, MAXWELL_NC,
+    IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import (
-    BC_INTERIOR, BC_COPYOUT, BC_PEC_WALL, BC_PMC_WALL,
-)
+from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_PEC_WALL, BC_PMC_WALL
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
-from warpxm.mesh.block_3d import (
-    BlockMesh3D, GHOST_NEG_3D, GHOST_POS_3D,
-    FACE_DIR_LEFT_3D, FACE_DIR_RIGHT_3D,
-    FACE_DIR_BOTTOM_3D, FACE_DIR_TOP_3D,
-    FACE_DIR_DOWN_3D, FACE_DIR_UP_3D,
-)
+from warpxm.mesh.block_3d import BlockMesh3D
+from warpxm.spatial.dg_core_3d import _dg_3d_compute_rhs_core
 from warpxm.variable.state_3d import DGState3D
 
 
@@ -35,27 +22,23 @@ def _apply_bc_maxwell_3d(
     bc_kind: Int,
     face_axis: Int,
 ) -> InlineArray[Real, MAXWELL_NC]:
-    """Synthesize the ghost-side Maxwell state from an interior state.
+    """Ghost-state synthesis. `face_axis` ∈ {0, 1, 2} selects the wall normal.
 
-    `face_axis` ∈ {0, 1, 2} selects the wall normal.
     `BC_PEC_WALL`: flip the two tangential E components and the normal B.
     `BC_PMC_WALL`: dual — flip the normal E and the two tangential B.
-    Anything else falls back to copy-out (ghost = interior).
+    Anything else copies the interior state.
     """
     var q: InlineArray[Real, MAXWELL_NC] = q_interior
     if bc_kind == BC_PEC_WALL:
         if face_axis == 0:
-            # Wall normal ±x̂: tangential E = (E_y, E_z), normal B = B_x.
             q[IDX_EY] = -q_interior[IDX_EY]
             q[IDX_EZ] = -q_interior[IDX_EZ]
             q[IDX_BX] = -q_interior[IDX_BX]
         elif face_axis == 1:
-            # Wall normal ±ŷ: tangential E = (E_x, E_z), normal B = B_y.
             q[IDX_EX] = -q_interior[IDX_EX]
             q[IDX_EZ] = -q_interior[IDX_EZ]
             q[IDX_BY] = -q_interior[IDX_BY]
         else:
-            # Wall normal ±ẑ: tangential E = (E_x, E_y), normal B = B_z.
             q[IDX_EX] = -q_interior[IDX_EX]
             q[IDX_EY] = -q_interior[IDX_EY]
             q[IDX_BZ] = -q_interior[IDX_BZ]
@@ -75,23 +58,6 @@ def _apply_bc_maxwell_3d(
     return q
 
 
-@always_inline
-def _load_node[
-    P: Int, QLayout: TensorLayout,
-](
-    q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
-    elem: Int,
-    local_node: Int,
-) -> InlineArray[Real, MAXWELL_NC]:
-    comptime assert q.flat_rank == 1
-    comptime num_nodes_per_elem = (P + 1) ** 3
-    var base = (elem * num_nodes_per_elem + local_node) * MAXWELL_NC
-    var out: InlineArray[Real, MAXWELL_NC] = InlineArray[Real, MAXWELL_NC](fill=Real(0.0))
-    comptime for c in range(MAXWELL_NC):
-        out[c] = rebind[Scalar[WXM_DTYPE]](q[base + c])
-    return out
-
-
 def _maxwell_rhs_kernel_3d[
     P: Int,
     QLayout: TensorLayout, RhsLayout: TensorLayout,
@@ -107,171 +73,48 @@ def _maxwell_rhs_kernel_3d[
     jacobian_x: Real, jacobian_y: Real, jacobian_z: Real,
     num_elements: Int,
 ):
-    comptime P1 = P + 1
-    comptime nodes_per_elem = P1 * P1 * P1
-    comptime NC = MAXWELL_NC
-    comptime assert q.flat_rank == 1
-    comptime assert rhs.flat_rank == 1
-    comptime assert face_neg_elem.flat_rank == 1
-    comptime assert face_pos_elem.flat_rank == 1
-    comptime assert elem_face_dir.flat_rank == 1
-    comptime assert face_bc.flat_rank == 1
+    @parameter
+    def flux_x(qn: InlineArray[Real, MAXWELL_NC]) -> InlineArray[Real, MAXWELL_NC]:
+        return Maxwell.internal_flux_x_static(qn, c_light)
 
-    var e = Int(block_idx.x)
-    var in_ = Int(thread_idx.x)
-    var jn = Int(thread_idx.y)
-    var kn = Int(thread_idx.z)
-    if e >= num_elements or in_ >= P1 or jn >= P1 or kn >= P1:
-        return
+    @parameter
+    def flux_y(qn: InlineArray[Real, MAXWELL_NC]) -> InlineArray[Real, MAXWELL_NC]:
+        return Maxwell.internal_flux_y_static(qn, c_light)
 
-    var local_n = kn * P1 * P1 + jn * P1 + in_
+    @parameter
+    def flux_z(qn: InlineArray[Real, MAXWELL_NC]) -> InlineArray[Real, MAXWELL_NC]:
+        return Maxwell.internal_flux_z_static(qn, c_light)
 
-    var f_shared = stack_allocation[
-        WXM_DTYPE, address_space=AddressSpace.SHARED,
-    ](row_major[P1 * P1 * P1, NC, 3]())
+    @parameter
+    def num_flux(
+        q_l: InlineArray[Real, MAXWELL_NC],
+        q_r: InlineArray[Real, MAXWELL_NC],
+        nx: Real, ny: Real, nz: Real,
+    ) -> InlineArray[Real, MAXWELL_NC]:
+        return Maxwell.numerical_flux_static(q_l, q_r, nx, ny, nz, c_light)
 
-    var q_n = _load_node[P](q, e, local_n)
-    var fx_n = Maxwell3D.internal_flux_x_static(q_n, c_light)
-    var fy_n = Maxwell3D.internal_flux_y_static(q_n, c_light)
-    var fz_n = Maxwell3D.internal_flux_z_static(q_n, c_light)
-    comptime for c in range(NC):
-        f_shared[local_n, c, 0] = rebind[f_shared.ElementType](fx_n[c])
-        f_shared[local_n, c, 1] = rebind[f_shared.ElementType](fy_n[c])
-        f_shared[local_n, c, 2] = rebind[f_shared.ElementType](fz_n[c])
+    @parameter
+    def apply_bc(
+        q_interior: InlineArray[Real, MAXWELL_NC],
+        bc_kind: Int, face_axis: Int,
+    ) -> InlineArray[Real, MAXWELL_NC]:
+        return _apply_bc_maxwell_3d(q_interior, bc_kind, face_axis)
 
-    barrier()
-
-    var d_flat = NodalBasis1D[P].diff_matrix_flat()
-    var dfdx: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-    var dgdy: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-    var dhdz: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-
-    comptime for kx in range(P1):
-        var d_in_kx: Scalar[WXM_DTYPE] = d_flat[in_ * P1 + kx]
-        var k_node = kn * P1 * P1 + jn * P1 + kx
-        comptime for c in range(NC):
-            var v = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 0])
-            dfdx[c] += d_in_kx * v
-    comptime for ky in range(P1):
-        var d_jn_ky: Scalar[WXM_DTYPE] = d_flat[jn * P1 + ky]
-        var k_node = kn * P1 * P1 + ky * P1 + in_
-        comptime for c in range(NC):
-            var v = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 1])
-            dgdy[c] += d_jn_ky * v
-    comptime for kz in range(P1):
-        var d_kn_kz: Scalar[WXM_DTYPE] = d_flat[kn * P1 + kz]
-        var k_node = kz * P1 * P1 + jn * P1 + in_
-        comptime for c in range(NC):
-            var v = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 2])
-            dhdz[c] += d_kn_kz * v
-
-    var weights = NodalBasis1D[P].weights()
-    var w_0: Scalar[WXM_DTYPE] = weights[0]
-    var w_P: Scalar[WXM_DTYPE] = weights[P]
-    var surface: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-
-    if in_ == 0:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_LEFT_3D]))
-        var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
-        var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
-        if neg_e == Int(GHOST_NEG_3D):
-            q_nbr = _apply_bc_maxwell_3d(q_n, bc_kind, face_axis=0)
-        else:
-            q_nbr = _load_node[P](q, neg_e, kn * P1 * P1 + jn * P1 + P)
-        var f_star = Maxwell3D.numerical_flux_static(
-            q_nbr, q_n, Real(1.0), Real(0.0), Real(0.0), c_light
-        )
-        comptime for c in range(NC):
-            surface[c] += (f_star[c] - fx_n[c]) / (jacobian_x * w_0)
-    if in_ == P:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_RIGHT_3D]))
-        var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
-        var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
-        if pos_e == Int(GHOST_POS_3D):
-            q_nbr = _apply_bc_maxwell_3d(q_n, bc_kind, face_axis=0)
-        else:
-            q_nbr = _load_node[P](q, pos_e, kn * P1 * P1 + jn * P1 + 0)
-        var f_star = Maxwell3D.numerical_flux_static(
-            q_n, q_nbr, Real(1.0), Real(0.0), Real(0.0), c_light
-        )
-        comptime for c in range(NC):
-            surface[c] += (fx_n[c] - f_star[c]) / (jacobian_x * w_P)
-    if jn == 0:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_BOTTOM_3D]))
-        var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
-        var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
-        if neg_e == Int(GHOST_NEG_3D):
-            q_nbr = _apply_bc_maxwell_3d(q_n, bc_kind, face_axis=1)
-        else:
-            q_nbr = _load_node[P](q, neg_e, kn * P1 * P1 + P * P1 + in_)
-        var f_star = Maxwell3D.numerical_flux_static(
-            q_nbr, q_n, Real(0.0), Real(1.0), Real(0.0), c_light
-        )
-        comptime for c in range(NC):
-            surface[c] += (f_star[c] - fy_n[c]) / (jacobian_y * w_0)
-    if jn == P:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_TOP_3D]))
-        var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
-        var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
-        if pos_e == Int(GHOST_POS_3D):
-            q_nbr = _apply_bc_maxwell_3d(q_n, bc_kind, face_axis=1)
-        else:
-            q_nbr = _load_node[P](q, pos_e, kn * P1 * P1 + 0 * P1 + in_)
-        var f_star = Maxwell3D.numerical_flux_static(
-            q_n, q_nbr, Real(0.0), Real(1.0), Real(0.0), c_light
-        )
-        comptime for c in range(NC):
-            surface[c] += (fy_n[c] - f_star[c]) / (jacobian_y * w_P)
-    if kn == 0:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_DOWN_3D]))
-        var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
-        var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
-        if neg_e == Int(GHOST_NEG_3D):
-            q_nbr = _apply_bc_maxwell_3d(q_n, bc_kind, face_axis=2)
-        else:
-            q_nbr = _load_node[P](q, neg_e, P * P1 * P1 + jn * P1 + in_)
-        var f_star = Maxwell3D.numerical_flux_static(
-            q_nbr, q_n, Real(0.0), Real(0.0), Real(1.0), c_light
-        )
-        comptime for c in range(NC):
-            surface[c] += (f_star[c] - fz_n[c]) / (jacobian_z * w_0)
-    if kn == P:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_UP_3D]))
-        var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
-        var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
-        if pos_e == Int(GHOST_POS_3D):
-            q_nbr = _apply_bc_maxwell_3d(q_n, bc_kind, face_axis=2)
-        else:
-            q_nbr = _load_node[P](q, pos_e, 0 * P1 * P1 + jn * P1 + in_)
-        var f_star = Maxwell3D.numerical_flux_static(
-            q_n, q_nbr, Real(0.0), Real(0.0), Real(1.0), c_light
-        )
-        comptime for c in range(NC):
-            surface[c] += (fz_n[c] - f_star[c]) / (jacobian_z * w_P)
-
-    var base = (e * nodes_per_elem + local_n) * NC
-    comptime for c in range(NC):
-        var v: Scalar[WXM_DTYPE] = (
-            -dfdx[c] / jacobian_x
-            - dgdy[c] / jacobian_y
-            - dhdz[c] / jacobian_z
-            + surface[c]
-        )
-        rhs[base + c] = rebind[rhs.ElementType](v)
+    _dg_3d_compute_rhs_core[
+        P, MAXWELL_NC, flux_x, flux_y, flux_z, num_flux, apply_bc,
+        QLayout, RhsLayout, FaceLayout, EFLayout,
+    ](
+        q, rhs, face_neg_elem, face_pos_elem, elem_face_dir, face_bc,
+        jacobian_x, jacobian_y, jacobian_z, num_elements,
+    )
 
 
 struct DGMaxwellSolver3D[P: Int]:
     """Host-side launcher for the 3D Maxwell DG kernel."""
 
-    var app: Maxwell3D
+    var app: Maxwell
 
-    def __init__(out self, app: Maxwell3D):
+    def __init__(out self, app: Maxwell):
         self.app = app
 
     def compute_rhs(

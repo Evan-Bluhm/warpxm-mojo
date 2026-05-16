@@ -1,45 +1,27 @@
-# 3D nodal DG spatial solver for MixedGLM ideal MHD (9 components).
-#
-# Clone of `dg_imhd_3d.mojo` with `NC = MHD_GLM_NC_3D = 9` and the GLM
-# flux helpers. Parabolic damping on ψ lives in `imhd_glm_source_3d.mojo`
-# and is applied post-spatial-RHS by the stepper. Periodic BCs only for
-# now — non-periodic 3D GLM-MHD BCs follow the same pattern as the other
-# 3D apps.
+# 3D nodal DG spatial solver for MixedGLM ideal MHD — thin wrapper over
+# the shared `_dg_3d_compute_rhs_core` template. Supports Rusanov + HLLD
+# (USE_HLLD parameter). Parabolic ψ damping is applied separately by the
+# stepper via `apply_glm_damping_3d`.
 
 from std.collections import InlineArray
-from std.gpu import block_idx, thread_idx
 from std.gpu.host import DeviceContext
-from std.gpu.sync import barrier
-from std.gpu.memory import AddressSpace
-from layout import TileTensor, TensorLayout, Idx, row_major, stack_allocation
+from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.imhd_glm_3d import ImhdGLM3D, MHD_GLM_NC_3D
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
+from warpxm.apps.imhd_glm import ImhdGLM, MHD_GLM_NC
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
-from warpxm.mesh.block_3d import (
-    BlockMesh3D,
-    FACE_DIR_LEFT_3D, FACE_DIR_RIGHT_3D,
-    FACE_DIR_BOTTOM_3D, FACE_DIR_TOP_3D,
-    FACE_DIR_DOWN_3D, FACE_DIR_UP_3D,
-)
+from warpxm.mesh.block_3d import BlockMesh3D
+from warpxm.spatial.dg_core_3d import _dg_3d_compute_rhs_core
 from warpxm.variable.state_3d import DGState3D
 
 
 @always_inline
-def _load_node[
-    P: Int, QLayout: TensorLayout,
-](
-    q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
-    elem: Int,
-    local_node: Int,
-) -> InlineArray[Real, MHD_GLM_NC_3D]:
-    comptime assert q.flat_rank == 1
-    comptime num_nodes_per_elem = (P + 1) ** 3
-    var base = (elem * num_nodes_per_elem + local_node) * MHD_GLM_NC_3D
-    var out: InlineArray[Real, MHD_GLM_NC_3D] = InlineArray[Real, MHD_GLM_NC_3D](fill=Real(0.0))
-    comptime for c in range(MHD_GLM_NC_3D):
-        out[c] = rebind[Scalar[WXM_DTYPE]](q[base + c])
-    return out
+def _apply_bc_imhd_glm_3d(
+    q_interior: InlineArray[Real, MHD_GLM_NC],
+    bc_kind: Int,
+    face_axis: Int,
+) -> InlineArray[Real, MHD_GLM_NC]:
+    """Copyout ghost state for GLM-MHD (no walls supported yet)."""
+    return q_interior
 
 
 def _imhd_glm_rhs_kernel_3d[
@@ -52,159 +34,73 @@ def _imhd_glm_rhs_kernel_3d[
     face_neg_elem: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     face_pos_elem: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     elem_face_dir: TileTensor[INDEX_DTYPE, EFLayout, MutAnyOrigin],
+    face_bc: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
     jacobian_x: Real, jacobian_y: Real, jacobian_z: Real,
     num_elements: Int,
 ):
-    comptime P1 = P + 1
-    comptime nodes_per_elem = P1 * P1 * P1
-    comptime NC = MHD_GLM_NC_3D
-    comptime assert q.flat_rank == 1
-    comptime assert rhs.flat_rank == 1
-    comptime assert face_neg_elem.flat_rank == 1
-    comptime assert face_pos_elem.flat_rank == 1
-    comptime assert elem_face_dir.flat_rank == 1
+    @parameter
+    def flux_x(qn: InlineArray[Real, MHD_GLM_NC]) -> InlineArray[Real, MHD_GLM_NC]:
+        return ImhdGLM.internal_flux_x_static(qn, gamma, rho_min, press_min, c_h)
 
-    var e = Int(block_idx.x)
-    var in_ = Int(thread_idx.x)
-    var jn = Int(thread_idx.y)
-    var kn = Int(thread_idx.z)
-    if e >= num_elements or in_ >= P1 or jn >= P1 or kn >= P1:
-        return
+    @parameter
+    def flux_y(qn: InlineArray[Real, MHD_GLM_NC]) -> InlineArray[Real, MHD_GLM_NC]:
+        return ImhdGLM.internal_flux_y_static(qn, gamma, rho_min, press_min, c_h)
 
-    var local_n = kn * P1 * P1 + jn * P1 + in_
-
-    var f_shared = stack_allocation[
-        WXM_DTYPE, address_space=AddressSpace.SHARED,
-    ](row_major[P1 * P1 * P1, NC, 3]())
-
-    var q_n = _load_node[P](q, e, local_n)
-    var fx_n = ImhdGLM3D.internal_flux_x_static(q_n, gamma, rho_min, press_min, c_h)
-    var fy_n = ImhdGLM3D.internal_flux_y_static(q_n, gamma, rho_min, press_min, c_h)
-    var fz_n = ImhdGLM3D.internal_flux_z_static(q_n, gamma, rho_min, press_min, c_h)
-    comptime for c in range(NC):
-        f_shared[local_n, c, 0] = rebind[f_shared.ElementType](fx_n[c])
-        f_shared[local_n, c, 1] = rebind[f_shared.ElementType](fy_n[c])
-        f_shared[local_n, c, 2] = rebind[f_shared.ElementType](fz_n[c])
-
-    barrier()
-
-    var d_flat = NodalBasis1D[P].diff_matrix_flat()
-    var dfdx: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-    var dgdy: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-    var dhdz: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-
-    comptime for kx in range(P1):
-        var d_in_kx: Scalar[WXM_DTYPE] = d_flat[in_ * P1 + kx]
-        var k_node = kn * P1 * P1 + jn * P1 + kx
-        comptime for c in range(NC):
-            var v = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 0])
-            dfdx[c] += d_in_kx * v
-    comptime for ky in range(P1):
-        var d_jn_ky: Scalar[WXM_DTYPE] = d_flat[jn * P1 + ky]
-        var k_node = kn * P1 * P1 + ky * P1 + in_
-        comptime for c in range(NC):
-            var v = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 1])
-            dgdy[c] += d_jn_ky * v
-    comptime for kz in range(P1):
-        var d_kn_kz: Scalar[WXM_DTYPE] = d_flat[kn * P1 + kz]
-        var k_node = kz * P1 * P1 + jn * P1 + in_
-        comptime for c in range(NC):
-            var v = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 2])
-            dhdz[c] += d_kn_kz * v
-
-    var weights = NodalBasis1D[P].weights()
-    var w_0: Scalar[WXM_DTYPE] = weights[0]
-    var w_P: Scalar[WXM_DTYPE] = weights[P]
-    var surface: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    @parameter
+    def flux_z(qn: InlineArray[Real, MHD_GLM_NC]) -> InlineArray[Real, MHD_GLM_NC]:
+        return ImhdGLM.internal_flux_z_static(qn, gamma, rho_min, press_min, c_h)
 
     @parameter
     def num_flux(
-        q_l: InlineArray[Real, NC], q_r: InlineArray[Real, NC],
-        nx_: Real, ny_: Real, nz_: Real,
-    ) -> InlineArray[Real, NC]:
+        q_l: InlineArray[Real, MHD_GLM_NC],
+        q_r: InlineArray[Real, MHD_GLM_NC],
+        nx: Real, ny: Real, nz: Real,
+    ) -> InlineArray[Real, MHD_GLM_NC]:
         comptime if USE_HLLD:
-            return ImhdGLM3D.numerical_flux_hlld_static(
-                q_l, q_r, nx_, ny_, nz_, gamma, rho_min, press_min, c_h,
+            return ImhdGLM.numerical_flux_hlld_static(
+                q_l, q_r, nx, ny, nz, gamma, rho_min, press_min, c_h,
             )
         else:
-            return ImhdGLM3D.numerical_flux_static(
-                q_l, q_r, nx_, ny_, nz_, gamma, rho_min, press_min, c_h,
+            return ImhdGLM.numerical_flux_static(
+                q_l, q_r, nx, ny, nz, gamma, rho_min, press_min, c_h,
             )
 
-    if in_ == 0:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_LEFT_3D]))
-        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
-        var q_nbr = _load_node[P](q, nbr, kn * P1 * P1 + jn * P1 + P)
-        var f_star = num_flux(q_nbr, q_n, Real(1.0), Real(0.0), Real(0.0))
-        comptime for c in range(NC):
-            surface[c] += (f_star[c] - fx_n[c]) / (jacobian_x * w_0)
-    if in_ == P:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_RIGHT_3D]))
-        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
-        var q_nbr = _load_node[P](q, nbr, kn * P1 * P1 + jn * P1 + 0)
-        var f_star = num_flux(q_n, q_nbr, Real(1.0), Real(0.0), Real(0.0))
-        comptime for c in range(NC):
-            surface[c] += (fx_n[c] - f_star[c]) / (jacobian_x * w_P)
-    if jn == 0:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_BOTTOM_3D]))
-        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
-        var q_nbr = _load_node[P](q, nbr, kn * P1 * P1 + P * P1 + in_)
-        var f_star = num_flux(q_nbr, q_n, Real(0.0), Real(1.0), Real(0.0))
-        comptime for c in range(NC):
-            surface[c] += (f_star[c] - fy_n[c]) / (jacobian_y * w_0)
-    if jn == P:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_TOP_3D]))
-        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
-        var q_nbr = _load_node[P](q, nbr, kn * P1 * P1 + 0 * P1 + in_)
-        var f_star = num_flux(q_n, q_nbr, Real(0.0), Real(1.0), Real(0.0))
-        comptime for c in range(NC):
-            surface[c] += (fy_n[c] - f_star[c]) / (jacobian_y * w_P)
-    if kn == 0:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_DOWN_3D]))
-        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
-        var q_nbr = _load_node[P](q, nbr, P * P1 * P1 + jn * P1 + in_)
-        var f_star = num_flux(q_nbr, q_n, Real(0.0), Real(0.0), Real(1.0))
-        comptime for c in range(NC):
-            surface[c] += (f_star[c] - fz_n[c]) / (jacobian_z * w_0)
-    if kn == P:
-        var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_UP_3D]))
-        var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
-        var q_nbr = _load_node[P](q, nbr, 0 * P1 * P1 + jn * P1 + in_)
-        var f_star = num_flux(q_n, q_nbr, Real(0.0), Real(0.0), Real(1.0))
-        comptime for c in range(NC):
-            surface[c] += (fz_n[c] - f_star[c]) / (jacobian_z * w_P)
+    @parameter
+    def apply_bc(
+        q_interior: InlineArray[Real, MHD_GLM_NC],
+        bc_kind: Int, face_axis: Int,
+    ) -> InlineArray[Real, MHD_GLM_NC]:
+        return _apply_bc_imhd_glm_3d(q_interior, bc_kind, face_axis)
 
-    var base = (e * nodes_per_elem + local_n) * NC
-    comptime for c in range(NC):
-        var v: Scalar[WXM_DTYPE] = (
-            -dfdx[c] / jacobian_x
-            - dgdy[c] / jacobian_y
-            - dhdz[c] / jacobian_z
-            + surface[c]
-        )
-        rhs[base + c] = rebind[rhs.ElementType](v)
+    _dg_3d_compute_rhs_core[
+        P, MHD_GLM_NC, flux_x, flux_y, flux_z, num_flux, apply_bc,
+        QLayout, RhsLayout, FaceLayout, EFLayout,
+    ](
+        q, rhs, face_neg_elem, face_pos_elem, elem_face_dir, face_bc,
+        jacobian_x, jacobian_y, jacobian_z, num_elements,
+    )
 
 
 struct DGImhdGLMSolver3D[P: Int, USE_HLLD: Bool = False]:
     """Host-side launcher for the 3D MixedGLM-MHD DG kernel.
 
     `USE_HLLD = False` (default) uses Rusanov with c_max bumped to `c_h`;
-    `USE_HLLD = True` uses Miyoshi-Kusano HLLD for the 8 MHD components and
-    the exact (B_n, ψ) 2x2 Riemann solver for the GLM block on top.
+    `USE_HLLD = True` uses IMHD HLLD for the 8 MHD components and the
+    exact (B_n, ψ) 2x2 Riemann block on top.
     """
 
-    var app: ImhdGLM3D
+    var app: ImhdGLM
 
-    def __init__(out self, app: ImhdGLM3D):
+    def __init__(out self, app: ImhdGLM):
         self.app = app
 
     def compute_rhs(
         self,
         var ctx: DeviceContext,
         mut mesh: BlockMesh3D[Self.P],
-        mut q: DGState3D[Self.P, MHD_GLM_NC_3D],
-        mut rhs: DGState3D[Self.P, MHD_GLM_NC_3D],
+        mut q: DGState3D[Self.P, MHD_GLM_NC],
+        mut rhs: DGState3D[Self.P, MHD_GLM_NC],
     ) raises:
         comptime P1 = Self.P + 1
 
@@ -217,6 +113,7 @@ struct DGImhdGLMSolver3D[P: Int, USE_HLLD: Bool = False]:
         var fn_view = TileTensor(mesh.face_neg_elem_buf, face_layout)
         var fp_view = TileTensor(mesh.face_pos_elem_buf, face_layout)
         var ef_view = TileTensor(mesh.elem_face_dir_buf, ef_layout)
+        var fbc_view = TileTensor(mesh.face_bc_buf, face_layout)
 
         comptime kernel = _imhd_glm_rhs_kernel_3d[
             Self.P, Self.USE_HLLD,
@@ -224,7 +121,7 @@ struct DGImhdGLMSolver3D[P: Int, USE_HLLD: Bool = False]:
             type_of(face_layout), type_of(ef_layout),
         ]
         ctx.enqueue_function[kernel](
-            q_view, rhs_view, fn_view, fp_view, ef_view,
+            q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             self.app.gas_gamma, self.app.min_density, self.app.min_pressure,
             self.app.c_h,
             mesh.jacobian_x, mesh.jacobian_y, mesh.jacobian_z,
