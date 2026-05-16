@@ -33,27 +33,41 @@ A "single-fluid plasma" is just the two-fluid setup with one species.
 
 ```mojo
 from warpxm.temporal.ssprk3_plasma_2d import SSPRK3_Plasma_2D
-from warpxm.temporal.ssprk3_plasma_3d import SSPRK3_Plasma_3D
+from warpxm.spatial.lorentz_source_2d import apply_lorentz_source_2d
+from warpxm.spatial.maxwell_current_source_2d import apply_current_source_2d
 
 var stepper = SSPRK3_Plasma_2D[P](ctx, mesh.num_elements)
-stepper.step(
-    ctx, mesh, fluid_spatial, maxwell_spatial,
-    q_s1, q_s2, q_maxwell,
-    alpha_s1, alpha_s2, eps0, dt,
-)
+
+@parameter
+def compute_joint_rhs(
+    mut q1_in: DGState2D[P, EULER_NC],
+    mut q2_in: DGState2D[P, EULER_NC],
+    mut qm_in: DGState2D[P, MAXWELL_NC],
+    mut q1_out: DGState2D[P, EULER_NC],
+    mut q2_out: DGState2D[P, EULER_NC],
+    mut qm_out: DGState2D[P, MAXWELL_NC],
+) raises:
+    fluid_spatial.compute_rhs(ctx, mesh, q1_in, q1_out)
+    fluid_spatial.compute_rhs(ctx, mesh, q2_in, q2_out)
+    maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
+    apply_lorentz_source_2d[P](ctx, q1_in, qm_in, q1_out, ALPHA_1)
+    apply_lorentz_source_2d[P](ctx, q2_in, qm_in, q2_out, ALPHA_2)
+    apply_current_source_2d[P](ctx, q1_in, qm_out, ALPHA_1, EPS0)
+    apply_current_source_2d[P](ctx, q2_in, qm_out, ALPHA_2, EPS0)
+
+stepper.step[compute_joint_rhs](ctx, q_s1, q_s2, q_maxwell, dt)
 ```
 
-The plasma stepper bundles three states (two fluids + Maxwell). Inside
-each RK stage:
+The plasma stepper takes a single comptime `compute_joint_rhs_fn`
+closure that, given the three current states, writes the full
+hyperbolic + source RHS for each. The closure body is where the
+driver picks which sources to apply, in what order, and with what
+α / ε₀ values. The stepper applies SSPRK3 combine weights on each
+state independently. See [Time integration](../concepts/time-integration.md)
+for the rationale.
 
-1. Compute the spatial RHS of each species and of Maxwell separately.
-2. Apply the **Lorentz source** to each species' momentum / energy RHS
-   using the current Maxwell state.
-3. Accumulate each species' **current** onto Maxwell's E-RHS.
-4. Combine into the next stage with the standard SSPRK3 weights.
-
-This is a fully coupled (not split) integration — see
-[Time integration](../concepts/time-integration.md) for the rationale.
+`SSPRK3_TwoFluid_{2,3}D` is the 2-state variant (one fluid + Maxwell)
+with the same closure pattern shrunk to four buffer args.
 
 ## Source kernels
 
@@ -94,7 +108,10 @@ the equations of motion are linear in $\alpha$.
 
 ## Time-integration accuracy
 
-The current source-coupled stepper is a fully-coupled RK3 evaluation
-of all source terms at each stage. There's a pending task to add
-symmetric Strang splitting for cases where stiff sources dominate;
-see [Roadmap](../contributing/index.md#roadmap).
+The stepper evaluates all source terms at each RK stage rather than
+operator-splitting them. The pair-plasma test's antisymmetry residual
+of 1.85e-3 is **physical** (O(δ²) Lorentz coupling between
+opposite-charge species with antisymmetric ρ perturbations), not
+algorithmic — confirmed by the δ-scaling diagnostic in
+`tests/test_pair_plasma_asym_scaling.mojo` (ratio 100.0 between
+successive δ values).

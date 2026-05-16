@@ -79,35 +79,53 @@ write goes through a host buffer and an `enqueue_copy` to the device.
 ### 3. Set up physics + spatial solver + stepper
 
 ```mojo
-var app = Advection1D[1](velocity=VELOCITY, cfl_max=Real(1.0))
+var app = Advection1D[1](velocity_x=VELOCITY, cfl_max=Real(1.0))
 var spatial = DGSpatialSolver1D[P, 1](app)
-var stepper = SSPRK3[P, 1](ctx, mesh.num_elements)
+var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
 ```
 
 * **App** describes the physics — for advection that's just the wave
-  speed. Other apps (`Euler2D`, `Maxwell3D`, `IMHD2D`, …) carry their
-  own parameters like γ-law indices or speed of light.
+  speed. Other apps (`Euler`, `Maxwell`, `IMHD`, …) carry their own
+  parameters like γ-law indices or speed of light. Each physics has a
+  single canonical struct; the `<Phys>1D`/`<Phys>2D`/`<Phys>3D` names
+  are aliases.
 * **Spatial solver** wraps the app and knows how to compute the DG
   spatial RHS (volume + face fluxes). Each (physics, dimension)
   combination has its own spatial solver type.
-* **Stepper** is the time integrator. `SSPRK3[P, NC]` is the generic
+* **Stepper** is the time integrator. `SSPRK3_1D[P, NC]` is the generic
   three-stage Shu-Osher SSPRK3 scheme suitable for any single-state
-  problem. Physics with sources (plasma) or limiters (Euler shock tubes)
-  use specialised stepper variants — see [Time integration](../concepts/time-integration.md).
+  problem in 1D (`SSPRK3_2D[P, NC]` and `SSPRK3_3D[P, NC]` for higher
+  dimensions). It takes two comptime closures — `compute_rhs_fn` and
+  `adjust_fn` — at the call site so the driver composes physics RHS,
+  source terms, limiters, and positivity preservers freely. See
+  [Time integration](../concepts/time-integration.md).
 
 ### 4. Time-step loop
 
 ```mojo
+@parameter
+def compute_rhs(
+    mut q_in: DGState1D[P, 1],
+    mut q_out: DGState1D[P, 1],
+) raises:
+    spatial.compute_rhs(ctx, mesh, q_in, q_out)
+
+@parameter
+def no_adjust(mut q_: DGState1D[P, 1]) raises:
+    pass
+
 var t: Real = 0.0
 while t < T_FINAL - Real(0.5) * DT:
     var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-    stepper.step(ctx, mesh, spatial, q, dt_use)
+    stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
     t += dt_use
 ```
 
-Boilerplate — fixed-step loop with a final partial step to land exactly
-on `T_FINAL`. For adaptive RK45 substitute
-`stepper.step_adaptive(...)` (see [Dormand-Prince](../numerical-methods/dormand-prince.md)).
+Boilerplate — closures capture `spatial`/`mesh`/`ctx`; the time loop
+calls `step[compute_rhs, no_adjust](ctx, q, dt)`. For adaptive RK45
+swap in `DormandPrince45_1D[P, NC]` and call
+`stepper.step_adaptive[compute_rhs](...)` (see
+[Dormand-Prince](../numerical-methods/dormand-prince.md)).
 
 ## Try changing something
 

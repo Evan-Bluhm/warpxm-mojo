@@ -104,7 +104,7 @@ for frame in range(NUM_FRAMES):
         var t_target = Real(frame + 1) * frame_dt
         while t < t_target - 0.5 * DT:
             var dt_use = DT if (t + DT) < t_target else (t_target - t)
-            stepper.step(ctx, mesh, spatial, limiter, q, dt_use)
+            stepper.step[compute_rhs, adjust](ctx, q, dt_use)
             t += dt_use
 fw.write_pvd()
 ```
