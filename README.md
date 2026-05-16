@@ -23,6 +23,15 @@ pixi run mojo run -I src examples/advection_1d.mojo
 That last command runs a 1D advection convergence problem on the GPU.
 If you see a near-machine-zero L2 error and `PASSED`, you're set up.
 
+Then:
+
+```fish
+pixi run build              # type-check every example (~30s)
+pixi run test               # full 66-test regression suite (~5 min)
+```
+
+Both should report no failures on a working install.
+
 ## Documentation
 
 Full documentation site (concepts, physics, numerical methods,
