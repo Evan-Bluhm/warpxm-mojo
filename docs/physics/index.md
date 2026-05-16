@@ -44,6 +44,9 @@ from warpxm.apps.imhd import (
 )
 ```
 
-The 3D MHD module **re-uses** the 2D constants — there's no
-`IDX_RHO_3D`. The same goes for Maxwell. This is intentional: a 3D MHD
-state has the same eight components as a 2D MHD state.
+There is a **single** set of constants per physics, shared by the 2D
+and 3D solvers — no `IDX_RHO_2D` / `IDX_RHO_3D`. The same goes for
+Maxwell. This falls naturally out of the apps/ architecture: each
+physics is one canonical file (`apps/imhd.mojo`, `apps/maxwell.mojo`)
+exporting the constants once, and the dimension-specific DG launchers
+import them from there.

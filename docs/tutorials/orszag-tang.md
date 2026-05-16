@@ -78,8 +78,9 @@ var mesh = BlockMesh2D[P](
 var q = DGState2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
 ```
 
-`MHD_GLM_NC = 9`. The IC loop initialises ρ, momenta, energy (including
-magnetic), B-components, and `IDX_PSI = 0`.
+`MHD_GLM_NC = 9` (component index 8 is the GLM scalar ψ; see
+`IDX_PSI`). The IC loop initialises ρ, momenta, energy (including
+magnetic), B-components, and sets ψ ≡ 0 at every node.
 
 ### Stepper
 
