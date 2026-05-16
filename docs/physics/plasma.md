@@ -84,14 +84,13 @@ species.
 
 | Test | Setup |
 | ---- | ----- |
-| `tests/test_langmuir_2d.mojo` | Single-fluid Langmuir oscillation. $\omega = \omega_{pe}$ — the wave returns to its IC after one period. |
-| `tests/test_langmuir_pair_plasma_2d.mojo` | Two species with opposite charge, equal mass and density. $\omega = \sqrt{\alpha_{1}^{2} + \alpha_{2}^{2}}\,\omega_{pe}$. Validates the symmetric Lorentz / current coupling. |
-| `tests/test_langmuir_pair_plasma_3d.mojo` | 3D analog of the above. |
+| `tests/test_langmuir_1d.mojo` | 1D single-fluid Langmuir oscillation against a static positive-ion background, $\omega = \omega_{pe}$. Returns to IC after one period; mass drift ~2.7e-13. |
+| `tests/test_langmuir_2d.mojo` | 2D single-fluid Langmuir oscillation, same wave $\omega = \omega_{pe}$. |
+| `tests/test_langmuir_pair_plasma_1d.mojo` | 1D two-species pair plasma, $\omega = \sqrt{\alpha_{1}^{2} + \alpha_{2}^{2}}\,\omega_{pe}$. Mass drift ~1.9e-13 per species. |
+| `tests/test_langmuir_pair_plasma_2d.mojo` | 2D pair plasma; validates the symmetric Lorentz / current coupling. |
+| `tests/test_langmuir_pair_plasma_3d.mojo` | 3D pair plasma. |
 | `tests/test_cyclotron_2d.mojo` | Single-fluid cyclotron orbit in a uniform $B_z$. Energy conserved to $\Delta E \approx 2 \times 10^{-14}$ over one period (magnetic force does no work). |
 | `tests/test_cyclotron_3d.mojo` | 3D cyclotron, $\Delta E \approx 3 \times 10^{-13}$ over one period. |
-
-There is no 1D plasma — the lowest-rank Langmuir oscillation needs a
-real Maxwell field which is at least 2D.
 
 ## Choosing α
 
