@@ -16,9 +16,11 @@ warpxm-mojo/
 │   ├── basis/            # GLL nodal basis tables
 │   ├── mesh/             # BlockMesh{1,2,3}D
 │   ├── variable/         # DGState{1,2,3}D[P, NC]
-│   ├── apps/             # physics: Advection, Euler, Maxwell, IMHD, IMHD-GLM
-│   ├── spatial/          # DG kernels (one per (physics, dimension)) + source kernels
-│   ├── temporal/         # SSPRK3 + DP45 steppers (specialised variants)
+│   ├── apps/             # physics: one canonical file per package
+│   │                     # (advection, euler, maxwell, imhd, imhd_glm)
+│   ├── spatial/          # shared dg_core_{1,2,3}d templates + per-physics
+│   │                     # dg_<phys>_<N>d wrappers + source kernels
+│   ├── temporal/         # SSPRK3 + DP45 steppers (closure-driven, NDIM x NC)
 │   ├── adjusters/        # Moe-Rossmanith limiter, Zhang-Shu positivity
 │   └── driver/           # VTU writers, FrameWriter
 └── tests/                # regression tests, one per validation problem
@@ -29,13 +31,13 @@ warpxm-mojo/
 | Upstream (C++) | This repo (Mojo) |
 | -------------- | ---------------- |
 | `src/apps/simple/advection.{h,cc}` | `src/warpxm/apps/advection.mojo` |
-| `src/apps/5-moment/euler.h` | `src/warpxm/apps/euler_{1d,2d,3d}.mojo` |
-| `src/apps/maxwell/maxwell.{h,cc}` | `src/warpxm/apps/maxwell_{2d,3d}.mojo` |
-| `src/apps/mhd/mhd.{h,cc}` | `src/warpxm/apps/imhd_{2d,3d}.mojo` |
-| `src/apps/mhd/divergence_cleaning/` | `src/warpxm/apps/imhd_glm_{2d,3d}.mojo` |
-| `src/dfem/spatial_solvers/dg/kokkos/ndg_kokkos.{h,cc}` | `src/warpxm/spatial/dg_*_{1,2,3}d.mojo` (one per physics) |
-| `src/dfem/temporal_solvers/ssprk3.h` | `src/warpxm/temporal/ssprk3.mojo` + variants |
-| `src/dfem/variable_adjusters/limiter/kokkos/moe_rossmanith_kokkos.{h,cc}` | `src/warpxm/adjusters/moe_rossmanith_{1,2,3}d.mojo` |
+| `src/apps/5-moment/euler.h` | `src/warpxm/apps/euler.mojo` |
+| `src/apps/maxwell/maxwell.{h,cc}` | `src/warpxm/apps/maxwell.mojo` |
+| `src/apps/mhd/mhd.{h,cc}` | `src/warpxm/apps/imhd.mojo` |
+| `src/apps/mhd/divergence_cleaning/` | `src/warpxm/apps/imhd_glm.mojo` |
+| `src/dfem/spatial_solvers/dg/kokkos/ndg_kokkos.{h,cc}` | `src/warpxm/spatial/dg_core_{1,2,3}d.mojo` (shared) + `src/warpxm/spatial/dg_*_{1,2,3}d.mojo` (per-physics wrappers) |
+| `src/dfem/temporal_solvers/ssprk3.h` | `src/warpxm/temporal/ssprk3_{1,2,3}d.mojo` + plasma variants |
+| `src/dfem/variable_adjusters/limiter/kokkos/moe_rossmanith_kokkos.{h,cc}` | `src/warpxm/adjusters/moe_rossmanith.mojo` (2D + 3D NDIM-parametric) + `moe_rossmanith_1d.mojo` (Euler-only) |
 
 If you know upstream, finding the equivalent Mojo file is almost
 always a one-step lookup.
