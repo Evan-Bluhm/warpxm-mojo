@@ -116,13 +116,18 @@ the default is captured automatically.
 `DormandPrince45_{1,2,3}D[P, NC]` use the same two-closure pattern as
 SSPRK3 — `step[compute_rhs_fn]` for fixed-dt and
 `step_adaptive[compute_rhs_fn]` for embedded 4th-order error control.
-The combine kernels (`_combine1`–`_combine5`) and the per-cell error
-kernel live in `dormand_prince_1d.mojo` and are shared across
-dimensions because they operate on flat buffers. The RMS scaled
-error norm `√(Σ(err/sc)²/N)` is reduced fully on the GPU by a single
-block tree-reduction (`_dp45_sum_sq_kernel`); only the final scalar
-`Σ(err/sc)²` lands on the host per attempt — no `map_to_host` of the
-full state buffers. Validated bit-comparable (modulo floating-point
+Three families of helper kernels live in `dormand_prince_1d.mojo` and
+are imported by the 2D and 3D wrappers — all three operate on flat
+buffers, so they don't care about dimensionality:
+
+* the combine kernels `_combine1`–`_combine5`;
+* the per-cell error kernel `_dp45_error_kernel`;
+* the single-block error-norm reduction `_dp45_sum_sq_kernel`.
+
+The RMS scaled error norm `√(Σ(err/sc)²/N)` is reduced fully on the
+GPU by `_dp45_sum_sq_kernel`; only the final scalar `Σ(err/sc)²`
+lands on the host per attempt — no `map_to_host` of the full state
+buffers. Validated bit-comparable (modulo floating-point
 sum-order on one test) across all 5 physics × all dimensions; see
 [Dormand-Prince](../numerical-methods/dormand-prince.md).
 
