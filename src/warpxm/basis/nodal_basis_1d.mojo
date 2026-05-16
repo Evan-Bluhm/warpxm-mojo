@@ -104,8 +104,8 @@ struct NodalBasis1D[P: Int](Copyable, Movable):
     """Compile-time descriptor for a 1D GLL nodal DG basis of polynomial degree `P`.
 
     The basis is *fully comptime*: it owns no device-side state. Solvers query
-    `nodes`, `weights`, and `diff_matrix` to populate their own device buffers
-    at setup time.
+    `nodes`, `weights`, and `diff_matrix_flat` to populate their own device
+    buffers at setup time.
     """
 
     comptime num_nodes: Int = Self.P + 1
