@@ -35,7 +35,7 @@ Three steppers cover every dimension:
 
 | Stepper | Used by |
 | ------- | ------- |
-| `SSPRK3_1D[P, NC]` | Every 1D problem (advection, Euler) |
+| `SSPRK3_1D[P, NC]` | Every 1D problem (advection, Euler, Maxwell) |
 | `SSPRK3_2D[P, NC]` | Every 2D problem (Euler, MHD, Maxwell, GLM-MHD) |
 | `SSPRK3_3D[P, NC]` | Every 3D problem |
 

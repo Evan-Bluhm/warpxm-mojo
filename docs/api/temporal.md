@@ -11,7 +11,7 @@ composed at the call site via `@parameter def` closures.
 | File | Stepper(s) | Use |
 | ---- | ---------- | --- |
 | `ssprk3.mojo` | `_euler_step_kernel`, `_ssprk3_combine_kernel` | Shared dimension-agnostic combine kernels imported by every SSPRK3 variant. No struct. |
-| `ssprk3_1d.mojo` | `SSPRK3_1D[P, NC]` | Every 1D problem (advection, Euler, …) |
+| `ssprk3_1d.mojo` | `SSPRK3_1D[P, NC]` | Every 1D problem (advection, Euler, Maxwell) |
 | `ssprk3_2d.mojo` | `SSPRK3_2D[P, NC]` | Every 2D problem (Euler, Maxwell, MHD, GLM-MHD, …) |
 | `ssprk3_3d.mojo` | `SSPRK3_3D[P, NC]` | Every 3D problem |
 | `dormand_prince_1d.mojo` | `DormandPrince45_1D[P, NC]` + dimension-agnostic combine helpers `_combine1`–`_combine5`, the per-cell error kernel `_dp45_error_kernel`, and the single-block reduction kernel `_dp45_sum_sq_kernel` — all three reused by 2D/3D | Adaptive 5(4) RK in 1D |
