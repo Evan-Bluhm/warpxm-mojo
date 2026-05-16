@@ -8,9 +8,9 @@ tests passing on the GPU.
 | ----------------------------- | :-: | :-: | :-: |
 | Scalar advection              | ✅  | ✅  | ✅  |
 | 5-moment Euler                | ✅  | ✅  | ✅  |
-| Maxwell's equations           | —   | ✅  | ✅  |
-| Single-fluid plasma           | —   | ✅  | ✅  |
-| Two-species plasma            | —   | ✅  | ✅  |
+| Maxwell's equations           | ✅  | ✅  | ✅  |
+| Single-fluid plasma           | ✅  | ✅  | ✅  |
+| Two-species plasma            | ✅  | ✅  | ✅  |
 | Ideal MHD                     | —   | ✅  | ✅  |
 | MHD with Dedner GLM cleaning  | —   | ✅  | ✅  |
 
