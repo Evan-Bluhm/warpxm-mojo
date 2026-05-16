@@ -1,8 +1,10 @@
 # Generic Dormand-Prince 5(4) stepper for 3D DG fields, NC-parameterised.
 #
-# Identical scheme to `dormand_prince_2d.mojo`; combine and error kernels
-# operate on flat buffers and are reused unchanged. The driver supplies
-# `compute_rhs_fn` as a `@parameter def` closure.
+# Identical scheme to `dormand_prince_2d.mojo`; combine kernels, the
+# per-cell error kernel, and the single-block error-norm reduction
+# kernel all live in `dormand_prince_1d.mojo` (flat buffers, no
+# dimensionality dependency) and are reused unchanged. The driver
+# supplies `compute_rhs_fn` as a `@parameter def` closure.
 
 from std.gpu.host import DeviceBuffer, DeviceContext
 from layout import TileTensor, Idx, row_major

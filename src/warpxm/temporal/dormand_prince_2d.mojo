@@ -1,9 +1,12 @@
 # Generic Dormand-Prince 5(4) stepper for 2D DG fields, NC-parameterised.
 #
-# Same Butcher tableau as `dormand_prince_1d.mojo`; the combine and error
-# kernels there are dimension-agnostic and reused unchanged. The driver
-# supplies `compute_rhs_fn` as a `@parameter def` closure, exactly like
-# the SSPRK3 family.
+# Same Butcher tableau as `dormand_prince_1d.mojo`; the combine kernels
+# (`_combine{1..5}`), per-cell error kernel (`_dp45_error_kernel`), and
+# single-block error-norm reduction kernel (`_dp45_sum_sq_kernel`) all
+# live there and are imported here unchanged — they operate on flat
+# buffers and don't care about dimensionality. The driver supplies
+# `compute_rhs_fn` as a `@parameter def` closure, exactly like the
+# SSPRK3 family.
 
 from std.gpu.host import DeviceBuffer, DeviceContext
 from layout import TileTensor, Idx, row_major
