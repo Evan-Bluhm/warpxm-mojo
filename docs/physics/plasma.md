@@ -66,7 +66,7 @@ driver picks which sources to apply, in what order, and with what
 state independently. See [Time integration](../concepts/time-integration.md)
 for the rationale.
 
-`SSPRK3_TwoFluid_{2,3}D` is the 2-state variant (one fluid + Maxwell)
+`SSPRK3_TwoFluid_{1,2,3}D` is the 2-state variant (one fluid + Maxwell)
 with the same closure pattern shrunk to four buffer args.
 
 ## Source kernels

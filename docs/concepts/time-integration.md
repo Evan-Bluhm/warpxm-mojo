@@ -39,7 +39,7 @@ Three steppers cover every dimension:
 | `SSPRK3_2D[P, NC]` | Every 2D problem (Euler, MHD, Maxwell, GLM-MHD) |
 | `SSPRK3_3D[P, NC]` | Every 3D problem |
 
-The plasma family (`SSPRK3_Plasma_{2,3}D`, `SSPRK3_TwoFluid_{2,3}D`)
+The plasma family (`SSPRK3_Plasma_{1,2,3}D`, `SSPRK3_TwoFluid_{1,2,3}D`)
 extends the same closure pattern to multiple coupled states. Each takes
 a single `compute_joint_rhs_fn(*states_in, *rhs_out)` closure that
 writes the combined hyperbolic + source RHS for the (fluid₁, fluid₂,
@@ -136,7 +136,7 @@ Smooth problem, want adaptive Δt
     → DormandPrince45_<D>D[P, NC]  (any dim, any physics)
     → same two-closure API as SSPRK3
 
-Plasma (two species)        → SSPRK3_Plasma_{2,3}D[P]
-Single fluid + Maxwell      → SSPRK3_TwoFluid_{2,3}D[P]
+Plasma (two species)        → SSPRK3_Plasma_{1,2,3}D[P]
+Single fluid + Maxwell      → SSPRK3_TwoFluid_{1,2,3}D[P]
     → both take compute_joint_rhs_fn(*states_in, *rhs_out)
 ```

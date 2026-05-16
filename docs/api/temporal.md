@@ -128,7 +128,7 @@ sum-order on one test) across all 5 physics × all dimensions; see
 
 ## Plasma steppers
 
-`SSPRK3_Plasma_{2,3}D[P]` and `SSPRK3_TwoFluid_{2,3}D[P]` extend the
+`SSPRK3_Plasma_{1,2,3}D[P]` and `SSPRK3_TwoFluid_{1,2,3}D[P]` extend the
 closure pattern to multiple coupled states (two fluid species + Maxwell,
 or one fluid + Maxwell). The driver supplies a single
 `compute_joint_rhs_fn(*states_in, *rhs_out)` closure that writes the
@@ -157,5 +157,5 @@ def compute_joint_rhs(
 stepper.step[compute_joint_rhs](ctx, q_s1, q_s2, q_maxwell, dt)
 ```
 
-`SSPRK3_TwoFluid_{2,3}D` is the 2-state shape `compute_joint_rhs(qf_in,
+`SSPRK3_TwoFluid_{1,2,3}D` is the 2-state shape `compute_joint_rhs(qf_in,
 qm_in, qf_out, qm_out)`; same pattern, fewer arguments.
