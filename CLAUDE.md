@@ -106,7 +106,7 @@ Supporting infrastructure:
 | 2D pair-plasma Langmuir         | mass conserved per species to machine epsilon           |
 | Pair-plasma asym δ-scaling      | ratio 100.0 / 100.0 between δ ∈ {0.01, 0.001, 0.0001} — physical O(δ²) |
 | 2D Maxwell PEC cavity TM₁₁      | unexcited components stay at 0.0 exactly                |
-| 2D MHD Brio-Wu                  | 1D-extruded into 2D, y-drift 6.5e-14                    |
+| 2D MHD Brio-Wu                  | 1D-extruded into 2D, y-drift 2.8e-13                    |
 | 2D Orszag-Tang vortex           | mass drift 6e-14, ψ² bounded                            |
 | 2D GLM ψ-bump decay             | 45000× decay over 4 time units                          |
 | 3D Alfvén wave                  | B_y / B_z L2 4e-6 bit-identical; ρ-drift 3e-5           |
