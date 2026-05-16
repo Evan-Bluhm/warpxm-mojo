@@ -24,7 +24,8 @@ src/warpxm/
                # imhd_glm. Each exposes axis-parametric fluxes and a
                # 3-component-normal numerical flux; the DG launcher owns
                # dimensionality. See "Apps architecture" below.
-  adjusters/   # slope limiters (Moe-Rossmanith for 1D, 2D, 3D)
+  adjusters/   # Moe-Rossmanith slope limiter (1D / 2D / 3D) and Zhang-Shu
+               # positivity preservers (Euler 1D/2D/3D, MHD 2D/3D).
   basis/       # GLL nodal basis (P = 1..4)
   core/        # real-type alias, math helpers, BC enum
   driver/      # VTU writers (Euler 2D/3D, MHD 2D/3D, Maxwell 2D/3D) + FrameWriter for time series
@@ -32,9 +33,11 @@ src/warpxm/
   spatial/     # dg_core_{1,2,3}d.mojo: shared DG cores. Per-physics dg_<phys>_<N>d.mojo
                # wrappers supply flux/BC closures. Plus source kernels (gravity, Lorentz,
                # current, GLM damping).
-  temporal/    # ssprk3_{1,2,3}d.mojo: one generic stepper per dimension. Driver supplies
-               # compute_rhs and adjust closures. dormand_prince_{...}.mojo for adaptive RK45.
-               # ssprk3_plasma_{2,3}d.mojo kept specialised (three coupled states).
+  temporal/    # ssprk3_{1,2,3}d.mojo: one generic SSPRK3 stepper per dimension. Driver
+               # supplies compute_rhs and adjust closures. dormand_prince_{1,2,3}d.mojo
+               # for adaptive RK45. ssprk3_plasma_{1,2,3}d.mojo and
+               # ssprk3_twofluid_{1,2,3}d.mojo for two-species and single-fluid plasma
+               # (multi-state coupled steppers).
   variable/    # DGState{1,2,3}D[P, NC] device buffers
 examples/      # polished driver programs (one .mojo per physics setup)
 tests/         # 66 regression tests covering every (physics, dimension) combination
