@@ -3,7 +3,7 @@
 # A thin wrapper around the shared `_dg_2d_compute_rhs_core` kernel core.
 # The wrapper kernel `_euler_rhs_kernel_2d` exposes the Euler-specific
 # scalar parameters (γ, ρ_min, P_min) at the GPU launch boundary and
-# defines four `@parameter fn` closures (`flux_x`, `flux_y`, `num_flux`,
+# defines four `@parameter def` closures (`flux_x`, `flux_y`, `num_flux`,
 # `apply_bc`) that capture those scalars and dispatch to the app's
 # static flux methods.
 

@@ -5,7 +5,7 @@
 #   1.  Each per-physics kernel file declares a GPU-launchable
 #       `def _<phys>_rhs_kernel_2d[P, ...]` that takes the physics-
 #       specific scalar parameters (γ, c_light, etc.) as kernel arguments.
-#   2.  Inside that kernel it defines four `@parameter fn` closures with
+#   2.  Inside that kernel it defines four `@parameter def` closures with
 #       uniform signatures: `flux_x`, `flux_y`, `num_flux`, `apply_bc`.
 #       The closures capture the kernel's scalar args and call into the
 #       app's static flux methods.
