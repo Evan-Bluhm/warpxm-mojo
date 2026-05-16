@@ -17,8 +17,8 @@ composed at the call site via `@parameter def` closures.
 | `dormand_prince_1d.mojo` | `DormandPrince45_1D[P, NC]` + dimension-agnostic combine helpers `_combine1`–`_combine5` and `_dp45_error_kernel` reused by 2D/3D | Adaptive 5(4) RK in 1D |
 | `dormand_prince_2d.mojo` | `DormandPrince45_2D[P, NC]` | Adaptive 5(4) RK in 2D — any physics |
 | `dormand_prince_3d.mojo` | `DormandPrince45_3D[P, NC]` | Adaptive 5(4) RK in 3D — any physics |
-| `ssprk3_plasma_{2,3}d.mojo` | `SSPRK3_Plasma_{2,3}D[P]` | Two-species plasma — three coupled states, kept specialized |
-| `ssprk3_twofluid_{2,3}d.mojo` | `SSPRK3_Twofluid_{2,3}D[P]` | Single-fluid plasma (one fluid + Maxwell) |
+| `ssprk3_plasma_{2,3}d.mojo` | `SSPRK3_Plasma_{2,3}D[P]` | Two-species plasma — three coupled states, takes a single `compute_joint_rhs_fn` closure |
+| `ssprk3_twofluid_{2,3}d.mojo` | `SSPRK3_TwoFluid_{2,3}D[P]` | Single-fluid plasma (one fluid + Maxwell), takes a `compute_joint_rhs_fn` closure |
 
 ## The two-closure pattern
 
@@ -123,7 +123,34 @@ physics × all dimensions; see [Dormand-Prince](../numerical-methods/dormand-pri
 
 ## Plasma steppers
 
-`SSPRK3_Plasma_{2,3}D[P]` and `SSPRK3_Twofluid_{2,3}D[P]` are kept
-specialised because they juggle three coupled states (two fluid species
-plus Maxwell) and a fixed-shape Lorentz / current-source coupling. They
-don't fit the single-`u`-buffer signature of `SSPRK3_{1,2,3}D`.
+`SSPRK3_Plasma_{2,3}D[P]` and `SSPRK3_TwoFluid_{2,3}D[P]` extend the
+closure pattern to multiple coupled states (two fluid species + Maxwell,
+or one fluid + Maxwell). The driver supplies a single
+`compute_joint_rhs_fn(*states_in, *rhs_out)` closure that writes the
+combined hyperbolic + source RHS for all states. Source ordering,
+α / ε₀ values, and the choice of which sources are active all live in
+the driver:
+
+```mojo
+@parameter
+def compute_joint_rhs(
+    mut q1_in: DGState2D[P, EULER_NC],
+    mut q2_in: DGState2D[P, EULER_NC],
+    mut qm_in: DGState2D[P, MAXWELL_NC],
+    mut q1_out: DGState2D[P, EULER_NC],
+    mut q2_out: DGState2D[P, EULER_NC],
+    mut qm_out: DGState2D[P, MAXWELL_NC],
+) raises:
+    fluid_spatial.compute_rhs(ctx, mesh, q1_in, q1_out)
+    fluid_spatial.compute_rhs(ctx, mesh, q2_in, q2_out)
+    maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
+    apply_lorentz_source_2d[P](ctx, q1_in, qm_in, q1_out, ALPHA_1)
+    apply_lorentz_source_2d[P](ctx, q2_in, qm_in, q2_out, ALPHA_2)
+    apply_current_source_2d[P](ctx, q1_in, qm_out, ALPHA_1, EPS0)
+    apply_current_source_2d[P](ctx, q2_in, qm_out, ALPHA_2, EPS0)
+
+stepper.step[compute_joint_rhs](ctx, q_s1, q_s2, q_maxwell, dt)
+```
+
+`SSPRK3_TwoFluid_{2,3}D` is the 2-state shape `compute_joint_rhs(qf_in,
+qm_in, qf_out, qm_out)`; same pattern, fewer arguments.

@@ -25,6 +25,8 @@ from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_3d import BlockMesh3D
 from warpxm.spatial.dg_euler_3d import DGEulerSolver3D
 from warpxm.spatial.dg_maxwell_3d import DGMaxwellSolver3D
+from warpxm.spatial.lorentz_source_3d import apply_lorentz_source_3d
+from warpxm.spatial.maxwell_current_source_3d import apply_current_source_3d
 from warpxm.temporal.ssprk3_plasma_3d import SSPRK3_Plasma_3D
 from warpxm.variable.state_3d import DGState3D
 
@@ -129,13 +131,27 @@ def main() raises:
     var maxwell_spatial = DGMaxwellSolver3D[P](maxwell_app)
     var stepper = SSPRK3_Plasma_3D[P](ctx, mesh.num_elements)
 
+    @parameter
+    def compute_joint_rhs(
+        mut q1_in: DGState3D[P, EULER_NC],
+        mut q2_in: DGState3D[P, EULER_NC],
+        mut qm_in: DGState3D[P, MAXWELL_NC],
+        mut q1_out: DGState3D[P, EULER_NC],
+        mut q2_out: DGState3D[P, EULER_NC],
+        mut qm_out: DGState3D[P, MAXWELL_NC],
+    ) raises:
+        fluid_spatial.compute_rhs(ctx, mesh, q1_in, q1_out)
+        fluid_spatial.compute_rhs(ctx, mesh, q2_in, q2_out)
+        maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
+        apply_lorentz_source_3d[P](ctx, q1_in, qm_in, q1_out, ALPHA_1)
+        apply_lorentz_source_3d[P](ctx, q2_in, qm_in, q2_out, ALPHA_2)
+        apply_current_source_3d[P](ctx, q1_in, qm_out, ALPHA_1, EPS0)
+        apply_current_source_3d[P](ctx, q2_in, qm_out, ALPHA_2, EPS0)
+
     var t: Real = 0.0
     while t < t_final - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < t_final else (t_final - t)
-        stepper.step(
-            ctx, mesh, fluid_spatial, maxwell_spatial,
-            q_s1, q_s2, q_maxwell, ALPHA_1, ALPHA_2, EPS0, dt_use,
-        )
+        stepper.step[compute_joint_rhs](ctx, q_s1, q_s2, q_maxwell, dt_use)
         t += dt_use
     ctx.synchronize()
 

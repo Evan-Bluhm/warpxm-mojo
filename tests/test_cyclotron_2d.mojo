@@ -35,6 +35,8 @@ from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
 from warpxm.spatial.dg_maxwell_2d import DGMaxwellSolver2D
+from warpxm.spatial.lorentz_source_2d import apply_lorentz_source_2d
+from warpxm.spatial.maxwell_current_source_2d import apply_current_source_2d
 from warpxm.temporal.ssprk3_twofluid_2d import SSPRK3_TwoFluid_2D
 from warpxm.variable.state_2d import DGState2D
 
@@ -97,18 +99,29 @@ def main() raises:
 
     # Integrate one full cyclotron period T = 2π / ω_c = 2π.
     var t_final = TWO_PI
+    # Decouple the back-reaction by making ε₀ effectively infinite — the
+    # cyclotron test is about Lorentz only; the current source would let
+    # E grow from the fluid's drift and break the "Maxwell stays put"
+    # part of the test.
+    var eps0_decoupled: Real = 1.0e30
+
+    @parameter
+    def compute_joint_rhs(
+        mut qf_in: DGState2D[P, EULER_NC],
+        mut qm_in: DGState2D[P, MAXWELL_NC],
+        mut qf_out: DGState2D[P, EULER_NC],
+        mut qm_out: DGState2D[P, MAXWELL_NC],
+    ) raises:
+        fluid_spatial.compute_rhs(ctx, mesh, qf_in, qf_out)
+        maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
+        apply_lorentz_source_2d[P](ctx, qf_in, qm_in, qf_out, ALPHA)
+        apply_current_source_2d[P](ctx, qf_in, qm_out, ALPHA, eps0_decoupled)
+
     var dt: Real = Real(1.0e-3)
     var t: Real = 0.0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        # Decouple the back-reaction by making ε₀ effectively infinite — the
-        # cyclotron test is about Lorentz only; the current source would let
-        # E grow from the fluid's drift and break the "Maxwell stays put"
-        # part of the test.
-        stepper.step(
-            ctx, mesh, fluid_spatial, maxwell_spatial,
-            q_fluid, q_maxwell, ALPHA, Real(1.0e30), dt_use,
-        )
+        stepper.step[compute_joint_rhs](ctx, q_fluid, q_maxwell, dt_use)
         t += dt_use
     ctx.synchronize()
 

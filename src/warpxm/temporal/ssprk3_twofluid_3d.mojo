@@ -1,29 +1,19 @@
 # Joint SSPRK3 stepper for a 3D 5-moment Euler fluid coupled to Maxwell.
-#
-# Direct 3D analogue of `ssprk3_twofluid_2d.mojo`. Each RK stage:
-#   (1) Compute fluid and Maxwell spatial RHS.
-#   (2) Apply Lorentz source on the fluid from Maxwell.
-#   (3) Apply current source on Maxwell from the fluid.
-#   (4) Combine each field with standard SSPRK3 weights.
+# Direct 3D analogue of `ssprk3_twofluid_2d.mojo`.
 
 from std.gpu.host import DeviceContext
 from layout import TileTensor, Idx, row_major
 from std.math import ceildiv
 
-from warpxm.apps.euler_2d import EULER_NC
-from warpxm.apps.maxwell_2d import MAXWELL_NC
+from warpxm.apps.euler import EULER_NC
+from warpxm.apps.maxwell import MAXWELL_NC
 from warpxm.core.types import Real
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.spatial.dg_euler_3d import DGEulerSolver3D
-from warpxm.spatial.dg_maxwell_3d import DGMaxwellSolver3D
-from warpxm.spatial.lorentz_source_3d import apply_lorentz_source_3d
-from warpxm.spatial.maxwell_current_source_3d import apply_current_source_3d
 from warpxm.temporal.ssprk3 import _euler_step_kernel, _ssprk3_combine_kernel
 from warpxm.variable.state_3d import DGState3D
 
 
 struct SSPRK3_TwoFluid_3D[P: Int]:
-    """SSPRK3 stepper for a 3D fluid + Maxwell pair with full plasma coupling."""
+    """SSPRK3 stepper for a 3D fluid + Maxwell pair."""
 
     var uf_save: DGState3D[Self.P, EULER_NC]
     var f_stage1: DGState3D[Self.P, EULER_NC]
@@ -44,16 +34,18 @@ struct SSPRK3_TwoFluid_3D[P: Int]:
         self.m_stage2 = DGState3D[Self.P, MAXWELL_NC](ctx, num_elements)
         self.m_rhs = DGState3D[Self.P, MAXWELL_NC](ctx, num_elements)
 
-    def step(
+    def step[
+        compute_joint_rhs_fn: def(
+            mut DGState3D[Self.P, EULER_NC],
+            mut DGState3D[Self.P, MAXWELL_NC],
+            mut DGState3D[Self.P, EULER_NC],
+            mut DGState3D[Self.P, MAXWELL_NC],
+        ) raises capturing [_] -> None,
+    ](
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh3D[Self.P],
-        fluid_spatial: DGEulerSolver3D[Self.P],
-        maxwell_spatial: DGMaxwellSolver3D[Self.P],
         mut q_fluid: DGState3D[Self.P, EULER_NC],
         mut q_maxwell: DGState3D[Self.P, MAXWELL_NC],
-        alpha: Real,
-        eps0: Real,
         dt: Real,
     ) raises:
         var f_size = q_fluid.buf_len
@@ -80,14 +72,8 @@ struct SSPRK3_TwoFluid_3D[P: Int]:
             type_of(ml), type_of(ml), type_of(ml), type_of(ml),
         ]
 
-        # --- Stage 1 -----------------------------------------------------------
-        fluid_spatial.compute_rhs(ctx, mesh, self.uf_save, self.f_rhs)
-        maxwell_spatial.compute_rhs(ctx, mesh, self.um_save, self.m_rhs)
-        apply_lorentz_source_3d[Self.P](
-            ctx, self.uf_save, self.um_save, self.f_rhs, alpha
-        )
-        apply_current_source_3d[Self.P](
-            ctx, self.uf_save, self.m_rhs, alpha, eps0
+        compute_joint_rhs_fn(
+            self.uf_save, self.um_save, self.f_rhs, self.m_rhs,
         )
         ctx.enqueue_function[k_euler_f](
             TileTensor(self.uf_save.buf, fl),
@@ -102,14 +88,8 @@ struct SSPRK3_TwoFluid_3D[P: Int]:
             dt, m_size, grid_dim=m_grid, block_dim=BLOCK,
         )
 
-        # --- Stage 2 -----------------------------------------------------------
-        fluid_spatial.compute_rhs(ctx, mesh, self.f_stage1, self.f_rhs)
-        maxwell_spatial.compute_rhs(ctx, mesh, self.m_stage1, self.m_rhs)
-        apply_lorentz_source_3d[Self.P](
-            ctx, self.f_stage1, self.m_stage1, self.f_rhs, alpha
-        )
-        apply_current_source_3d[Self.P](
-            ctx, self.f_stage1, self.m_rhs, alpha, eps0
+        compute_joint_rhs_fn(
+            self.f_stage1, self.m_stage1, self.f_rhs, self.m_rhs,
         )
         ctx.enqueue_function[k_combine_f](
             TileTensor(self.uf_save.buf, fl),
@@ -128,14 +108,8 @@ struct SSPRK3_TwoFluid_3D[P: Int]:
             grid_dim=m_grid, block_dim=BLOCK,
         )
 
-        # --- Stage 3 -----------------------------------------------------------
-        fluid_spatial.compute_rhs(ctx, mesh, self.f_stage2, self.f_rhs)
-        maxwell_spatial.compute_rhs(ctx, mesh, self.m_stage2, self.m_rhs)
-        apply_lorentz_source_3d[Self.P](
-            ctx, self.f_stage2, self.m_stage2, self.f_rhs, alpha
-        )
-        apply_current_source_3d[Self.P](
-            ctx, self.f_stage2, self.m_rhs, alpha, eps0
+        compute_joint_rhs_fn(
+            self.f_stage2, self.m_stage2, self.f_rhs, self.m_rhs,
         )
         ctx.enqueue_function[k_combine_f](
             TileTensor(self.uf_save.buf, fl),

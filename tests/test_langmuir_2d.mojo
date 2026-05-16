@@ -37,6 +37,8 @@ from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
 from warpxm.spatial.dg_maxwell_2d import DGMaxwellSolver2D
+from warpxm.spatial.lorentz_source_2d import apply_lorentz_source_2d
+from warpxm.spatial.maxwell_current_source_2d import apply_current_source_2d
 from warpxm.temporal.ssprk3_twofluid_2d import SSPRK3_TwoFluid_2D
 from warpxm.variable.state_2d import DGState2D
 
@@ -132,14 +134,23 @@ def main() raises:
     var rho_at_half_T: Real = 0.0
     var rho_at_full_T: Real = 0.0
 
+    @parameter
+    def compute_joint_rhs(
+        mut qf_in: DGState2D[P, EULER_NC],
+        mut qm_in: DGState2D[P, MAXWELL_NC],
+        mut qf_out: DGState2D[P, EULER_NC],
+        mut qm_out: DGState2D[P, MAXWELL_NC],
+    ) raises:
+        fluid_spatial.compute_rhs(ctx, mesh, qf_in, qf_out)
+        maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
+        apply_lorentz_source_2d[P](ctx, qf_in, qm_in, qf_out, ALPHA)
+        apply_current_source_2d[P](ctx, qf_in, qm_out, ALPHA, EPS0)
+
     var t_final = TWO_PI / omega_p
     var t: Real = 0.0
     while t < t_final - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < t_final else (t_final - t)
-        stepper.step(
-            ctx, mesh, fluid_spatial, maxwell_spatial,
-            q_fluid, q_maxwell, ALPHA, EPS0, dt_use,
-        )
+        stepper.step[compute_joint_rhs](ctx, q_fluid, q_maxwell, dt_use)
         t += dt_use
 
         # Snapshot ρ at the sample point at quarter / half / full periods.

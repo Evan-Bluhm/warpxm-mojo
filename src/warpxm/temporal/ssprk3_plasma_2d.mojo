@@ -1,39 +1,29 @@
-# Joint SSPRK3 stepper for a two-species plasma: two 5-moment Euler fluids
-# (e.g. electrons + ions) coupled to a shared Maxwell field.
+# Joint SSPRK3 stepper for two coupled fluid species + Maxwell, 2D.
 #
-# Each species has its own charge-to-mass ratio α_s. Per RK stage:
-#   (1) Compute spatial RHS of fluid_1, fluid_2, Maxwell (separately).
-#   (2) Apply the Lorentz source to each fluid using the current Maxwell state.
-#   (3) Accumulate both species' currents onto Maxwell's E-RHS (one
-#       `apply_current_source_2d` call per species).
-#   (4) Combine each field with the standard SSPRK3 weights.
+# The stepper itself is physics-agnostic: it takes a single comptime
+# `compute_joint_rhs_fn` closure that, given the three current states,
+# writes the combined time-derivative (hyperbolic + any source coupling
+# the driver wants) into three RHS buffers. SSPRK3 combines on each
+# state independently with the standard Shu-Osher weights.
 #
-# Setting `α_1 = -1, α_2 = +1` with equal masses and equal background
-# density reproduces the simplest "symmetric pair-plasma" oscillation at
-# `ω = √(α_1²·n_1 + α_2²·n_2) = √2 · ω_pe`. For a realistic electron+ion
-# plasma (proton-to-electron mass ratio ~ 1836), set the ion fluid's α to
-# ~ 1/1836 — the ion contribution to the plasma frequency is then
-# negligible, and the system reduces to the single-species Langmuir
-# oscillation around an effectively static ion background.
+# A pair-plasma driver builds the closure with two fluid spatial RHS
+# calls + Lorentz/current source applications between species and
+# Maxwell. The stepper has no opinion on the source structure or the
+# ordering.
 
 from std.gpu.host import DeviceContext
 from layout import TileTensor, Idx, row_major
 from std.math import ceildiv
 
-from warpxm.apps.euler_2d import EULER_NC
-from warpxm.apps.maxwell_2d import MAXWELL_NC
+from warpxm.apps.euler import EULER_NC
+from warpxm.apps.maxwell import MAXWELL_NC
 from warpxm.core.types import Real
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
-from warpxm.spatial.dg_maxwell_2d import DGMaxwellSolver2D
-from warpxm.spatial.lorentz_source_2d import apply_lorentz_source_2d
-from warpxm.spatial.maxwell_current_source_2d import apply_current_source_2d
 from warpxm.temporal.ssprk3 import _euler_step_kernel, _ssprk3_combine_kernel
 from warpxm.variable.state_2d import DGState2D
 
 
 struct SSPRK3_Plasma_2D[P: Int]:
-    """SSPRK3 stepper for two fluid species + Maxwell with full plasma coupling."""
+    """SSPRK3 stepper for two fluid species + Maxwell."""
 
     # Species-1 scratch
     var u1_save: DGState2D[Self.P, EULER_NC]
@@ -65,20 +55,29 @@ struct SSPRK3_Plasma_2D[P: Int]:
         self.m_stage2 = DGState2D[Self.P, MAXWELL_NC](ctx, num_elements)
         self.m_rhs = DGState2D[Self.P, MAXWELL_NC](ctx, num_elements)
 
-    def step(
+    def step[
+        compute_joint_rhs_fn: def(
+            mut DGState2D[Self.P, EULER_NC],
+            mut DGState2D[Self.P, EULER_NC],
+            mut DGState2D[Self.P, MAXWELL_NC],
+            mut DGState2D[Self.P, EULER_NC],
+            mut DGState2D[Self.P, EULER_NC],
+            mut DGState2D[Self.P, MAXWELL_NC],
+        ) raises capturing [_] -> None,
+    ](
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh2D[Self.P],
-        fluid_spatial: DGEulerSolver2D[Self.P],
-        maxwell_spatial: DGMaxwellSolver2D[Self.P],
         mut q_s1: DGState2D[Self.P, EULER_NC],
         mut q_s2: DGState2D[Self.P, EULER_NC],
         mut q_maxwell: DGState2D[Self.P, MAXWELL_NC],
-        alpha_s1: Real,
-        alpha_s2: Real,
-        eps0: Real,
         dt: Real,
     ) raises:
+        """One SSPRK3 step on the joint (fluid₁, fluid₂, Maxwell) state.
+
+        `compute_joint_rhs_fn(q1_in, q2_in, qm_in, q1_out, q2_out, qm_out)`
+        writes the full time-derivative of each state — hyperbolic
+        plus source coupling — into the *_out buffers.
+        """
         var f_size = q_s1.buf_len
         var m_size = q_maxwell.buf_len
         comptime BLOCK = 256
@@ -104,21 +103,10 @@ struct SSPRK3_Plasma_2D[P: Int]:
             type_of(ml), type_of(ml), type_of(ml), type_of(ml),
         ]
 
-        # --- Stage 1 -----------------------------------------------------------
-        fluid_spatial.compute_rhs(ctx, mesh, self.u1_save, self.s1_rhs)
-        fluid_spatial.compute_rhs(ctx, mesh, self.u2_save, self.s2_rhs)
-        maxwell_spatial.compute_rhs(ctx, mesh, self.um_save, self.m_rhs)
-        apply_lorentz_source_2d[Self.P](
-            ctx, self.u1_save, self.um_save, self.s1_rhs, alpha_s1
-        )
-        apply_lorentz_source_2d[Self.P](
-            ctx, self.u2_save, self.um_save, self.s2_rhs, alpha_s2
-        )
-        apply_current_source_2d[Self.P](
-            ctx, self.u1_save, self.m_rhs, alpha_s1, eps0
-        )
-        apply_current_source_2d[Self.P](
-            ctx, self.u2_save, self.m_rhs, alpha_s2, eps0
+        # --- Stage 1: u^(1) = u^n + dt·L(u^n) -------------------------------
+        compute_joint_rhs_fn(
+            self.u1_save, self.u2_save, self.um_save,
+            self.s1_rhs, self.s2_rhs, self.m_rhs,
         )
         ctx.enqueue_function[k_euler_f](
             TileTensor(self.u1_save.buf, fl),
@@ -139,21 +127,10 @@ struct SSPRK3_Plasma_2D[P: Int]:
             dt, m_size, grid_dim=m_grid, block_dim=BLOCK,
         )
 
-        # --- Stage 2 -----------------------------------------------------------
-        fluid_spatial.compute_rhs(ctx, mesh, self.s1_stage1, self.s1_rhs)
-        fluid_spatial.compute_rhs(ctx, mesh, self.s2_stage1, self.s2_rhs)
-        maxwell_spatial.compute_rhs(ctx, mesh, self.m_stage1, self.m_rhs)
-        apply_lorentz_source_2d[Self.P](
-            ctx, self.s1_stage1, self.m_stage1, self.s1_rhs, alpha_s1
-        )
-        apply_lorentz_source_2d[Self.P](
-            ctx, self.s2_stage1, self.m_stage1, self.s2_rhs, alpha_s2
-        )
-        apply_current_source_2d[Self.P](
-            ctx, self.s1_stage1, self.m_rhs, alpha_s1, eps0
-        )
-        apply_current_source_2d[Self.P](
-            ctx, self.s2_stage1, self.m_rhs, alpha_s2, eps0
+        # --- Stage 2 --------------------------------------------------------
+        compute_joint_rhs_fn(
+            self.s1_stage1, self.s2_stage1, self.m_stage1,
+            self.s1_rhs, self.s2_rhs, self.m_rhs,
         )
         ctx.enqueue_function[k_combine_f](
             TileTensor(self.u1_save.buf, fl),
@@ -180,21 +157,10 @@ struct SSPRK3_Plasma_2D[P: Int]:
             grid_dim=m_grid, block_dim=BLOCK,
         )
 
-        # --- Stage 3 -----------------------------------------------------------
-        fluid_spatial.compute_rhs(ctx, mesh, self.s1_stage2, self.s1_rhs)
-        fluid_spatial.compute_rhs(ctx, mesh, self.s2_stage2, self.s2_rhs)
-        maxwell_spatial.compute_rhs(ctx, mesh, self.m_stage2, self.m_rhs)
-        apply_lorentz_source_2d[Self.P](
-            ctx, self.s1_stage2, self.m_stage2, self.s1_rhs, alpha_s1
-        )
-        apply_lorentz_source_2d[Self.P](
-            ctx, self.s2_stage2, self.m_stage2, self.s2_rhs, alpha_s2
-        )
-        apply_current_source_2d[Self.P](
-            ctx, self.s1_stage2, self.m_rhs, alpha_s1, eps0
-        )
-        apply_current_source_2d[Self.P](
-            ctx, self.s2_stage2, self.m_rhs, alpha_s2, eps0
+        # --- Stage 3 --------------------------------------------------------
+        compute_joint_rhs_fn(
+            self.s1_stage2, self.s2_stage2, self.m_stage2,
+            self.s1_rhs, self.s2_rhs, self.m_rhs,
         )
         ctx.enqueue_function[k_combine_f](
             TileTensor(self.u1_save.buf, fl),

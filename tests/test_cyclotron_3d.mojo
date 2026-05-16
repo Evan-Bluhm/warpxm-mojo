@@ -31,6 +31,8 @@ from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_3d import BlockMesh3D
 from warpxm.spatial.dg_euler_3d import DGEulerSolver3D
 from warpxm.spatial.dg_maxwell_3d import DGMaxwellSolver3D
+from warpxm.spatial.lorentz_source_3d import apply_lorentz_source_3d
+from warpxm.spatial.maxwell_current_source_3d import apply_current_source_3d
 from warpxm.temporal.ssprk3_twofluid_3d import SSPRK3_TwoFluid_3D
 from warpxm.variable.state_3d import DGState3D
 
@@ -94,15 +96,26 @@ def main() raises:
 
     var t_final = TWO_PI
     var dt: Real = Real(1.0e-3)
+    # ε₀ = 1e30 effectively disables the current back-reaction so the
+    # cyclotron test isolates the Lorentz response (matches the 2D test).
+    var eps0_decoupled: Real = 1.0e30
+
+    @parameter
+    def compute_joint_rhs(
+        mut qf_in: DGState3D[P, EULER_NC],
+        mut qm_in: DGState3D[P, MAXWELL_NC],
+        mut qf_out: DGState3D[P, EULER_NC],
+        mut qm_out: DGState3D[P, MAXWELL_NC],
+    ) raises:
+        fluid_spatial.compute_rhs(ctx, mesh, qf_in, qf_out)
+        maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
+        apply_lorentz_source_3d[P](ctx, qf_in, qm_in, qf_out, ALPHA)
+        apply_current_source_3d[P](ctx, qf_in, qm_out, ALPHA, eps0_decoupled)
+
     var t: Real = 0.0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        # ε₀ = 1e30 effectively disables the current back-reaction so the
-        # cyclotron test isolates the Lorentz response (matches the 2D test).
-        stepper.step(
-            ctx, mesh, fluid_spatial, maxwell_spatial,
-            q_fluid, q_maxwell, ALPHA, Real(1.0e30), dt_use,
-        )
+        stepper.step[compute_joint_rhs](ctx, q_fluid, q_maxwell, dt_use)
         t += dt_use
     ctx.synchronize()
 

@@ -39,9 +39,11 @@ Three steppers cover every dimension:
 | `SSPRK3_2D[P, NC]` | Every 2D problem (Euler, MHD, Maxwell, GLM-MHD) |
 | `SSPRK3_3D[P, NC]` | Every 3D problem |
 
-The plasma family (`SSPRK3_Plasma_{2,3}D`, `SSPRK3_Twofluid_{2,3}D`)
-stays specialised because it juggles three coupled states (two fluid
-species plus Maxwell) — see [Plasma](../physics/plasma.md).
+The plasma family (`SSPRK3_Plasma_{2,3}D`, `SSPRK3_TwoFluid_{2,3}D`)
+extends the same closure pattern to multiple coupled states. Each takes
+a single `compute_joint_rhs_fn(*states_in, *rhs_out)` closure that
+writes the combined hyperbolic + source RHS for the (fluid₁, fluid₂,
+Maxwell) or (fluid, Maxwell) tuple. See [Plasma](../physics/plasma.md).
 
 ## Dormand-Prince RK45 — adaptive
 
