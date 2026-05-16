@@ -99,6 +99,7 @@ Supporting infrastructure:
 | 2D Euler hydrostatic balance    | \|v\| ~ 4e-16 after 50 steps (well-balanced source)     |
 | 2D Sod tube                     | analytic plateaus match to 3e-3                         |
 | 2D pair-plasma Langmuir         | mass conserved per species to machine epsilon           |
+| Pair-plasma asym δ-scaling      | ratio 100.0 / 100.0 between δ ∈ {0.01, 0.001, 0.0001} — physical O(δ²) |
 | 2D Maxwell PEC cavity TM₁₁      | unexcited components stay at 0.0 exactly                |
 | 2D MHD Brio-Wu                  | 1D-extruded into 2D, y-drift 6.5e-14                    |
 | 2D Orszag-Tang vortex           | mass drift 6e-14, ψ² bounded                            |
@@ -134,8 +135,14 @@ Mostly *quality* and *scale* items, not feature gaps:
    for Euler (1D / 2D / 3D) and ideal MHD (2D / 3D). 1D MHD doesn't exist
    in the framework so there's no analogue there. The MHD preserver also
    works with GLM-MHD (NC=9 ψ component is shrunk along with the rest).
-2. **Strang-style symmetric source splitting** for two-species plasma — the
-   current first-order splitting introduces O(δ·dt) antisymmetry residual.
+2. **~~Strang-style symmetric source splitting~~** (closed). Was motivated by
+   the 1.85e-3 antisymmetry residual on the 2D pair-plasma test. The
+   δ-scaling diagnostic in `tests/test_pair_plasma_asym_scaling.mojo`
+   shows the residual scales as δ² (ratio 100 between δ ∈
+   {0.01, 0.001, 0.0001}), confirming it's the *physical* O(δ²) coupling
+   from the ρ-dependent Lorentz force `F = α·ρ·E` — species 1 has
+   ρ ≈ 1+δ·sin, species 2 has ρ ≈ 1-δ·sin, so their force amplitudes
+   differ by 2·δ². No operator-splitting fix can eliminate this.
 3. **Kinetic Vlasov-Maxwell solver** — different architecture (phase-space DG
    instead of configuration-space DG). Sizeable port.
 4. **MPI halo exchange** — multi-GPU support. Sizeable engineering effort.

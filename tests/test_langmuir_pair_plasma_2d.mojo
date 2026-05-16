@@ -212,12 +212,15 @@ def main() raises:
     assert_true(amp_drift_2 < Real(1.5e-3),
                 "species 2 amplitude drift exceeded tolerance")
 
-    # Antisymmetry residual. The continuous system is invariant under
-    # species-1 ↔ species-2 with α-sign flip; the discrete stepper applies
-    # sources to species 1 *before* species 2 within each RK stage, which
-    # is a first-order splitting that introduces an O(dt·δ) asymmetry.
-    # Switching to a symmetric (Strang-style) splitting would tighten this
-    # — left as a follow-up.
+    # Antisymmetry residual. The continuous system is antisymmetric in
+    # species-1 ↔ species-2 with α-sign flip ONLY at linear order in δ.
+    # At O(δ²) the Lorentz force F = α·ρ·E couples antisymmetrically
+    # because species-1 carries ρ ≈ 1 + δ·sin while species-2 carries
+    # ρ ≈ 1 − δ·sin, so the two species' force amplitudes differ by
+    # 2·δ². At δ = 0.01, T ≈ 4.44 this physical effect produces a
+    # residual on the order of 1.85e-3 — confirmed by the δ-scaling
+    # diagnostic in test_pair_plasma_asym_scaling.mojo (residual scales
+    # exactly as δ²). No operator-splitting fix can eliminate it.
     var asym = fabs((rho1_T - Real(1.0)) - (Real(1.0) - rho2_T))
     print("  antisymmetry residual (|δρ_1 − (−δρ_2)|):", asym)
     assert_true(asym < Real(3.0e-3),
