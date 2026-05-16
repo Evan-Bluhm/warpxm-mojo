@@ -69,12 +69,16 @@ from warpxm.mesh.block_3d import (
 var mesh = BlockMesh3D[P](
     ctx, x_min, x_max, y_min, y_max, z_min, z_max,
     nx=NX, ny=NY, nz=NZ,
-    periodic_x=False, periodic_y=True, periodic_z=True,
-    bc_left=BC_COPYOUT, bc_right=BC_COPYOUT,
+    periodic_x=False, periodic_y=False, periodic_z=False,
+    bc_left=BC_COPYOUT,   bc_right=BC_COPYOUT,    # x axis
+    bc_bottom=BC_COPYOUT, bc_top=BC_COPYOUT,      # y axis
+    bc_down=BC_COPYOUT,   bc_up=BC_COPYOUT,       # z axis
 )
 ```
 
-Six face directions, `node_xyz_buf` device buffer.
+Six face directions (`bc_left`/`right`/`bottom`/`top`/`down`/`up`) and
+the `node_xyz_buf` device buffer. The BC parameters for any axis with
+`periodic_<axis>=True` are ignored.
 
 ## Periodic vs non-periodic
 
