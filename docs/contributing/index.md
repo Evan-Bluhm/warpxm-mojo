@@ -28,12 +28,14 @@ impact:
    vs configuration-space DG) — a sizeable port. Lives in upstream
    under `src/apps/kinetic/`.
 2. **MPI halo exchange**. Multi-GPU support; sizeable engineering.
-3. **GPU-side reduction for the DP45 error norm**. Currently the
-   per-step error is reduced on the host via `map_to_host`, which is
-   the bottleneck for very large meshes.
 
 Recently closed (see git log for details):
 
+* GPU-side reduction for the DP45 error norm — `_dp45_sum_sq_kernel`
+  in `temporal/dormand_prince_1d.mojo` tree-reduces Σ (err/sc)² in a
+  single block. Replaces three full-buffer `map_to_host` copies per
+  adaptive step with a one-scalar readback. Shared by the 2D and 3D
+  DP45 steppers.
 * DP45 generalised to 1D / 2D / 3D for any NC-component problem
   (`DormandPrince45_{1,2,3}D[P, NC]`, closure-driven).
 * HLLD wired into both `DGImhdSolver{2,3}D` and

@@ -21,13 +21,19 @@
 # Fixed-dt first cut — adaptive dt selection will follow once the algebra
 # is verified.
 
-from std.gpu import global_idx
+from std.gpu import barrier, global_idx, thread_idx
 from std.gpu.host import DeviceBuffer, DeviceContext
-from layout import TileTensor, TensorLayout, Idx, row_major
+from std.gpu.memory import AddressSpace
+from layout import TileTensor, TensorLayout, Idx, row_major, stack_allocation
 from std.math import ceildiv
 
 from warpxm.core.types import Real, WXM_DTYPE
 from warpxm.variable.state_1d import DGState1D
+
+
+comptime _DP45_REDUCE_BLOCK: Int = 256
+"""Block size for the single-block error-norm reduction kernel. Must be a
+power of two; the kernel assumes `block_dim.x == _DP45_REDUCE_BLOCK`."""
 
 
 # Per-stage combine kernels. Each takes exactly the right number of `k`
@@ -126,6 +132,57 @@ def _dp45_error_kernel[L: TensorLayout](
         err[t] = rebind[err.ElementType](dt * s)
 
 
+def _dp45_sum_sq_kernel[
+    EL: TensorLayout, OL: TensorLayout,
+](
+    err: TileTensor[WXM_DTYPE, EL, MutAnyOrigin],
+    u_save: TileTensor[WXM_DTYPE, EL, MutAnyOrigin],
+    u_new: TileTensor[WXM_DTYPE, EL, MutAnyOrigin],
+    out_sum_sq: TileTensor[WXM_DTYPE, OL, MutAnyOrigin],
+    atol: Real, rtol: Real, size: Int,
+):
+    """Single-block reduction: writes Σ_i (err_i / sc_i)^2 to out_sum_sq[0],
+    where sc_i = atol + rtol · max(|u_save_i|, |u_new_i|). Launch with
+    grid_dim=1, block_dim=_DP45_REDUCE_BLOCK."""
+    comptime assert err.flat_rank == 1
+    comptime assert out_sum_sq.flat_rank == 1
+    var sums = stack_allocation[
+        WXM_DTYPE, address_space=AddressSpace.SHARED,
+    ](row_major[_DP45_REDUCE_BLOCK]())
+
+    var tid = Int(thread_idx.x)
+    var local = Real(0.0)
+    var i = tid
+    while i < size:
+        var e = rebind[Scalar[WXM_DTYPE]](err[i])
+        var u_n = rebind[Scalar[WXM_DTYPE]](u_save[i])
+        var u_v = rebind[Scalar[WXM_DTYPE]](u_new[i])
+        var au_n = u_n if u_n >= Real(0.0) else -u_n
+        var au_v = u_v if u_v >= Real(0.0) else -u_v
+        var au_max = au_n if au_n > au_v else au_v
+        var sc = atol + rtol * au_max
+        var r = e / sc
+        local += r * r
+        i += _DP45_REDUCE_BLOCK
+    sums[tid] = rebind[sums.ElementType](local)
+    barrier()
+
+    # Tree reduce in shared memory (BLOCK is a power of 2).
+    var active = _DP45_REDUCE_BLOCK
+    while active > 1:
+        active >>= 1
+        if tid < active:
+            var l = rebind[Scalar[WXM_DTYPE]](sums[tid])
+            var r2 = rebind[Scalar[WXM_DTYPE]](sums[tid + active])
+            sums[tid] = rebind[sums.ElementType](l + r2)
+        barrier()
+
+    if tid == 0:
+        out_sum_sq[0] = rebind[out_sum_sq.ElementType](
+            rebind[Scalar[WXM_DTYPE]](sums[0])
+        )
+
+
 def _combine5[L: TensorLayout](
     y0: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     k1: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
@@ -166,6 +223,9 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
     error estimate. Unused by the fixed-step `step`."""
     var err_buf: DGState1D[Self.P, Self.NC]
     """Per-cell (y_5 - y_4) difference vector used for adaptive control."""
+    var sum_sq_buf: DeviceBuffer[Real.dtype]
+    """One-element scratch buffer: target of the GPU-side error-norm reduction
+    in `step_adaptive`. Avoids three full-buffer `map_to_host` copies per step."""
 
     def __init__(out self, var ctx: DeviceContext, num_elements: Int) raises:
         self.u_save = DGState1D[Self.P, Self.NC](ctx, num_elements)
@@ -178,6 +238,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
         self.k6 = DGState1D[Self.P, Self.NC](ctx, num_elements)
         self.k7 = DGState1D[Self.P, Self.NC](ctx, num_elements)
         self.err_buf = DGState1D[Self.P, Self.NC](ctx, num_elements)
+        self.sum_sq_buf = ctx.enqueue_create_buffer[Real.dtype](1)
 
     def step[
         compute_rhs_fn: def(
@@ -318,7 +379,9 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
         var size = u.buf_len
         var grid = ceildiv(size, BLOCK)
         var lay = row_major(Idx(size))
+        var lay1 = row_major[1]()
         comptime k_err = _dp45_error_kernel[type_of(lay)]
+        comptime k_sum = _dp45_sum_sq_kernel[type_of(lay), type_of(lay1)]
 
         # Snapshot u^n once; if a trial is rejected we restore from this.
         ctx.enqueue_copy(dst_buf=self.u_save.buf, src_buf=u.buf)
@@ -344,22 +407,21 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
                 TileTensor(self.err_buf.buf, lay),
                 dt, size, grid_dim=grid, block_dim=BLOCK,
             )
-            ctx.synchronize()
 
-            # Compute RMS scaled error on host.
-            var sum_sq: Real = 0.0
-            with self.err_buf.buf.map_to_host() as eh:
-                with u.buf.map_to_host() as uh:
-                    with self.u_save.buf.map_to_host() as u0h:
-                        for i in range(size):
-                            var u_n = u0h[i]
-                            var u_new = uh[i]
-                            var au_n = u_n if u_n >= Real(0.0) else -u_n
-                            var au_new = u_new if u_new >= Real(0.0) else -u_new
-                            var au_max = au_n if au_n > au_new else au_new
-                            var sc = atol + rtol * au_max
-                            var r = eh[i] / sc
-                            sum_sq += r * r
+            # GPU-side reduction: one block tree-reduces Σ (err/sc)^2 into
+            # sum_sq_buf[0]. Avoids three full-buffer device→host copies that
+            # were dominating cost on large meshes.
+            ctx.enqueue_function[k_sum](
+                TileTensor(self.err_buf.buf, lay),
+                TileTensor(self.u_save.buf, lay),
+                TileTensor(u.buf, lay),
+                TileTensor(self.sum_sq_buf, lay1),
+                atol, rtol, size,
+                grid_dim=1, block_dim=_DP45_REDUCE_BLOCK,
+            )
+            var sum_sq: Real
+            with self.sum_sq_buf.map_to_host() as sh:
+                sum_sq = sh[0]
             var err = (sum_sq / Real(size)) ** Real(0.5)
 
             # Standard PI-free controller: dt_new = dt · 0.9 · err^(-1/5),

@@ -4,13 +4,14 @@
 # operate on flat buffers and are reused unchanged. The driver supplies
 # `compute_rhs_fn` as a `@parameter def` closure.
 
-from std.gpu.host import DeviceContext
+from std.gpu.host import DeviceBuffer, DeviceContext
 from layout import TileTensor, Idx, row_major
 from std.math import ceildiv
 
 from warpxm.core.types import Real
 from warpxm.temporal.dormand_prince_1d import (
     _combine1, _combine2, _combine3, _combine4, _combine5, _dp45_error_kernel,
+    _dp45_sum_sq_kernel, _DP45_REDUCE_BLOCK,
 )
 from warpxm.variable.state_3d import DGState3D
 
@@ -28,6 +29,8 @@ struct DormandPrince45_3D[P: Int, NC: Int]:
     var k6: DGState3D[Self.P, Self.NC]
     var k7: DGState3D[Self.P, Self.NC]
     var err_buf: DGState3D[Self.P, Self.NC]
+    var sum_sq_buf: DeviceBuffer[Real.dtype]
+    """One-element scratch buffer for the GPU-side error-norm reduction."""
 
     def __init__(out self, var ctx: DeviceContext, num_elements: Int) raises:
         self.u_save = DGState3D[Self.P, Self.NC](ctx, num_elements)
@@ -40,6 +43,7 @@ struct DormandPrince45_3D[P: Int, NC: Int]:
         self.k6 = DGState3D[Self.P, Self.NC](ctx, num_elements)
         self.k7 = DGState3D[Self.P, Self.NC](ctx, num_elements)
         self.err_buf = DGState3D[Self.P, Self.NC](ctx, num_elements)
+        self.sum_sq_buf = ctx.enqueue_create_buffer[Real.dtype](1)
 
     def step[
         compute_rhs_fn: def(
@@ -155,7 +159,9 @@ struct DormandPrince45_3D[P: Int, NC: Int]:
         var size = u.buf_len
         var grid = ceildiv(size, BLOCK)
         var lay = row_major(Idx(size))
+        var lay1 = row_major[1]()
         comptime k_err = _dp45_error_kernel[type_of(lay)]
+        comptime k_sum = _dp45_sum_sq_kernel[type_of(lay), type_of(lay1)]
 
         ctx.enqueue_copy(dst_buf=self.u_save.buf, src_buf=u.buf)
 
@@ -172,21 +178,17 @@ struct DormandPrince45_3D[P: Int, NC: Int]:
                 TileTensor(self.err_buf.buf, lay),
                 dt, size, grid_dim=grid, block_dim=BLOCK,
             )
-            ctx.synchronize()
-
-            var sum_sq: Real = 0.0
-            with self.err_buf.buf.map_to_host() as eh:
-                with u.buf.map_to_host() as uh:
-                    with self.u_save.buf.map_to_host() as u0h:
-                        for i in range(size):
-                            var u_n = u0h[i]
-                            var u_new = uh[i]
-                            var au_n = u_n if u_n >= Real(0.0) else -u_n
-                            var au_new = u_new if u_new >= Real(0.0) else -u_new
-                            var au_max = au_n if au_n > au_new else au_new
-                            var sc = atol + rtol * au_max
-                            var r = eh[i] / sc
-                            sum_sq += r * r
+            ctx.enqueue_function[k_sum](
+                TileTensor(self.err_buf.buf, lay),
+                TileTensor(self.u_save.buf, lay),
+                TileTensor(u.buf, lay),
+                TileTensor(self.sum_sq_buf, lay1),
+                atol, rtol, size,
+                grid_dim=1, block_dim=_DP45_REDUCE_BLOCK,
+            )
+            var sum_sq: Real
+            with self.sum_sq_buf.map_to_host() as sh:
+                sum_sq = sh[0]
             var err = (sum_sq / Real(size)) ** Real(0.5)
 
             var safety = Real(0.9)

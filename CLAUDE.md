@@ -141,9 +141,6 @@ Remaining items are scale and performance:
 1. **Kinetic Vlasov-Maxwell solver** — different architecture
    (phase-space DG instead of configuration-space DG). Sizeable port.
 2. **MPI halo exchange** — multi-GPU support. Sizeable engineering.
-3. **GPU-side reduction for the DP45 error norm** — currently the
-   per-step error norm is computed via `map_to_host` of three full
-   state buffers; the bottleneck on very large meshes.
 
 ## Capability inventory
 
@@ -160,7 +157,11 @@ What's shipped (so it's easy to see at a glance):
   (`DormandPrince45_{1,2,3}D[P, NC]`). Fixed-dt `step` and adaptive
   `step_adaptive` (embedded 4th-order estimate, dt clipped to
   [0.2·dt, 5·dt], atol/rtol scaled RMS norm). On smooth problems
-  takes 6–40× fewer steps than fixed-dt SSPRK3.
+  takes 6–40× fewer steps than fixed-dt SSPRK3. Per-step error norm
+  is reduced fully on the GPU via a single-block tree-reduction
+  kernel (`_dp45_sum_sq_kernel` in `temporal/dormand_prince_1d.mojo`,
+  reused by 2D and 3D), so only one scalar lands on the host per
+  step — no `map_to_host` of the full state buffers.
 - **HLLD numerical flux** — shipped on `DGImhdSolver{2,3}D` and
   `DGImhdGLMSolver{2,3}D` (`USE_HLLD=True`, Miyoshi-Kusano 2005
   five-state solver). Permutation-based core
