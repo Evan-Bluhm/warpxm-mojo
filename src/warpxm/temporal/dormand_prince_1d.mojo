@@ -1,4 +1,12 @@
-# Dormand-Prince 5(4) embedded explicit Runge-Kutta stepper (fixed dt).
+# Dormand-Prince 5(4) embedded explicit Runge-Kutta stepper.
+#
+# Provides both fixed-dt `step` and adaptive `step_adaptive` on a
+# `DormandPrince45_1D[P, NC]` struct. The 2D and 3D wrappers
+# (`dormand_prince_{2,3}d.mojo`) import the dimension-agnostic combine
+# kernels (`_combine{1..5}`), per-cell error kernel
+# (`_dp45_error_kernel`), and single-block reduction kernel
+# (`_dp45_sum_sq_kernel`) from this file unchanged — the buffers are
+# flat in every dimension, so the kernels don't care.
 #
 # Standard DP45 Butcher tableau (Dormand & Prince 1980, JCAM 6(1)):
 #
@@ -18,8 +26,9 @@
 #
 #   b₅ = (35/384, 0, 500/1113, 125/192, -2187/6784, 11/84, 0)
 #
-# Fixed-dt first cut — adaptive dt selection will follow once the algebra
-# is verified.
+# The embedded 4th-order coefficients enter only via
+# `_dp45_error_kernel` (which writes the y_5 - y_4 difference); the
+# adaptive controller is in `step_adaptive`.
 
 from std.gpu import barrier, global_idx, thread_idx
 from std.gpu.host import DeviceBuffer, DeviceContext
