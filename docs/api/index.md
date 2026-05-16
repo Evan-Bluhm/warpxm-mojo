@@ -16,10 +16,15 @@ src/warpxm/
   basis/       # GLL nodal basis tables (P = 1..4)
   mesh/        # BlockMesh{1,2,3}D
   variable/    # DGState{1,2,3}D[P, NC]
-  apps/        # Physics modules: Advection, Euler, Maxwell, IMHD, IMHD-GLM
-  spatial/     # DG spatial solvers per (physics, dimension) + source kernels
-  temporal/    # SSPRK3 / Dormand-Prince steppers
-  adjusters/   # Moe-Rossmanith limiter, Zhang-Shu positivity preserver
+  apps/        # Physics modules — one canonical file per physics
+               # (advection, euler, maxwell, imhd, imhd_glm) with per-dim
+               # shims aliasing the struct as <Phys>1D / 2D / 3D.
+  spatial/     # Shared dg_core_{1,2,3}d.mojo templates + thin per-physics
+               # dg_<phys>_<N>d.mojo wrappers. Plus source kernels.
+  temporal/    # SSPRK3 / Dormand-Prince steppers — all dimension-agnostic
+               # via the closure pattern.
+  adjusters/   # Moe-Rossmanith limiter, Zhang-Shu positivity preserver —
+               # NDIM-parametric for 2D + 3D.
   driver/      # VTU writers + FrameWriter
 ```
 
@@ -44,5 +49,5 @@ src/warpxm/
   `numerical_flux_static` (Rusanov), `numerical_flux_hlld_static`
   (MHD only). Used by DG kernels.
 * Index constants: each physics module exports `IDX_*` constants
-  (e.g. `IDX_RHO`, `IDX_MX`, `IDX_BX`) and an `NC` constant. 3D
-  modules re-use 2D index constants — no `IDX_*_3D`.
+  (e.g. `IDX_RHO`, `IDX_MX`, `IDX_BX`) and an `NC` constant. Single
+  source of truth per physics — no per-dimension copies.
