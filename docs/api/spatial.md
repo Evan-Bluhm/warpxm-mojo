@@ -29,27 +29,32 @@ def compute_rhs(
 with the per-physics overload of the kernel doing the volume + surface
 work.
 
-### Generic 1D
+### Advection launchers (1D / 2D / 3D)
 
 ```mojo
 from warpxm.spatial.dg_1d import DGSpatialSolver1D
-var spatial = DGSpatialSolver1D[P, NC](app)
+from warpxm.spatial.dg_2d import DGSpatialSolver2D
+from warpxm.spatial.dg_3d import DGSpatialSolver3D
+
+var spatial = DGSpatialSolver1D[P, NC](app)   # app: Advection[NC]
 ```
 
-Generic in `NC` and in the app type — works for advection (NC=1 or
-multi-component) and 1D Euler (NC=5). Used by the generic
-`SSPRK3` stepper and the 1D DP45.
+NC-parametric (multi-component advection works), advection-only —
+each wraps an `Advection[NC]` and dispatches to the matching
+advection RHS kernel.
 
-### Per-physics 2D / 3D
+### Per-physics 1D / 2D / 3D launchers
 
 ```mojo
+from warpxm.spatial.dg_euler_1d import DGEulerSolver1D
 from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
 from warpxm.spatial.dg_euler_3d import DGEulerSolver3D
 
+from warpxm.spatial.dg_maxwell_1d import DGMaxwellSolver1D
 from warpxm.spatial.dg_maxwell_2d import DGMaxwellSolver2D
 from warpxm.spatial.dg_maxwell_3d import DGMaxwellSolver3D
 
-from warpxm.spatial.dg_imhd_2d import DGImhdSolver2D
+from warpxm.spatial.dg_imhd_2d import DGImhdSolver2D   # no 1D MHD
 from warpxm.spatial.dg_imhd_3d import DGImhdSolver3D
 
 from warpxm.spatial.dg_imhd_glm_2d import DGImhdGLMSolver2D
