@@ -13,10 +13,12 @@ smooth-problem benchmark for the DG kernels.
 from warpxm.apps.advection import Advection
 ```
 
-There are dimension-specific structs `Advection[NC]`,
-`Advection[NC]`, `Advection[NC]`, each parameterised by the
-component count. For multi-component advection (e.g., colours) the same
-constant velocity is applied to every component.
+`Advection[NC: Int]` is dimension-agnostic — the same struct serves 1D,
+2D, and 3D and is parameterised only by the component count. The DG
+launcher per dimension supplies the face normal, and the app dots the
+struct's `velocity_x`, `velocity_y`, `velocity_z` against it. For
+multi-component advection (e.g., colours) the same constant velocity
+is applied to every component.
 
 ## State layout
 

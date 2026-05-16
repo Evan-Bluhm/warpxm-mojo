@@ -25,7 +25,6 @@ $$E = \frac{P}{\gamma - 1} + \tfrac{1}{2}\rho|\mathbf{u}|^{2} + \tfrac{1}{2}|\ma
 
 ```mojo
 from warpxm.apps.imhd import IMHD
-from warpxm.apps.imhd import IMHD
 ```
 
 ```mojo
@@ -60,12 +59,22 @@ from warpxm.apps.imhd import (
 
 ## Boundary conditions
 
-| BC | Behaviour |
-| -- | --------- |
+3D MHD dispatches on each `bc_kind`:
+
+| BC | 3D Behaviour |
+| -- | ------------ |
 | Periodic | Implicit. |
 | `BC_COPYOUT` | Zero-gradient outflow. |
-| `BC_WALL_FREESLIP` | Reflective wall. |
-| `BC_PEC_WALL` | Perfectly-conducting wall (tangential E vanishes; same effect as a perfect conductor on B). |
+| `BC_WALL_FREESLIP` | Reflective wall (normal momentum flipped). |
+| `BC_PEC_WALL` | Perfectly-conducting wall (tangential E vanishes; normal momentum + normal B flipped). |
+
+**2D caveat:** the 2D MHD kernel currently falls through to copyout for
+every non-periodic `bc_kind` (see
+[`_apply_bc_imhd`](https://github.com/your-fork/warpxm-mojo/blob/main/src/warpxm/spatial/dg_imhd_2d.mojo)).
+The 2D regression tests pass `BC_WALL_FREESLIP` only on planes where
+the normal momentum is already zero by construction (e.g. Brio-Wu
+y-walls), so copyout coincides with free-slip. If a future 2D test
+needs genuine wall behaviour, port the 3D dispatch into the 2D wrapper.
 
 ## Numerical flux
 

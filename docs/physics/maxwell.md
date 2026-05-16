@@ -16,7 +16,6 @@ and 3D problems.
 
 ```mojo
 from warpxm.apps.maxwell import Maxwell
-from warpxm.apps.maxwell import Maxwell
 ```
 
 Constructor:

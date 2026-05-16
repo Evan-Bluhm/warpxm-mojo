@@ -22,8 +22,6 @@ $$
 
 ```mojo
 from warpxm.apps.euler import Euler
-from warpxm.apps.euler import Euler
-from warpxm.apps.euler import Euler
 ```
 
 The constructor parameters:
