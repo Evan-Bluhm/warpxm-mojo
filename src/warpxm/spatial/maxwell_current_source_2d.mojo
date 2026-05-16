@@ -19,8 +19,8 @@ from std.gpu.host import DeviceContext
 from std.math import ceildiv
 from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.euler_2d import EULER_NC, IDX_MX, IDX_MY, IDX_MZ
-from warpxm.apps.maxwell_2d import MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ
+from warpxm.apps.euler import EULER_NC, IDX_MX, IDX_MY, IDX_MZ
+from warpxm.apps.maxwell import MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ
 from warpxm.core.types import Real, WXM_DTYPE
 from warpxm.variable.state_2d import DGState2D
 

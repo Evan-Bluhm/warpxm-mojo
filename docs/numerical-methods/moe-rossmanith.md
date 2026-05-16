@@ -88,7 +88,7 @@ the Moe-Rossmanith limiter.
 Usage:
 
 ```mojo
-from warpxm.adjusters.moe_rossmanith_2d import MoeRossmanith2D
+from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
 
 var limiter = MoeRossmanith2D[P, MHD_NC](ctx, mesh.num_elements)
 # Inside the stepper, after each RK stage:

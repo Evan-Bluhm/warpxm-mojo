@@ -66,7 +66,7 @@ host[b + IDX_EZ] = sin(PI * x) * sin(PI * y)
 # everything else = 0
 ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-var app = Maxwell2D(c_light=1.0, cfl_max=0.5)
+var app = Maxwell(c_light=1.0, cfl_max=0.5)
 var spatial = DGMaxwellSolver2D[P](app)
 var stepper = SSPRK3_2D[P, MAXWELL_NC](ctx, mesh.num_elements)
 

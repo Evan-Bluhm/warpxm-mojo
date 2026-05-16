@@ -5,7 +5,7 @@ incompressible-looking IC that develops complex shock-interaction
 structure over time. This tutorial runs the full
 `examples/imhd_orszag_tang_2d_vtu.mojo` driver, which exercises:
 
-* `ImhdGLM2D` with Dedner divergence cleaning,
+* `ImhdGLM` with Dedner divergence cleaning,
 * `DGImhdGLMSolver2D` with Rusanov flux (HLLD is a one-line switch),
 * `MoeRossmanith2D[P, MHD_GLM_NC]` slope limiter,
 * `SSPRK3_2D[P, MHD_GLM_NC]` for time stepping, with the GLM damping
@@ -84,7 +84,7 @@ magnetic), B-components, and `IDX_PSI = 0`.
 ### Stepper
 
 ```mojo
-var app = ImhdGLM2D(
+var app = ImhdGLM(
     gas_gamma=Real(5.0/3.0),
     min_density=Real(1e-12),
     min_pressure=Real(1e-12),
@@ -158,7 +158,7 @@ Stone-Gardiner all show it.
 * **Mesh refinement**: $\text{NX} = 128$ — the shock network is much
   cleaner, and `psi^{2}` becomes a more aggressive lower bound on the
   divergence error magnitude.
-* **Removing GLM**: substitute `IMHD2D` for `ImhdGLM2D`, drop the
+* **Removing GLM**: substitute `IMHD` for `ImhdGLM`, drop the
   `apply_glm_damping_2d` line from `compute_rhs`, and switch
   `MHD_GLM_NC` → `MHD_NC` throughout. The simulation will diverge
   within ~0.1 time units as $\nabla\cdot\mathbf{B}$ grows.

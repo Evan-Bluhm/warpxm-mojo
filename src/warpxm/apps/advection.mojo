@@ -127,7 +127,3 @@ struct Advection[NC: Int](ImplicitlyCopyable, Movable):
         var nc = velocity * normal
         var absc = fabs(nc)
         return (cfl_max * dxn / absc) if absc > WXM_TINY else WXM_INF
-
-
-# Aliases for the per-dim name pattern.
-comptime Advection1D = Advection

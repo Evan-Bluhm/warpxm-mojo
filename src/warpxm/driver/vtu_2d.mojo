@@ -13,7 +13,7 @@
 
 from std.gpu.host import DeviceContext
 
-from warpxm.apps.euler_2d import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_E
+from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_E
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real
 from warpxm.mesh.block_2d import BlockMesh2D

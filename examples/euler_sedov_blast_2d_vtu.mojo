@@ -25,10 +25,10 @@ from std.math import exp
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 
-from warpxm.adjusters.moe_rossmanith_2d import MoeRossmanith2D
-from warpxm.adjusters.positivity_euler_2d import PositivityEuler2D
-from warpxm.apps.euler_2d import (
-    Euler2D, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
+from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
+from warpxm.adjusters.positivity_euler import PositivityEuler2D
+from warpxm.apps.euler import (
+    Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs
@@ -106,7 +106,7 @@ def main() raises:
                     mass_0 += jw * host[b + IDX_RHO]
                     e_0 += jw * host[b + IDX_E]
 
-    var app = Euler2D(
+    var app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )

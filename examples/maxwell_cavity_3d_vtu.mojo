@@ -23,8 +23,8 @@ from std.math import cos, sin
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 
-from warpxm.apps.maxwell_3d import Maxwell3D
-from warpxm.apps.maxwell_2d import (
+from warpxm.apps.maxwell import Maxwell
+from warpxm.apps.maxwell import (
     MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -90,7 +90,7 @@ def main() raises:
                             host[b + IDX_BZ] = Real(0.0)
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = Maxwell3D(c_light=C_LIGHT, cfl_max=Real(0.5))
+    var app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
     var spatial = DGMaxwellSolver3D[P](app)
     var stepper = SSPRK3_3D[P, MAXWELL_NC](ctx, mesh.num_elements)
     var fw = FrameWriter(BASENAME, OUTPUT_DIR)

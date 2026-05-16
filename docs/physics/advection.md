@@ -10,11 +10,11 @@ smooth-problem benchmark for the DG kernels.
 ## Module
 
 ```mojo
-from warpxm.apps.advection import Advection1D
+from warpxm.apps.advection import Advection
 ```
 
-There are dimension-specific structs `Advection1D[NC]`,
-`Advection2D[NC]`, `Advection3D[NC]`, each parameterised by the
+There are dimension-specific structs `Advection[NC]`,
+`Advection[NC]`, `Advection[NC]`, each parameterised by the
 component count. For multi-component advection (e.g., colours) the same
 constant velocity is applied to every component.
 

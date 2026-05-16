@@ -87,7 +87,7 @@ problem (two-rarefaction near-vacuum), because the cell mean is the
 Usage (mirrors the limiter):
 
 ```mojo
-from warpxm.adjusters.positivity_euler_2d import PositivityEuler2D
+from warpxm.adjusters.positivity_euler import PositivityEuler2D
 from warpxm.temporal.ssprk3_2d import SSPRK3_2D
 
 var positivity = PositivityEuler2D[P](

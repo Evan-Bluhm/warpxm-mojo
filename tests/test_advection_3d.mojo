@@ -6,7 +6,7 @@
 # (after one full period in each direction = same as one full period in t
 # because every direction wraps), so at t = 1 the IC returns exactly.
 #
-# Validates the whole 3D stack: BlockMesh3D, DGState3D, Advection3D,
+# Validates the whole 3D stack: BlockMesh3D, DGState3D, Advection,
 # DGSpatialSolver3D, SSPRK3_3D. Mass conservation falls out of
 # periodic + flux-conservative DG; L2 closure against the IC is the main
 # accuracy check.
@@ -16,7 +16,7 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.advection_3d import Advection3D
+from warpxm.apps.advection import Advection
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real, TWO_PI
@@ -69,7 +69,7 @@ def main() raises:
                             )
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = Advection3D[NC](
+    var app = Advection[NC](
         velocity_x=Real(1.0), velocity_y=Real(1.0), velocity_z=Real(1.0),
         cfl_max=Real(1.0),
     )

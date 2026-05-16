@@ -47,14 +47,14 @@ warpxm-mojo replaces that entirely. An "input file" is now a Mojo
 program that imports the solver modules and calls into them:
 
 ```mojo
-from warpxm.apps.euler_2d import Euler2D, EULER_NC
+from warpxm.apps.euler import Euler, EULER_NC
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
 from warpxm.temporal.ssprk3_2d import SSPRK3_2D
 ...
 def main() raises:
     var mesh = BlockMesh2D[P](ctx, ...)
-    var app = Euler2D(gas_gamma=1.4, ...)
+    var app = Euler(gas_gamma=1.4, ...)
     var spatial = DGEulerSolver2D[P](app)
     ...
 ```

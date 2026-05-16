@@ -10,8 +10,8 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.imhd_glm_3d import ImhdGLM3D, MHD_GLM_NC_3D, IDX_PSI_3D
-from warpxm.apps.imhd_2d import (
+from warpxm.apps.imhd_glm import ImhdGLM, MHD_GLM_NC, IDX_PSI
+from warpxm.apps.imhd import (
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -43,7 +43,7 @@ def main() raises:
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, nz=NZ,
     )
-    var q = DGState3D[P, MHD_GLM_NC_3D](ctx, mesh.num_elements)
+    var q = DGState3D[P, MHD_GLM_NC](ctx, mesh.num_elements)
 
     var P1 = NodalBasis1D[P].num_nodes
     var ref_nodes = NodalBasis1D[P].nodes()
@@ -73,7 +73,7 @@ def main() raises:
                             var bsq = Bx_bump * Bx_bump
                             var E_tot = pp / (GAMMA - Real(1.0)) + Real(0.5) * bsq
                             var n = kn * P1 * P1 + jn * P1 + in_
-                            var b = (e * nodes_per_elem + n) * MHD_GLM_NC_3D
+                            var b = (e * nodes_per_elem + n) * MHD_GLM_NC
                             host[b + IDX_RHO] = rho
                             host[b + IDX_MX] = Real(0.0)
                             host[b + IDX_MY] = Real(0.0)
@@ -82,16 +82,16 @@ def main() raises:
                             host[b + IDX_BX] = Bx_bump
                             host[b + IDX_BY] = Real(0.0)
                             host[b + IDX_BZ] = Real(0.0)
-                            host[b + IDX_PSI_3D] = Real(0.0)
+                            host[b + IDX_PSI] = Real(0.0)
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = ImhdGLM3D(
+    var app = ImhdGLM(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
         c_h=C_H, c_p_sq=C_P_SQ,
     )
     var spatial = DGImhdGLMSolver3D[P, USE_HLLD=True](app)
-    var stepper = SSPRK3_3D[P, MHD_GLM_NC_3D](ctx, mesh.num_elements)
+    var stepper = SSPRK3_3D[P, MHD_GLM_NC](ctx, mesh.num_elements)
 
     var jv = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
 
@@ -99,14 +99,14 @@ def main() raises:
 
     @parameter
     def compute_rhs(
-        mut q_in: DGState3D[P, MHD_GLM_NC_3D],
-        mut q_out: DGState3D[P, MHD_GLM_NC_3D],
+        mut q_in: DGState3D[P, MHD_GLM_NC],
+        mut q_out: DGState3D[P, MHD_GLM_NC],
     ) raises:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
-        apply_glm_damping_3d[P, MHD_GLM_NC_3D](ctx, q_in, q_out, C_H, C_P_SQ)
+        apply_glm_damping_3d[P, MHD_GLM_NC](ctx, q_in, q_out, C_H, C_P_SQ)
 
     @parameter
-    def no_adjust(mut q_: DGState3D[P, MHD_GLM_NC_3D]) raises:
+    def no_adjust(mut q_: DGState3D[P, MHD_GLM_NC]) raises:
         pass
 
     var t: Real = 0.0
@@ -125,9 +125,9 @@ def main() raises:
                         for jn in range(P1):
                             for in_ in range(P1):
                                 var n = kn * P1 * P1 + jn * P1 + in_
-                                var b = (e * nodes_per_elem + n) * MHD_GLM_NC_3D
+                                var b = (e * nodes_per_elem + n) * MHD_GLM_NC
                                 var jw = jv * weights[in_] * weights[jn] * weights[kn]
-                                psi2_max += jw * h[b + IDX_PSI_3D] * h[b + IDX_PSI_3D]
+                                psi2_max += jw * h[b + IDX_PSI] * h[b + IDX_PSI]
     print("HLLD t =", t, ": ∫ψ²  =", psi2_max, "  (charging done)")
 
     while t < t_final - Real(0.5) * DT:
@@ -145,9 +145,9 @@ def main() raises:
                         for jn in range(P1):
                             for in_ in range(P1):
                                 var n = kn * P1 * P1 + jn * P1 + in_
-                                var b = (e * nodes_per_elem + n) * MHD_GLM_NC_3D
+                                var b = (e * nodes_per_elem + n) * MHD_GLM_NC
                                 var jw = jv * weights[in_] * weights[jn] * weights[kn]
-                                psi2_end += jw * h[b + IDX_PSI_3D] * h[b + IDX_PSI_3D]
+                                psi2_end += jw * h[b + IDX_PSI] * h[b + IDX_PSI]
 
     print("HLLD t =", t, ": ∫ψ²  =", psi2_end)
     print("HLLD ψ² decay ratio (end / charging peak):", psi2_end / psi2_max)

@@ -11,8 +11,8 @@ from std.collections import InlineArray
 from std.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.euler_2d import (
-    Euler2D, EULER_NC,
+from warpxm.apps.euler import (
+    Euler, EULER_NC,
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
 )
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_WALL_FREESLIP
@@ -65,11 +65,11 @@ def _euler_rhs_kernel_2d[
 ):
     @parameter
     def flux_x(qn: InlineArray[Real, EULER_NC]) -> InlineArray[Real, EULER_NC]:
-        return Euler2D.internal_flux_x_static(qn, gamma, rho_min, press_min)
+        return Euler.internal_flux_x_static(qn, gamma, rho_min, press_min)
 
     @parameter
     def flux_y(qn: InlineArray[Real, EULER_NC]) -> InlineArray[Real, EULER_NC]:
-        return Euler2D.internal_flux_y_static(qn, gamma, rho_min, press_min)
+        return Euler.internal_flux_y_static(qn, gamma, rho_min, press_min)
 
     @parameter
     def num_flux(
@@ -77,7 +77,7 @@ def _euler_rhs_kernel_2d[
         q_r: InlineArray[Real, EULER_NC],
         nx: Real, ny: Real,
     ) -> InlineArray[Real, EULER_NC]:
-        return Euler2D.numerical_flux_static(
+        return Euler.numerical_flux_static(
             q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min,
         )
 
@@ -100,9 +100,9 @@ def _euler_rhs_kernel_2d[
 struct DGEulerSolver2D[P: Int]:
     """Host-side launcher for the 2D 5-moment Euler DG kernel."""
 
-    var app: Euler2D
+    var app: Euler
 
-    def __init__(out self, app: Euler2D):
+    def __init__(out self, app: Euler):
         self.app = app
 
     def compute_rhs(

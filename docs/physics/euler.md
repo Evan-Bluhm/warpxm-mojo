@@ -21,15 +21,15 @@ $$
 ## Module
 
 ```mojo
-from warpxm.apps.euler_1d import Euler1D
-from warpxm.apps.euler_2d import Euler2D
-from warpxm.apps.euler_3d import Euler3D
+from warpxm.apps.euler import Euler
+from warpxm.apps.euler import Euler
+from warpxm.apps.euler import Euler
 ```
 
 The constructor parameters:
 
 ```mojo
-var app = Euler2D(
+var app = Euler(
     gas_gamma=Real(1.4),
     min_density=Real(1e-12),
     min_pressure=Real(1e-12),
@@ -45,7 +45,7 @@ which is the correct way to enforce ρ > 0, P > 0.
 ## State layout
 
 ```mojo
-from warpxm.apps.euler_2d import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
+from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 # EULER_NC = 5
 ```
 
@@ -91,7 +91,7 @@ but isn't shipped here yet.
 For shock problems, wrap with the Moe-Rossmanith slope limiter:
 
 ```mojo
-from warpxm.adjusters.moe_rossmanith_2d import MoeRossmanith2D
+from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
 from warpxm.temporal.ssprk3_2d import SSPRK3_2D
 
 var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
@@ -106,7 +106,7 @@ For strong shocks where the limiter alone can't keep ρ, P positive,
 add the Zhang-Shu positivity preserver into the same `adjust` closure:
 
 ```mojo
-from warpxm.adjusters.positivity_euler_2d import PositivityEuler2D
+from warpxm.adjusters.positivity_euler import PositivityEuler2D
 
 var positivity = PositivityEuler2D[P](mesh.num_elements, gamma=GAMMA)
 

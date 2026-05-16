@@ -12,7 +12,7 @@ from std.gpu.host import DeviceContext
 from std.math import ceildiv
 from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.imhd_glm_2d import MHD_GLM_NC, IDX_PSI
+from warpxm.apps.imhd_glm import MHD_GLM_NC, IDX_PSI
 from warpxm.core.types import Real, WXM_DTYPE
 from warpxm.variable.state_2d import DGState2D
 

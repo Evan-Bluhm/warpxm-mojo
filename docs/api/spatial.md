@@ -60,7 +60,7 @@ Each is parameterised on the polynomial order `P` and takes the
 matching app struct as an argument:
 
 ```mojo
-var app = IMHD2D(gas_gamma=Real(5.0/3.0), ...)
+var app = IMHD(gas_gamma=Real(5.0/3.0), ...)
 var spatial = DGImhdSolver2D[P](app)
 ```
 

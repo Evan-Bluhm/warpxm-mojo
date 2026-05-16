@@ -13,7 +13,7 @@
 
 from std.gpu.host import DeviceContext
 
-from warpxm.apps.euler_2d import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
+from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 from warpxm.core.types import Real
 from warpxm.mesh.block_3d import BlockMesh3D
 from warpxm.variable.state_3d import DGState3D

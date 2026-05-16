@@ -21,8 +21,8 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.maxwell_2d import (
-    Maxwell2D, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
+from warpxm.apps.maxwell import (
+    Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import sqrt
@@ -77,7 +77,7 @@ def main() raises:
                     host[b + IDX_BZ] = Real(0.0)
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = Maxwell2D(c_light=C_LIGHT, cfl_max=Real(0.5))
+    var app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
     var spatial = DGMaxwellSolver2D[P](app)
     var stepper = SSPRK3_2D[P, MAXWELL_NC](ctx, mesh.num_elements)
 

@@ -5,7 +5,7 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.advection_2d import Advection2D
+from warpxm.apps.advection import Advection
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_2d import BlockMesh2D
@@ -51,7 +51,7 @@ def main() raises:
                     )
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = Advection2D[NC](
+    var app = Advection[NC](
         velocity_x=Real(1.0), velocity_y=Real(1.0), cfl_max=Real(1.0)
     )
     var spatial = DGSpatialSolver2D[P, NC](app)

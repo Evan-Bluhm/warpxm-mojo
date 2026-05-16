@@ -10,8 +10,8 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.euler_2d import (
-    Euler2D, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
+from warpxm.apps.euler import (
+    Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs
@@ -67,7 +67,7 @@ def main() raises:
                     host[b + IDX_E] = Real(1.0) / (GAMMA - Real(1.0)) + ke
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = Euler2D(
+    var app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )

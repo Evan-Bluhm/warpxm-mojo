@@ -18,7 +18,7 @@ from layout import TileTensor, TensorLayout, Idx, row_major, stack_allocation
 
 # Layout imports already cover what we need on the host side.
 
-from warpxm.apps.advection_3d import Advection3D
+from warpxm.apps.advection import Advection
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_3d import (
@@ -84,9 +84,9 @@ def _advection_rhs_kernel_3d[
     ](row_major[P1 * P1 * P1, NC, 3]())
 
     var q_n = _load_node[P, NC](q, e, local_n)
-    var fx_n = Advection3D[NC].internal_flux_x_static(q_n, velocity_x)
-    var fy_n = Advection3D[NC].internal_flux_y_static(q_n, velocity_y)
-    var fz_n = Advection3D[NC].internal_flux_z_static(q_n, velocity_z)
+    var fx_n = Advection[NC].internal_flux_x_static(q_n, velocity_x)
+    var fy_n = Advection[NC].internal_flux_y_static(q_n, velocity_y)
+    var fz_n = Advection[NC].internal_flux_z_static(q_n, velocity_z)
     comptime for c in range(NC):
         f_shared[local_n, c, 0] = rebind[f_shared.ElementType](fx_n[c])
         f_shared[local_n, c, 1] = rebind[f_shared.ElementType](fy_n[c])
@@ -137,7 +137,7 @@ def _advection_rhs_kernel_3d[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_LEFT_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
         var q_nbr = _load_node[P, NC](q, nbr, kn * P1 * P1 + jn * P1 + P)
-        var f_star = Advection3D[NC].numerical_flux_static(
+        var f_star = Advection[NC].numerical_flux_static(
             q_nbr, q_n, Real(1.0), Real(0.0), Real(0.0),
             velocity_x, velocity_y, velocity_z,
         )
@@ -148,7 +148,7 @@ def _advection_rhs_kernel_3d[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_RIGHT_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
         var q_nbr = _load_node[P, NC](q, nbr, kn * P1 * P1 + jn * P1 + 0)
-        var f_star = Advection3D[NC].numerical_flux_static(
+        var f_star = Advection[NC].numerical_flux_static(
             q_n, q_nbr, Real(1.0), Real(0.0), Real(0.0),
             velocity_x, velocity_y, velocity_z,
         )
@@ -159,7 +159,7 @@ def _advection_rhs_kernel_3d[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_BOTTOM_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
         var q_nbr = _load_node[P, NC](q, nbr, kn * P1 * P1 + P * P1 + in_)
-        var f_star = Advection3D[NC].numerical_flux_static(
+        var f_star = Advection[NC].numerical_flux_static(
             q_nbr, q_n, Real(0.0), Real(1.0), Real(0.0),
             velocity_x, velocity_y, velocity_z,
         )
@@ -170,7 +170,7 @@ def _advection_rhs_kernel_3d[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_TOP_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
         var q_nbr = _load_node[P, NC](q, nbr, kn * P1 * P1 + 0 * P1 + in_)
-        var f_star = Advection3D[NC].numerical_flux_static(
+        var f_star = Advection[NC].numerical_flux_static(
             q_n, q_nbr, Real(0.0), Real(1.0), Real(0.0),
             velocity_x, velocity_y, velocity_z,
         )
@@ -181,7 +181,7 @@ def _advection_rhs_kernel_3d[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_DOWN_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
         var q_nbr = _load_node[P, NC](q, nbr, P * P1 * P1 + jn * P1 + in_)
-        var f_star = Advection3D[NC].numerical_flux_static(
+        var f_star = Advection[NC].numerical_flux_static(
             q_nbr, q_n, Real(0.0), Real(0.0), Real(1.0),
             velocity_x, velocity_y, velocity_z,
         )
@@ -192,7 +192,7 @@ def _advection_rhs_kernel_3d[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_UP_3D]))
         var nbr = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
         var q_nbr = _load_node[P, NC](q, nbr, 0 * P1 * P1 + jn * P1 + in_)
-        var f_star = Advection3D[NC].numerical_flux_static(
+        var f_star = Advection[NC].numerical_flux_static(
             q_n, q_nbr, Real(0.0), Real(0.0), Real(1.0),
             velocity_x, velocity_y, velocity_z,
         )
@@ -213,9 +213,9 @@ def _advection_rhs_kernel_3d[
 struct DGSpatialSolver3D[P: Int, NC: Int]:
     """Host-side launcher for the 3D advection DG kernel."""
 
-    var app: Advection3D[Self.NC]
+    var app: Advection[Self.NC]
 
-    def __init__(out self, app: Advection3D[Self.NC]):
+    def __init__(out self, app: Advection[Self.NC]):
         self.app = app
 
     def compute_rhs(

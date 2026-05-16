@@ -29,11 +29,11 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.adjusters.moe_rossmanith_2d import MoeRossmanith2D
-from warpxm.apps.imhd_glm_2d import (
-    ImhdGLM2D, MHD_GLM_NC, IDX_PSI,
+from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
+from warpxm.apps.imhd_glm import (
+    ImhdGLM, MHD_GLM_NC, IDX_PSI,
 )
-from warpxm.apps.imhd_2d import (
+from warpxm.apps.imhd import (
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -108,7 +108,7 @@ def main() raises:
                     host[b + IDX_PSI] = Real(0.0)
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = ImhdGLM2D(
+    var app = ImhdGLM(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
         c_h=C_H, c_p_sq=C_P_SQ,

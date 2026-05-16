@@ -7,8 +7,8 @@ from std.gpu.host import DeviceContext
 from std.math import ceildiv
 from layout import TileTensor, Idx, row_major
 
-from warpxm.apps.euler_2d import EULER_NC
-from warpxm.apps.maxwell_2d import MAXWELL_NC
+from warpxm.apps.euler import EULER_NC
+from warpxm.apps.maxwell import MAXWELL_NC
 from warpxm.core.types import Real
 from warpxm.spatial.maxwell_current_source_2d import _current_source_kernel_2d
 from warpxm.variable.state_3d import DGState3D

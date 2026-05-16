@@ -15,7 +15,7 @@ from std.math import ceildiv, sin
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 
-from warpxm.apps.advection import Advection1D
+from warpxm.apps.advection import Advection
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_1d import BlockMesh1D
@@ -90,7 +90,7 @@ def main() raises:
     init_sine(ctx, q, mesh)
     dump_first_few("Initial q (first nodes):", ctx, q)
 
-    var app = Advection1D[1](velocity_x=VELOCITY, cfl_max=Real(1.0))
+    var app = Advection[1](velocity_x=VELOCITY, cfl_max=Real(1.0))
     var spatial = DGSpatialSolver1D[P, 1](app)
     var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
 

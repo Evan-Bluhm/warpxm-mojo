@@ -22,11 +22,11 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.adjusters.moe_rossmanith_3d import MoeRossmanith3D
-from warpxm.apps.euler_2d import (
+from warpxm.adjusters.moe_rossmanith import MoeRossmanith3D
+from warpxm.apps.euler import (
     EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
 )
-from warpxm.apps.euler_3d import Euler3D
+from warpxm.apps.euler import Euler
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real
@@ -106,7 +106,7 @@ def main() raises:
                             var jw = jv * weights[in_] * weights[jn] * weights[kn]
                             mass_0 += jw * host[b + IDX_RHO]
 
-    var app = Euler3D(
+    var app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )

@@ -9,7 +9,7 @@ from std.collections import InlineArray
 from std.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.advection_2d import Advection2D
+from warpxm.apps.advection import Advection
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_core_2d import _dg_2d_compute_rhs_core
@@ -46,11 +46,11 @@ def _advection_rhs_kernel_2d[
 ):
     @parameter
     def flux_x(qn: InlineArray[Real, NC]) -> InlineArray[Real, NC]:
-        return Advection2D[NC].internal_flux_x_static(qn, velocity_x)
+        return Advection[NC].internal_flux_x_static(qn, velocity_x)
 
     @parameter
     def flux_y(qn: InlineArray[Real, NC]) -> InlineArray[Real, NC]:
-        return Advection2D[NC].internal_flux_y_static(qn, velocity_y)
+        return Advection[NC].internal_flux_y_static(qn, velocity_y)
 
     @parameter
     def num_flux(
@@ -58,7 +58,7 @@ def _advection_rhs_kernel_2d[
         q_r: InlineArray[Real, NC],
         nx: Real, ny: Real,
     ) -> InlineArray[Real, NC]:
-        return Advection2D[NC].numerical_flux_static(
+        return Advection[NC].numerical_flux_static(
             q_l, q_r, nx, ny, Real(0.0),
             velocity_x, velocity_y, Real(0.0),
         )
@@ -82,9 +82,9 @@ def _advection_rhs_kernel_2d[
 struct DGSpatialSolver2D[P: Int, NC: Int]:
     """Host-side launcher for the 2D advection DG kernel."""
 
-    var app: Advection2D[Self.NC]
+    var app: Advection[Self.NC]
 
-    def __init__(out self, app: Advection2D[Self.NC]):
+    def __init__(out self, app: Advection[Self.NC]):
         self.app = app
 
     def compute_rhs(

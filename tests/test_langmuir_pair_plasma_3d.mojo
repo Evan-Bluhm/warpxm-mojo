@@ -11,14 +11,14 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.euler_2d import (
+from warpxm.apps.euler import (
     EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
 )
-from warpxm.apps.euler_3d import Euler3D
-from warpxm.apps.maxwell_2d import (
+from warpxm.apps.euler import Euler
+from warpxm.apps.maxwell import (
     MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
-from warpxm.apps.maxwell_3d import Maxwell3D
+from warpxm.apps.maxwell import Maxwell
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs, sqrt
 from warpxm.core.types import Real, TWO_PI
@@ -122,11 +122,11 @@ def main() raises:
                             mass1_0 += jw * f1h[fb + IDX_RHO]
                             mass2_0 += jw * f2h[fb + IDX_RHO]
 
-    var fluid_app = Euler3D(
+    var fluid_app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-15), cfl_max=Real(0.5),
     )
-    var maxwell_app = Maxwell3D(c_light=Real(1.0), cfl_max=Real(0.5))
+    var maxwell_app = Maxwell(c_light=Real(1.0), cfl_max=Real(0.5))
     var fluid_spatial = DGEulerSolver3D[P](fluid_app)
     var maxwell_spatial = DGMaxwellSolver3D[P](maxwell_app)
     var stepper = SSPRK3_Plasma_3D[P](ctx, mesh.num_elements)

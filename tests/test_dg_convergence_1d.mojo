@@ -11,7 +11,7 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.advection import Advection1D
+from warpxm.apps.advection import Advection
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_1d import BlockMesh1D
@@ -39,7 +39,7 @@ def _one_run[P: Int](
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
     var spatial = DGSpatialSolver1D[P, 1](
-        Advection1D[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
+        Advection[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
     )
     var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
 

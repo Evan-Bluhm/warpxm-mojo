@@ -8,9 +8,10 @@ value toward the cell mean with a per-element $\theta \in [0, 1]$. The
 cell mean is invariant, so mass / momentum / energy / B-field are
 exactly conserved.
 
-Each adjuster has one canonical NDIM-parametric implementation; per-dim
-shim files alias the dimension-specific struct names for back-compat
-with existing imports.
+Each adjuster has one canonical NDIM-parametric implementation; the
+per-dim launcher structs (e.g. `PositivityEuler1D`, `PositivityEuler2D`,
+`PositivityEuler3D`) all live in the same canonical file as thin
+wrappers over the shared kernel.
 
 ## Moe-Rossmanith limiter
 

@@ -20,9 +20,9 @@ from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.adjusters.moe_rossmanith_1d import MoeRossmanith1D
-from warpxm.adjusters.positivity_euler_1d import PositivityEuler1D
-from warpxm.apps.euler_1d import Euler1D
-from warpxm.apps.euler_2d import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
+from warpxm.adjusters.positivity_euler import PositivityEuler1D
+from warpxm.apps.euler import Euler
+from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_COPYOUT
 from warpxm.core.math_compat import fabs
@@ -75,7 +75,7 @@ def main() raises:
             host[b + IDX_E] = E_tot
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = Euler1D(
+    var app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )

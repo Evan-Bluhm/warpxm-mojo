@@ -24,12 +24,12 @@ $$E = \frac{P}{\gamma - 1} + \tfrac{1}{2}\rho|\mathbf{u}|^{2} + \tfrac{1}{2}|\ma
 ## Module
 
 ```mojo
-from warpxm.apps.imhd_2d import IMHD2D
-from warpxm.apps.imhd_3d import IMHD3D
+from warpxm.apps.imhd import IMHD
+from warpxm.apps.imhd import IMHD
 ```
 
 ```mojo
-var app = IMHD2D(
+var app = IMHD(
     gas_gamma=Real(5.0 / 3.0),
     min_density=Real(1e-12),
     min_pressure=Real(1e-12),
@@ -40,7 +40,7 @@ var app = IMHD2D(
 ## State layout
 
 ```mojo
-from warpxm.apps.imhd_2d import (
+from warpxm.apps.imhd import (
     MHD_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
     IDX_BX, IDX_BY, IDX_BZ,
 )
@@ -95,10 +95,10 @@ $\nabla\cdot\mathbf{B}$ at a chosen speed $c_h$:
 $$\partial_t\psi + c_h^{2}\,\nabla\cdot\mathbf{B} = -\tfrac{c_h^{2}}{c_p^{2}}\,\psi.$$
 
 ```mojo
-from warpxm.apps.imhd_glm_2d import ImhdGLM2D, MHD_GLM_NC, IDX_PSI
+from warpxm.apps.imhd_glm import ImhdGLM, MHD_GLM_NC, IDX_PSI
 # MHD_GLM_NC = 9 — adds q[IDX_PSI] at the end
 
-var app = ImhdGLM2D(
+var app = ImhdGLM(
     gas_gamma=Real(5.0/3.0),
     min_density=Real(1e-12),
     min_pressure=Real(1e-12),
@@ -118,8 +118,8 @@ preserver — its pressure step is a cubic in θ because $|B|^{2}$
 contributes; the implementation uses bisection.
 
 ```mojo
-from warpxm.adjusters.moe_rossmanith_2d import MoeRossmanith2D
-from warpxm.adjusters.positivity_mhd_2d import PositivityMHD2D
+from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
+from warpxm.adjusters.positivity_mhd import PositivityMHD2D
 from warpxm.temporal.ssprk3_2d import SSPRK3_2D
 
 var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)

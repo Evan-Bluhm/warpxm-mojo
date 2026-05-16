@@ -71,7 +71,7 @@ for j in range(NY):
 ### Stepper
 
 ```mojo
-var app = Euler2D(gas_gamma=Real(1.4), ...)
+var app = Euler(gas_gamma=Real(1.4), ...)
 var spatial = DGEulerSolver2D[P](app)
 var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)

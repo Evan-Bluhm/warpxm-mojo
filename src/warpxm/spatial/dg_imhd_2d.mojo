@@ -8,7 +8,7 @@ from std.collections import InlineArray
 from std.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.imhd_2d import IMHD2D, MHD_NC
+from warpxm.apps.imhd import IMHD, MHD_NC
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_2d import BlockMesh2D
@@ -48,11 +48,11 @@ def _imhd_rhs_kernel_2d[
 ):
     @parameter
     def flux_x(qn: InlineArray[Real, MHD_NC]) -> InlineArray[Real, MHD_NC]:
-        return IMHD2D.internal_flux_x_static(qn, gamma, rho_min, press_min)
+        return IMHD.internal_flux_x_static(qn, gamma, rho_min, press_min)
 
     @parameter
     def flux_y(qn: InlineArray[Real, MHD_NC]) -> InlineArray[Real, MHD_NC]:
-        return IMHD2D.internal_flux_y_static(qn, gamma, rho_min, press_min)
+        return IMHD.internal_flux_y_static(qn, gamma, rho_min, press_min)
 
     @parameter
     def num_flux(
@@ -61,11 +61,11 @@ def _imhd_rhs_kernel_2d[
         nx: Real, ny: Real,
     ) -> InlineArray[Real, MHD_NC]:
         comptime if USE_HLLD:
-            return IMHD2D.numerical_flux_hlld_static(
+            return IMHD.numerical_flux_hlld_static(
                 q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min,
             )
         else:
-            return IMHD2D.numerical_flux_static(
+            return IMHD.numerical_flux_static(
                 q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min,
             )
 
@@ -92,9 +92,9 @@ struct DGImhdSolver2D[P: Int, USE_HLLD: Bool = False]:
     `USE_HLLD = True` switches to Miyoshi-Kusano HLLD.
     """
 
-    var app: IMHD2D
+    var app: IMHD
 
-    def __init__(out self, app: IMHD2D):
+    def __init__(out self, app: IMHD):
         self.app = app
 
     def compute_rhs(

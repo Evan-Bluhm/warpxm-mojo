@@ -11,7 +11,7 @@ from std.math import sin, cos
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 
-from warpxm.apps.advection_2d import Advection2D
+from warpxm.apps.advection import Advection
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_2d import BlockMesh2D
@@ -57,7 +57,7 @@ def main() raises:
                     host[(e * nodes_per_elem + n) * NC + 0] = sin(TWO_PI * x) * cos(TWO_PI * y)
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = Advection2D[NC](velocity_x=Real(1.0), velocity_y=Real(1.0), cfl_max=Real(1.0))
+    var app = Advection[NC](velocity_x=Real(1.0), velocity_y=Real(1.0), cfl_max=Real(1.0))
     var spatial = DGSpatialSolver2D[P, NC](app)
     var stepper = SSPRK3_2D[P, NC](ctx, mesh.num_elements)
 

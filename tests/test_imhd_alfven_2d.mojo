@@ -28,8 +28,8 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.imhd_2d import (
-    IMHD2D, MHD_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
+from warpxm.apps.imhd import (
+    IMHD, MHD_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
     IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -100,7 +100,7 @@ def main() raises:
                     host[b + IDX_BZ] = Bz_ic
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = IMHD2D(
+    var app = IMHD(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )

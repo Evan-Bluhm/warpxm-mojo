@@ -7,7 +7,7 @@
 
 from std.gpu.host import DeviceContext
 
-from warpxm.apps.maxwell_2d import (
+from warpxm.apps.maxwell import (
     MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.core.types import Real

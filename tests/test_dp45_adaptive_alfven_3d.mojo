@@ -10,8 +10,8 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.imhd_3d import IMHD3D
-from warpxm.apps.imhd_2d import (
+from warpxm.apps.imhd import IMHD
+from warpxm.apps.imhd import (
     MHD_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -87,7 +87,7 @@ def main() raises:
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
     var spatial = DGImhdSolver3D[P](
-        IMHD3D(
+        IMHD(
             gas_gamma=GAMMA, min_density=Real(1e-12),
             min_pressure=Real(1e-12), cfl_max=Real(0.5),
         )

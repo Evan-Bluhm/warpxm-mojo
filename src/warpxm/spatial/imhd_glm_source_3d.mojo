@@ -5,7 +5,7 @@ from std.gpu.host import DeviceContext
 from std.math import ceildiv
 from layout import TileTensor, Idx, row_major
 
-from warpxm.apps.imhd_glm_2d import MHD_GLM_NC
+from warpxm.apps.imhd_glm import MHD_GLM_NC
 from warpxm.core.types import Real
 from warpxm.spatial.imhd_glm_source_2d import _glm_damping_kernel
 from warpxm.variable.state_3d import DGState3D

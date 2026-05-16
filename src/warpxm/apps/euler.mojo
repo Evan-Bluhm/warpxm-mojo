@@ -127,9 +127,8 @@ struct Euler(ImplicitlyCopyable, Movable):
     ) -> InlineArray[Real, EULER_NC]:
         return Self.internal_flux_axis_static[2](q, gamma, rho_min, press_min)
 
-    # The 1D-style entry point. Pre-unification this was `internal_flux_static`
-    # on `Euler1D` (always x-direction). Kept so the 1D DG kernel doesn't
-    # need to spell `_x_static` to mean "the only axis I have".
+    # The 1D-style entry point — always x-direction. Kept so the 1D DG
+    # kernel doesn't need to spell `_x_static` for "the only axis I have".
 
     @staticmethod
     def internal_flux_static(

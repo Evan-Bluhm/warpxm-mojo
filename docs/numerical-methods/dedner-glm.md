@@ -28,7 +28,7 @@ a timescale $c_p^{2}/c_h^{2}$.
 ## Parameters
 
 ```mojo
-var app = ImhdGLM2D(
+var app = ImhdGLM(
     gas_gamma=Real(5.0/3.0),
     min_density=Real(1e-12),
     min_pressure=Real(1e-12),
@@ -51,7 +51,7 @@ Choosing parameters:
 GLM-MHD adds one scalar — `MHD_GLM_NC = 9`, with $\psi$ at index 8:
 
 ```mojo
-from warpxm.apps.imhd_glm_2d import MHD_GLM_NC, IDX_PSI
+from warpxm.apps.imhd_glm import MHD_GLM_NC, IDX_PSI
 # IDX_PSI = 8
 ```
 

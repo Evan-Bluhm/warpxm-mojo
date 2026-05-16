@@ -36,7 +36,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv
 from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.euler_2d import EULER_NC
+from warpxm.apps.euler import EULER_NC
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs, fmin, fmax
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE

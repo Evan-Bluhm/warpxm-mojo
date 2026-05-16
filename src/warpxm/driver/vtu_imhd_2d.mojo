@@ -10,7 +10,7 @@
 
 from std.gpu.host import DeviceContext
 
-from warpxm.apps.imhd_2d import (
+from warpxm.apps.imhd import (
     MHD_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.core.types import Real

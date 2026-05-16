@@ -14,7 +14,7 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.advection import Advection1D
+from warpxm.apps.advection import Advection
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real, TWO_PI
@@ -51,7 +51,7 @@ def main() raises:
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
     var spatial = DGSpatialSolver1D[P, 1](
-        Advection1D[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
+        Advection[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
     )
     var stepper = DormandPrince45_1D[P, 1](ctx, mesh.num_elements)
 

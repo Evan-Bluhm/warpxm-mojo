@@ -38,7 +38,7 @@ indices are exported as `comptime` constants from each `apps/*.mojo`
 file:
 
 ```mojo
-from warpxm.apps.imhd_2d import (
+from warpxm.apps.imhd import (
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
     IDX_BX, IDX_BY, IDX_BZ,
 )

@@ -61,8 +61,8 @@ stepper.step[compute_rhs, adjust](ctx, q, dt)
 
 `USE_HLLD: Bool` is a `comptime` parameter on the DG solver only. At
 `False` (the default) the spatial RHS uses
-`IMHD2D.numerical_flux_static` (Rusanov); at `True` it uses
-`IMHD2D.numerical_flux_hlld_static`. The flux choice is captured by the
+`IMHD.numerical_flux_static` (Rusanov); at `True` it uses
+`IMHD.numerical_flux_hlld_static`. The flux choice is captured by the
 `compute_rhs` closure, so the stepper doesn't need to know about it —
 zero runtime cost.
 

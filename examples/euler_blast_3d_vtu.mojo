@@ -3,7 +3,7 @@
 # A Gaussian pressure pulse at the center of a triply-periodic box drives
 # a spherical shock wave outward. Demonstrates the 3D pipeline end-to-end:
 #   * BlockMesh3D (periodic 3-axis)
-#   * Euler3D with γ-law EOS
+#   * Euler with γ-law EOS
 #   * DGEulerSolver3D + MoeRossmanith3D[P, EULER_NC] for shock capturing
 #   * SSPRK3_Euler_Limited_3D for time integration
 #   * FrameWriter + dump_euler_3d_frame for ParaView animation
@@ -20,11 +20,11 @@ from std.math import exp
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 
-from warpxm.adjusters.moe_rossmanith_3d import MoeRossmanith3D
-from warpxm.apps.euler_2d import (
+from warpxm.adjusters.moe_rossmanith import MoeRossmanith3D
+from warpxm.apps.euler import (
     EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
 )
-from warpxm.apps.euler_3d import Euler3D
+from warpxm.apps.euler import Euler
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real
 from warpxm.driver.frame_writer import FrameWriter
@@ -92,7 +92,7 @@ def main() raises:
                             host[b + IDX_E] = pp / (GAMMA - Real(1.0))
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var app = Euler3D(
+    var app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )

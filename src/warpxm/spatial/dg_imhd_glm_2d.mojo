@@ -10,7 +10,7 @@ from std.collections import InlineArray
 from std.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.imhd_glm_2d import ImhdGLM2D, MHD_GLM_NC
+from warpxm.apps.imhd_glm import ImhdGLM, MHD_GLM_NC
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_2d import BlockMesh2D
@@ -49,11 +49,11 @@ def _imhd_glm_rhs_kernel_2d[
 ):
     @parameter
     def flux_x(qn: InlineArray[Real, MHD_GLM_NC]) -> InlineArray[Real, MHD_GLM_NC]:
-        return ImhdGLM2D.internal_flux_x_static(qn, gamma, rho_min, press_min, c_h)
+        return ImhdGLM.internal_flux_x_static(qn, gamma, rho_min, press_min, c_h)
 
     @parameter
     def flux_y(qn: InlineArray[Real, MHD_GLM_NC]) -> InlineArray[Real, MHD_GLM_NC]:
-        return ImhdGLM2D.internal_flux_y_static(qn, gamma, rho_min, press_min, c_h)
+        return ImhdGLM.internal_flux_y_static(qn, gamma, rho_min, press_min, c_h)
 
     @parameter
     def num_flux(
@@ -62,11 +62,11 @@ def _imhd_glm_rhs_kernel_2d[
         nx: Real, ny: Real,
     ) -> InlineArray[Real, MHD_GLM_NC]:
         comptime if USE_HLLD:
-            return ImhdGLM2D.numerical_flux_hlld_static(
+            return ImhdGLM.numerical_flux_hlld_static(
                 q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min, c_h,
             )
         else:
-            return ImhdGLM2D.numerical_flux_static(
+            return ImhdGLM.numerical_flux_static(
                 q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min, c_h,
             )
 
@@ -94,9 +94,9 @@ struct DGImhdGLMSolver2D[P: Int, USE_HLLD: Bool = False]:
     the exact (B_n, ψ) 2x2 Riemann solver for the GLM block on top.
     """
 
-    var app: ImhdGLM2D
+    var app: ImhdGLM
 
-    def __init__(out self, app: ImhdGLM2D):
+    def __init__(out self, app: ImhdGLM):
         self.app = app
 
     def compute_rhs(

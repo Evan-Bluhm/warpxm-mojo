@@ -15,14 +15,14 @@ and 3D problems.
 ## Module
 
 ```mojo
-from warpxm.apps.maxwell_2d import Maxwell2D
-from warpxm.apps.maxwell_3d import Maxwell3D
+from warpxm.apps.maxwell import Maxwell
+from warpxm.apps.maxwell import Maxwell
 ```
 
 Constructor:
 
 ```mojo
-var app = Maxwell2D(c_light=Real(1.0), cfl_max=Real(0.5))
+var app = Maxwell(c_light=Real(1.0), cfl_max=Real(0.5))
 ```
 
 `c_light` is the speed of light in whatever units you choose. The
@@ -31,7 +31,7 @@ CFL limit is on $c\,\Delta t / \Delta x$.
 ## State layout
 
 ```mojo
-from warpxm.apps.maxwell_2d import (
+from warpxm.apps.maxwell import (
     MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 # MAXWELL_NC = 8 (six fields + two padding slots reserved for future use)

@@ -17,8 +17,9 @@ src/warpxm/
   mesh/        # BlockMesh{1,2,3}D
   variable/    # DGState{1,2,3}D[P, NC]
   apps/        # Physics modules — one canonical file per physics
-               # (advection, euler, maxwell, imhd, imhd_glm) with per-dim
-               # shims aliasing the struct as <Phys>1D / 2D / 3D.
+               # (advection, euler, maxwell, imhd, imhd_glm). The struct
+               # is dimension-agnostic; the per-dim DG kernel supplies
+               # the right normal triples (e.g. 1D passes (±1, 0, 0)).
   spatial/     # Shared dg_core_{1,2,3}d.mojo templates + thin per-physics
                # dg_<phys>_<N>d.mojo wrappers. Plus source kernels.
   temporal/    # SSPRK3 / Dormand-Prince steppers — all dimension-agnostic

@@ -8,8 +8,8 @@ from std.collections import InlineArray
 from std.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.maxwell_2d import (
-    Maxwell2D, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
+from warpxm.apps.maxwell import (
+    Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_PEC_WALL, BC_PMC_WALL
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
@@ -77,11 +77,11 @@ def _maxwell_rhs_kernel_2d[
 ):
     @parameter
     def flux_x(qn: InlineArray[Real, MAXWELL_NC]) -> InlineArray[Real, MAXWELL_NC]:
-        return Maxwell2D.internal_flux_x_static(qn, c_light)
+        return Maxwell.internal_flux_x_static(qn, c_light)
 
     @parameter
     def flux_y(qn: InlineArray[Real, MAXWELL_NC]) -> InlineArray[Real, MAXWELL_NC]:
-        return Maxwell2D.internal_flux_y_static(qn, c_light)
+        return Maxwell.internal_flux_y_static(qn, c_light)
 
     @parameter
     def num_flux(
@@ -89,7 +89,7 @@ def _maxwell_rhs_kernel_2d[
         q_r: InlineArray[Real, MAXWELL_NC],
         nx: Real, ny: Real,
     ) -> InlineArray[Real, MAXWELL_NC]:
-        return Maxwell2D.numerical_flux_static(q_l, q_r, nx, ny, Real(0.0), c_light)
+        return Maxwell.numerical_flux_static(q_l, q_r, nx, ny, Real(0.0), c_light)
 
     @parameter
     def apply_bc(
@@ -110,9 +110,9 @@ def _maxwell_rhs_kernel_2d[
 struct DGMaxwellSolver2D[P: Int]:
     """Host-side launcher for the 2D Maxwell DG kernel."""
 
-    var app: Maxwell2D
+    var app: Maxwell
 
-    def __init__(out self, app: Maxwell2D):
+    def __init__(out self, app: Maxwell):
         self.app = app
 
     def compute_rhs(
