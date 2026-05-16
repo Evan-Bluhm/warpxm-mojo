@@ -12,14 +12,9 @@
 # layered on later.
 
 from std.gpu import global_idx
-from std.gpu.host import DeviceBuffer, DeviceContext
-from layout import TileTensor, TensorLayout, Idx, row_major
-from std.math import ceildiv
+from layout import TileTensor, TensorLayout
 
 from warpxm.core.types import Real, WXM_DTYPE
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.spatial.dg_1d import DGSpatialSolver1D
-from warpxm.variable.state_1d import DGState1D
 
 
 # ---------------------------------------------------------------------------
