@@ -120,11 +120,13 @@ are smaller but you don't have to hand-tune $\Delta t$.
 | `dormand_prince_3d.mojo` — `DormandPrince45_3D[P, NC]` | ✅ fixed + adaptive |
 | Plasma (3 coupled states) | Not in scope — plasma steppers use SSPRK3 only |
 
-All three steppers use the same two-closure pattern (`step[compute_rhs_fn]`,
-`step_adaptive[compute_rhs_fn]`). The combine kernels and error kernel
-live in `dormand_prince_1d.mojo` and are imported unchanged by the 2D
-and 3D variants — they operate on flat buffers and don't care about
-dimension.
+All three steppers use the same two-closure pattern
+(`step[compute_rhs_fn]`, `step_adaptive[compute_rhs_fn]`). The combine
+kernels `_combine1`–`_combine5`, the per-cell error kernel
+`_dp45_error_kernel`, and the single-block error-norm reduction
+`_dp45_sum_sq_kernel` all live in `dormand_prince_1d.mojo` and are
+imported unchanged by the 2D and 3D variants — they operate on flat
+buffers and don't care about dimension.
 
 ## Implementation notes
 
