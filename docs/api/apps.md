@@ -28,8 +28,12 @@ instance — DG kernels invoke them as `Euler.numerical_flux_static(...)`.
 
 ## Index constants and NC
 
-Each canonical app file exports `*_NC` (the component count) and an
-`IDX_*` constant per component.
+Fixed-NC apps (`euler`, `maxwell`, `imhd`, `imhd_glm`) each export a
+`*_NC` component count and an `IDX_*` constant per component. The
+`advection` app is the exception: `Advection[NC: Int]` is NC-parametric
+(used at NC=1 for single-component advection, NC>1 for multi-component
+tests), so it carries no module-level `ADVECTION_NC` or `IDX_*`
+symbols.
 
 ## Module list
 

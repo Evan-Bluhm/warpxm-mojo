@@ -34,7 +34,7 @@ Usage:
 ```mojo
 from warpxm.driver.vtu_2d import dump_euler_2d_frame
 dump_euler_2d_frame[P](
-    "/tmp/sod_2d/sod_2d.0010.vtu",
+    "/tmp/sod_2d/sod_2d_0010.vtu",
     ctx, mesh, q, gamma,
 )
 ```
@@ -56,7 +56,7 @@ for frame in range(NUM_FRAMES):
 fw.write_pvd()
 ```
 
-* `fw.next_path(t)` returns a filename like `<dir>/<basename>.0000.vtu`
+* `fw.next_path(t)` returns a filename like `<dir>/<basename>_0000.vtu`
   and records the time `t` for the PVD collection.
 * `fw.write_pvd()` writes a `.pvd` index referencing every frame with
   its time stamp. Open that in ParaView for an automatic time slider.

@@ -28,7 +28,7 @@ file. No bare `Float32` / `Float64` literals appear in physics code.
 ## `math_compat`
 
 ```mojo
-from warpxm.core.math_compat import sqrt, fabs, fmin, fmax
+from warpxm.core.math_compat import sqrt, fabs, sign, fmin, fmax, square
 ```
 
 These are thin shims around `std.math.*`:
@@ -37,6 +37,10 @@ These are thin shims around `std.math.*`:
   intrinsic for `std.math.sqrt` on NVIDIA targets.
 * `fabs`, `fmin`, `fmax` — wrappers giving `Real`-typed return values
   to avoid promotion surprises.
+* `sign(x)` — returns `+1`, `-1`, or `0` (exact zero at the origin).
+* `square(x)` — `x * x`, kept as a named helper so callers can
+  write `square(B_x) + square(B_y) + square(B_z)` without
+  repeating sub-expressions.
 
 Any kernel that uses these via this module remains portable; reaching
 into `std.math` directly can silently produce single-precision results
