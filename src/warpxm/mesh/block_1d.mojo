@@ -16,7 +16,7 @@
 # adjusters look at these sentinels to fill in face states.
 
 from std.gpu.host import DeviceBuffer, DeviceContext
-from layout import TileTensor, row_major
+from layout import TileTensor
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT

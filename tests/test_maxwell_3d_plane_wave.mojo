@@ -22,7 +22,6 @@ from warpxm.apps.maxwell import (
     MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_3d import BlockMesh3D
 from warpxm.spatial.dg_maxwell_3d import DGMaxwellSolver3D

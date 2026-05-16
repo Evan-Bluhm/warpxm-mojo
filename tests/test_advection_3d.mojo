@@ -18,7 +18,6 @@ from std.testing import assert_true
 
 from warpxm.apps.advection import Advection
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real, TWO_PI
 from warpxm.mesh.block_3d import BlockMesh3D
 from warpxm.spatial.dg_3d import DGSpatialSolver3D

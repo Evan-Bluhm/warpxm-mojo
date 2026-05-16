@@ -19,7 +19,6 @@
 # the momentum should be back to (1, 0, 0). Density / energy / B field
 # should be unchanged. After t = π/2 (quarter period): momentum (0, -1, 0).
 
-from std.math import cos, sin
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true

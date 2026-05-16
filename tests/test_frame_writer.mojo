@@ -22,7 +22,7 @@ from warpxm.spatial.dg_imhd_glm_2d import DGImhdGLMSolver2D
 from warpxm.spatial.imhd_glm_source_2d import apply_glm_damping_2d
 from warpxm.temporal.ssprk3_2d import SSPRK3_2D
 from warpxm.variable.state_2d import DGState2D
-from std.math import cos, sin
+from std.math import sin
 
 
 comptime P: Int = 2

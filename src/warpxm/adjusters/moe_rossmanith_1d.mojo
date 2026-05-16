@@ -32,7 +32,6 @@
 # with α(dx) = α_coeff · dx^{1.5} a safety margin that disables the limiter
 # in smooth-flow regions. Default α_coeff = 1000 (upstream default).
 
-from std.collections import InlineArray
 from std.gpu import global_idx
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv

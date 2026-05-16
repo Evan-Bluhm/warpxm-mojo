@@ -25,7 +25,6 @@ from warpxm.apps.euler import Euler
 from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_COPYOUT
-from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real
 from warpxm.mesh.block_1d import BlockMesh1D
 from warpxm.spatial.dg_euler_1d import DGEulerSolver1D

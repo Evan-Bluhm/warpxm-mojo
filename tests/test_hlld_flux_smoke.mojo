@@ -9,7 +9,6 @@
 #   (c) Smooth small-perturbation state: HLLD and Rusanov fluxes agree
 #       to first order in the perturbation amplitude.
 
-from std.sys import has_accelerator
 from std.testing import assert_true
 
 from warpxm.apps.imhd import (

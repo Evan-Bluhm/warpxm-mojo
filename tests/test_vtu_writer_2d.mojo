@@ -15,7 +15,6 @@
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
-from std.pathlib import Path
 
 from warpxm.apps.euler import (
     Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,

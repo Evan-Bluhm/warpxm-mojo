@@ -24,7 +24,7 @@
 #   * mass conservation to machine precision (periodic, no sources on ρ)
 #   * total ψ-energy stays small (∇·B errors don't run away)
 
-from std.math import cos, sin, isnan
+from std.math import sin, isnan
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true

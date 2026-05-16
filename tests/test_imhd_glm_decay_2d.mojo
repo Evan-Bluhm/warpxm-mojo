@@ -26,7 +26,6 @@ from warpxm.apps.imhd import (
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_imhd_glm_2d import DGImhdGLMSolver2D

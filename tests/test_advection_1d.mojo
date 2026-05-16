@@ -6,7 +6,7 @@
 # Asserts the L2 error after one period on a 64-element periodic mesh stays
 # below a generous tolerance. With P=2, dt=1e-3 we expect ≲ 5e-5.
 
-from std.math import ceildiv, sin
+from std.math import sin
 from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from std.testing import assert_true
