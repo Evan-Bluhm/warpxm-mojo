@@ -96,6 +96,7 @@ Supporting infrastructure:
 | Test                            | Quantitative result                                     |
 | ------------------------------- | ------------------------------------------------------- |
 | 1D advection convergence        | observed rates 1.98 / 3.01 / 3.99 (theoretical P+1)     |
+| 2D advection convergence        | observed rates 1.90 / 3.03 / 4.00 (theoretical P+1)     |
 | 2D Euler hydrostatic balance    | \|v\| ~ 4e-16 after 50 steps (well-balanced source)     |
 | 2D Sod tube                     | analytic plateaus match to 3e-3                         |
 | 1D Langmuir (single-fluid)      | mass drift 2.73e-13, ρ at sample within 7e-6 of IC after period |
