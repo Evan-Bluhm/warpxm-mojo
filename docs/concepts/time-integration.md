@@ -47,9 +47,10 @@ Maxwell) or (fluid, Maxwell) tuple. See [Plasma](../physics/plasma.md).
 
 ## Dormand-Prince RK45 — adaptive
 
-[Five-stage Dormand-Prince 5(4)](../numerical-methods/dormand-prince.md)
-adds an embedded fourth-order error estimate so the step size can shrink
-near steep gradients and relax in smooth regions.
+[Seven-stage Dormand-Prince 5(4)](../numerical-methods/dormand-prince.md)
+delivers a fifth-order solution alongside an embedded fourth-order
+estimate, so the step size can shrink near steep gradients and relax
+in smooth regions.
 
 ```mojo
 from warpxm.temporal.dormand_prince_2d import DormandPrince45_2D
