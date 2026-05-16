@@ -89,7 +89,8 @@ applied between or alongside the RK stages.
 
 ```mojo
 from warpxm.spatial.euler_2d_sources import apply_gravity_source_2d
-apply_gravity_source_2d[P](ctx, q, rhs, g)   # adds -ρ g to ρv RHS, ρv·g to E RHS
+apply_gravity_source_2d[P](ctx, q, rhs, gx, gy)
+# adds (-ρ gx, -ρ gy) to (ρu, ρv) RHS, ρ(u·gx + v·gy) to E RHS
 ```
 
 ### Lorentz force (charged fluid)
