@@ -41,7 +41,7 @@ from warpxm.apps.euler import EULER_NC
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs, fmin, fmax
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
-from warpxm.mesh.block_1d import BlockMesh1D, GHOST_LEFT, GHOST_RIGHT
+from warpxm.mesh.block_1d import BlockMesh1D
 from warpxm.variable.state_1d import DGState1D
 
 

@@ -11,10 +11,7 @@ from std.collections import InlineArray
 from std.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, Idx, row_major
 
-from warpxm.apps.euler import (
-    Euler, EULER_NC,
-    IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
-)
+from warpxm.apps.euler import Euler, EULER_NC, IDX_MX, IDX_MY
 from warpxm.core.bc import BC_WALL_FREESLIP
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_2d import BlockMesh2D
