@@ -68,7 +68,7 @@ zero runtime cost.
 
 The 3D version, `DGImhdSolver3D[P, USE_HLLD=True]`, uses a permutation-
 based core (`_hlld_core_3d` in `apps/imhd.mojo`) so all three axis-
-aligned face directions share one ~150-line implementation.
+aligned face directions share one ~215-line implementation.
 
 ## Algorithm sketch
 
@@ -89,11 +89,15 @@ For a face with normal $\hat{n}$, the steps are:
 
 ## Degenerate cases
 
-When $B_n$ is small the denominators in the star-state formulas blow up.
-We guard against this with a $|B_n^{2}|$ floor of $10^{-30}$ and fall
-back to the HLL-style averaging in that regime — the resulting flux is
-identical to HLLD where $B_n$ is significant and degrades gracefully
-where it isn't.
+When $B_n$ is small (or, more precisely, when $\rho \cdot (S - u_n)
+\cdot (S - S_M) - B_n^{2}$ approaches zero), the star-state denominators
+for the transverse velocity / B-field blow up. We guard against this
+by checking that denominator against an $\varepsilon = 10^{-30}$ floor;
+if it falls below, we leave the upstream tangential velocity and
+B-field untouched in that star state (i.e. $u_{t}^{*} = u_{t}$,
+$B_{t}^{*} = B_{t}$). Where $B_n$ is significant the standard HLLD
+formula runs unchanged; where it isn't, the contribution that would
+have been ill-conditioned simply degenerates to no transverse jump.
 
 ## Validation
 

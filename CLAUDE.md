@@ -171,7 +171,7 @@ What's shipped (so it's easy to see at a glance):
   `DGImhdGLMSolver{2,3}D` (`USE_HLLD=True`, Miyoshi-Kusano 2005
   five-state solver). Permutation-based core
   (`_hlld_core_3d` in `apps/imhd.mojo`) handles all three
-  axis-aligned face directions in ~150 lines. Default path stays
+  axis-aligned face directions in ~215 lines. Default path stays
   Rusanov (no regression). GLM-MHD path composes IMHD HLLD with the
   exact (B_n, ψ) 2x2 Riemann block (Dedner et al. 2002 §3.2;
   Mignone & Tzeferacos 2010 §4).
