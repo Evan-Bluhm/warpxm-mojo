@@ -19,25 +19,35 @@ of physics.
 | ----------------------------- | :-: | :-: | :-: |
 | Scalar advection              | ✅  | ✅  | ✅  |
 | 5-moment Euler                | ✅  | ✅  | ✅  |
-| Maxwell's equations           | —   | ✅  | ✅  |
-| Single-fluid plasma           | —   | ✅  | ✅  |
-| Two-species plasma            | —   | ✅  | ✅  |
+| Maxwell's equations           | ✅  | ✅  | ✅  |
+| Single-fluid plasma           | ✅  | ✅  | ✅  |
+| Two-species plasma            | ✅  | ✅  | ✅  |
 | Ideal MHD                     | —   | ✅  | ✅  |
 | MHD with Dedner GLM cleaning  | —   | ✅  | ✅  |
 
+(1D MHD is the only physical gap — $B_x$ along a 1D mesh becomes
+constant, leaving no useful 1D MHD problem.)
+
 Plus:
 
-* **Slope limiter:** Moe-Rossmanith conserved-variable limiter, NC-parameterised
-  for all (physics, dimension) combinations.
-* **Positivity preservation:** Zhang-Shu cell-mean-preserving θ-shrink that
-  keeps ρ > 0 and P > 0 even on near-vacuum problems (Einfeldt 1-2-3,
-  strong Sedov blast).
-* **MHD flux:** Rusanov (default) and HLLD (Miyoshi-Kusano 2005, five-state)
-  selectable at compile time.
-* **Time integration:** Three-stage SSPRK3 (Shu-Osher); 5(4) Dormand-Prince
-  with embedded error estimate and adaptive Δt.
-* **Output:** ParaView-readable `.vtu` writers for every 2D / 3D physics,
-  with a `FrameWriter` that emits time-series + a `.pvd` collection.
+* **Slope limiter:** Moe-Rossmanith conserved-variable limiter,
+  NC-parameterised across all physics for 2D + 3D
+  (`adjusters/moe_rossmanith.mojo`). 1D variant in
+  `moe_rossmanith_1d.mojo` is Euler-only.
+* **Positivity preservation:** Zhang-Shu cell-mean-preserving θ-shrink
+  for Euler (1D / 2D / 3D) and MHD (2D / 3D). Keeps ρ > 0 and P > 0
+  even on near-vacuum problems (Einfeldt 1-2-3, strong Sedov blast).
+* **MHD flux:** Rusanov (default) and HLLD (Miyoshi-Kusano 2005,
+  five-state) on both `DGImhdSolver{2,3}D` and
+  `DGImhdGLMSolver{2,3}D`, selectable at compile time via
+  `USE_HLLD=True`.
+* **Time integration:** Three-stage SSPRK3 (Shu-Osher) and 5(4)
+  Dormand-Prince — both dimension-agnostic and closure-driven
+  (`DormandPrince45_{1,2,3}D[P, NC]`). DP45 takes 6–40× fewer steps
+  than fixed-Δt SSPRK3 on smooth problems.
+* **Output:** ParaView-readable `.vtu` writers for every 2D / 3D
+  physics, with a `FrameWriter` that emits time-series + a `.pvd`
+  collection.
 
 ## Where to go next
 
@@ -54,5 +64,7 @@ Plus:
 ## Status
 
 The framework is fully feature-complete across the physics × dimension
-matrix above. Ongoing work focuses on quality and scale — see
+matrix above (1D MHD is the only intentional gap). 66 regression tests
+pass, covering every (physics, dimension) combination plus convergence
+verification at P=1/2/3. Ongoing work focuses on scale — see
 [Roadmap](contributing/index.md#roadmap) for what's open.
