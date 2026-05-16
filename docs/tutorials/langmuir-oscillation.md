@@ -123,7 +123,8 @@ density perturbation breathe back and forth, 90° out of phase with
 the E-field (the field accelerates the electrons; the velocity
 displaces them; the displacement makes the field).
 
-The `mom_x` field shows where the kinetic energy sits at each phase.
+The `u` field (x-velocity, recovered as $m_x/\rho$ by the VTU writer)
+shows where the kinetic energy sits at each phase.
 
 ## Variations
 

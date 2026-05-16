@@ -23,13 +23,15 @@ right-going shock.
 ## Run it
 
 ```fish
-mkdir -p /tmp/sod_2d
 pixi run mojo run -I src examples/euler_sod_2d_vtu.mojo
 ```
 
-The driver dumps frames into `/tmp/sod_2d/sod_2d.NNNN.vtu` plus a
-`sod_2d.pvd` collection. After the run you can open the PVD in
-ParaView (see [Viewing output in ParaView](../getting-started/paraview.md)).
+The driver writes a single snapshot of the final state at $t = 0.2$
+to `/tmp/sod_2d.vtu`. Open it in ParaView (see
+[Viewing output in ParaView](../getting-started/paraview.md)). For a
+multi-frame run with `FrameWriter` + a `.pvd` collection, see the
+[Orszag-Tang tutorial](orszag-tang.md) or the
+[Langmuir tutorial](langmuir-oscillation.md).
 
 ## Walkthrough
 
@@ -98,20 +100,19 @@ shock ratios > ~100 you'd add `positivity.apply(ctx, mesh, q_)` inside
 
 ```mojo
 var t: Real = 0.0
-for frame in range(NUM_FRAMES):
-    dump_euler_2d_frame[P](fw.next_path(t), ctx, mesh, q, GAMMA)
-    if frame < NUM_FRAMES - 1:
-        var t_target = Real(frame + 1) * frame_dt
-        while t < t_target - 0.5 * DT:
-            var dt_use = DT if (t + DT) < t_target else (t_target - t)
-            stepper.step[compute_rhs, adjust](ctx, q, dt_use)
-            t += dt_use
-fw.write_pvd()
+while t < T_FINAL - 0.5 * DT:
+    var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
+    stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+    t += dt_use
+ctx.synchronize()
+
+dump_euler_2d_frame[P]("/tmp/sod_2d.vtu", ctx, mesh, q, GAMMA)
 ```
 
-Outer loop is over frames; inner loop is the time stepping between
-frames. `FrameWriter` (`driver/frame_writer.mojo`) handles the per-
-frame filenames and writes the `.pvd` collection at the end.
+One straight time loop up to $t = 0.2$, then a single VTU dump. If
+you want intermediate frames, swap the dump call for a `FrameWriter`
+and call `fw.next_path(t)` at frame boundaries — see
+[`driver.frame_writer`](../api/driver.md#framewriter).
 
 ## Expected result
 
@@ -130,15 +131,13 @@ limited by the DG-with-limiter dissipation. Compare with
 
 ## In ParaView
 
-1. Open `/tmp/sod_2d/sod_2d.pvd`.
+1. Open `/tmp/sod_2d.vtu`.
 2. Apply.
 3. Color by `rho`.
 4. **Filters → Data Analysis → Plot Over Line** with endpoints at
    $(0, 0.05, 0)$ and $(1, 0.05, 0)$ gives the classic 1D Sod plot.
 
-The 11 frames step through $t = 0$ to $t = 0.2$ in equal slices. By
-$t \approx 0.07$ the wave structure has fully developed; by $t = 0.2$
-the shock is at $x \approx 0.86$.
+By $t = 0.2$ the shock has propagated to $x \approx 0.86$.
 
 ## Variations to try
 
