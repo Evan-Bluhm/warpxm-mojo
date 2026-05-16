@@ -24,8 +24,9 @@ src/warpxm/
                # dg_<phys>_<N>d.mojo wrappers. Plus source kernels.
   temporal/    # SSPRK3 / Dormand-Prince steppers — all dimension-agnostic
                # via the closure pattern.
-  adjusters/   # Moe-Rossmanith limiter, Zhang-Shu positivity preserver —
-               # NDIM-parametric for 2D + 3D.
+  adjusters/   # Moe-Rossmanith slope limiter (1D Euler-only + NC-parametric
+               # 2D/3D) and Zhang-Shu positivity preserver
+               # (Euler 1D/2D/3D, MHD 2D/3D — there's no 1D MHD).
   driver/      # VTU writers + FrameWriter
 ```
 
