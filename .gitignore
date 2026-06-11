@@ -20,3 +20,8 @@ site/
 .vscode/.*.swp
 *.swp
 .DS_Store
+
+# Nsight / Compute / Advisor binary outputs
+*.nsys-rep
+*.sqlite
+*.ncu-rep
