@@ -7,6 +7,7 @@
 
 from std.collections import InlineArray
 from std.gpu.host import DeviceContext
+from std.math import ceildiv
 from layout import TileTensor, TensorLayout, Idx, row_major
 
 from warpxm.apps.maxwell import (
@@ -16,7 +17,9 @@ from warpxm.apps.maxwell import (
 from warpxm.core.bc import BC_PEC_WALL, BC_PMC_WALL
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.spatial.dg_core_1d import _dg_1d_compute_rhs_core
+from warpxm.spatial.dg_core_1d import (
+    _dg_1d_compute_rhs_core, DG_CORE_1D_ELEMS_PER_BLOCK,
+)
 from warpxm.variable.state_1d import DGState1D
 
 
@@ -80,6 +83,7 @@ def _maxwell_rhs_kernel_1d[
     _dg_1d_compute_rhs_core[
         P, MAXWELL_NC, flux_x, num_flux, apply_bc,
         QLayout, RhsLayout, ElemFaceLayout,
+        DG_CORE_1D_ELEMS_PER_BLOCK,
     ](
         q, rhs, elem_left_face, elem_right_face,
         face_left, face_right, face_bc,
@@ -120,9 +124,10 @@ struct DGMaxwellSolver1D[P: Int]:
             Self.P,
             type_of(q_layout), type_of(q_layout), type_of(elem_face_layout),
         ]
+        comptime EB = DG_CORE_1D_ELEMS_PER_BLOCK
         ctx.enqueue_function[kernel](
             q_view, rhs_view, elf_view, erf_view, fl_view, fr_view, fbc_view,
             self.app.c_light, mesh.jacobian, mesh.num_elements,
-            grid_dim=mesh.num_elements,
-            block_dim=num_nodes_per_elem,
+            grid_dim=ceildiv(mesh.num_elements, EB),
+            block_dim=(num_nodes_per_elem, EB),
         )

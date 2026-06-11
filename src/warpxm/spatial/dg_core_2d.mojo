@@ -15,6 +15,16 @@
 # Every closure is `@parameter` and the core is `@always_inline`, so the
 # generated GPU code is byte-identical to the hand-rolled per-physics
 # kernels we replace.
+#
+# ## Element packing (DG-perf Task 1)
+#
+# `ELEMS_PER_BLOCK` controls how many independent elements share a CUDA
+# block. The element-axis lives on `thread_idx.z`, the local-node axes
+# on `thread_idx.{x,y}`. Default `ELEMS_PER_BLOCK = 4` puts 4 × 9 = 36
+# threads in a P=2 block — at least one full warp and a hair more, vs.
+# the 9-thread blocks of the old layout (well under a warp). Shared
+# memory grows by `ELEMS_PER_BLOCK`× but stays well under the 100 KB/SM
+# limit for every (NC, P) combination we ship.
 
 from std.collections import InlineArray
 from std.gpu import block_idx, thread_idx
@@ -28,6 +38,12 @@ from warpxm.mesh.block_2d import (
     GHOST_NEG, GHOST_POS,
     FACE_DIR_LEFT, FACE_DIR_RIGHT, FACE_DIR_BOTTOM, FACE_DIR_TOP,
 )
+
+
+# Default number of elements packed into one CUDA block for the 2D DG
+# core. Per-physics wrappers may override; current value chosen for the
+# RTX 3090 baseline (see `bench/BASELINE.md`).
+comptime DG_CORE_2D_ELEMS_PER_BLOCK: Int = 4
 
 
 @always_inline
@@ -60,6 +76,7 @@ def _dg_2d_compute_rhs_core[
     ) capturing [_] -> InlineArray[Real, NC],
     QLayout: TensorLayout, RhsLayout: TensorLayout,
     FaceLayout: TensorLayout, EFLayout: TensorLayout,
+    ELEMS_PER_BLOCK: Int = 1,
 ](
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
@@ -75,11 +92,17 @@ def _dg_2d_compute_rhs_core[
     law. Volume term via tensor-product GLL differentiation, surface
     term via the supplied numerical-flux closure.
 
-    Thread layout: `block_idx.x = elem`, `(thread_idx.x, thread_idx.y) =
-    (in_, jn)` where `(in_, jn)` are the node indices within the element.
+    Thread layout: `block_idx.x = elem_block`, `(thread_idx.x,
+    thread_idx.y, thread_idx.z) = (in_, jn, eb)` where `(in_, jn)` are
+    the node indices within the element and `eb ∈ [0, ELEMS_PER_BLOCK)`
+    selects which element of the block this thread serves.
+
+    Element index: `e = block_idx.x · ELEMS_PER_BLOCK + eb`.
+    Grid: `grid_dim = ceildiv(num_elements, ELEMS_PER_BLOCK)`.
     """
     comptime P1 = P + 1
     comptime nodes_per_elem = P1 * P1
+    comptime EB = ELEMS_PER_BLOCK
     comptime assert q.flat_rank == 1
     comptime assert rhs.flat_rank == 1
     comptime assert face_neg_elem.flat_rank == 1
@@ -87,24 +110,31 @@ def _dg_2d_compute_rhs_core[
     comptime assert elem_face_dir.flat_rank == 1
     comptime assert face_bc.flat_rank == 1
 
-    var e = Int(block_idx.x)
+    var eb_in_block = Int(thread_idx.z)
+    var e = Int(block_idx.x) * EB + eb_in_block
     var in_ = Int(thread_idx.x)
     var jn = Int(thread_idx.y)
+
+    # Partial-last-block guard. All threads in a block must hit the
+    # barrier the same number of times, so invalid threads call it once
+    # before returning.
     if e >= num_elements or in_ >= P1 or jn >= P1:
+        barrier()
         return
 
     var local_n = jn * P1 + in_
 
+    # Shared-memory cache, one slot per element-in-block.
     var f_shared = stack_allocation[
         WXM_DTYPE, address_space=AddressSpace.SHARED,
-    ](row_major[P1 * P1, NC, 2]())
+    ](row_major[EB, P1 * P1, NC, 2]())
 
     var q_n = _load_node_2d[P, NC](q, e, local_n)
     var fx_n = flux_x_fn(q_n)
     var fy_n = flux_y_fn(q_n)
     comptime for c in range(NC):
-        f_shared[local_n, c, 0] = rebind[f_shared.ElementType](fx_n[c])
-        f_shared[local_n, c, 1] = rebind[f_shared.ElementType](fy_n[c])
+        f_shared[eb_in_block, local_n, c, 0] = rebind[f_shared.ElementType](fx_n[c])
+        f_shared[eb_in_block, local_n, c, 1] = rebind[f_shared.ElementType](fy_n[c])
 
     barrier()
 
@@ -117,17 +147,29 @@ def _dg_2d_compute_rhs_core[
         var dx_in_kn: Scalar[WXM_DTYPE] = d_flat[in_ * P1 + kn]
         var k_node = jn * P1 + kn
         comptime for c in range(NC):
-            var fx_kn = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 0])
+            var fx_kn = rebind[Scalar[WXM_DTYPE]](
+                f_shared[eb_in_block, k_node, c, 0]
+            )
             dfdx[c] += dx_in_kn * fx_kn
 
     comptime for ln in range(P1):
         var dy_jn_ln: Scalar[WXM_DTYPE] = d_flat[jn * P1 + ln]
         var l_node = ln * P1 + in_
         comptime for c in range(NC):
-            var fy_ln = rebind[Scalar[WXM_DTYPE]](f_shared[l_node, c, 1])
+            var fy_ln = rebind[Scalar[WXM_DTYPE]](
+                f_shared[eb_in_block, l_node, c, 1]
+            )
             dgdy[c] += dy_jn_ln * fy_ln
 
     # --- Surface term: only the four face-boundary nodes contribute --------
+    # Note: Task 2's "single-accumulator" pattern (collapsing dfdx, dgdy,
+    # surface into one running `accum`) was tried on this 2D core and
+    # broke `test_euler_123_2d` (positivity preserver couldn't recover
+    # from the FP-reordered near-vacuum trajectory) plus the bit-identity
+    # y-drift on `test_imhd_briowu_2d_hlld`. With 2D already at 2.0–2.2×
+    # over baseline from Task 1, we kept the bit-identical 3-array layout
+    # here and applied the aggressive register cut only to the 3D core
+    # (which dominates the 3D-bound speedup ceiling).
     var weights = NodalBasis1D[P].weights()
     var w_0: Scalar[WXM_DTYPE] = weights[0]
     var w_P: Scalar[WXM_DTYPE] = weights[P]

@@ -4,6 +4,7 @@
 
 from std.collections import InlineArray
 from std.gpu.host import DeviceContext
+from std.math import ceildiv
 from layout import TileTensor, TensorLayout, Idx, row_major
 
 from warpxm.apps.imhd import (
@@ -12,7 +13,9 @@ from warpxm.apps.imhd import (
 from warpxm.core.bc import BC_WALL_FREESLIP, BC_PEC_WALL
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.spatial.dg_core_3d import _dg_3d_compute_rhs_core
+from warpxm.spatial.dg_core_3d import (
+    _dg_3d_compute_rhs_core, DG_CORE_3D_ELEMS_PER_BLOCK,
+)
 from warpxm.variable.state_3d import DGState3D
 
 
@@ -102,6 +105,7 @@ def _imhd_rhs_kernel_3d[
     _dg_3d_compute_rhs_core[
         P, MHD_NC, flux_x, flux_y, flux_z, num_flux, apply_bc,
         QLayout, RhsLayout, FaceLayout, EFLayout,
+        DG_CORE_3D_ELEMS_PER_BLOCK,
     ](
         q, rhs, face_neg_elem, face_pos_elem, elem_face_dir, face_bc,
         jacobian_x, jacobian_y, jacobian_z, num_elements,
@@ -146,11 +150,12 @@ struct DGImhdSolver3D[P: Int, USE_HLLD: Bool = False]:
             type_of(q_layout), type_of(q_layout),
             type_of(face_layout), type_of(ef_layout),
         ]
+        comptime EB = DG_CORE_3D_ELEMS_PER_BLOCK
         ctx.enqueue_function[kernel](
             q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             self.app.gas_gamma, self.app.min_density, self.app.min_pressure,
             mesh.jacobian_x, mesh.jacobian_y, mesh.jacobian_z,
             mesh.num_elements,
-            grid_dim=mesh.num_elements,
-            block_dim=(P1, P1, P1),
+            grid_dim=ceildiv(mesh.num_elements, EB),
+            block_dim=(P1, P1, P1 * EB),
         )

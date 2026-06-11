@@ -6,6 +6,16 @@
 # signatures match the higher-dim versions: numerical flux takes a
 # 3-component normal `(nx, ny, nz)` with `(ny, nz) = (0, 0)` for 1D
 # callers — the 0 lanes fold away.
+#
+# ## Element packing (DG-perf Task 1)
+#
+# `ELEMS_PER_BLOCK` lives on `thread_idx.y`. The unpacked layout has
+# `(P+1) = 3` threads/block for P=2 — well under a warp; the worst
+# starting point of all three dimensions. With EB=4, we get 12
+# threads/block. EB=8 / 16 trigger hangs / divergence stalls on
+# certain 1D Maxwell-coupled tests (e.g. `test_vlasov_maxwell_
+# uniform_oscillator_1d1v`); the issue is Mojo-codegen-flaky rather
+# than fundamental — EB=4 is the conservative ceiling for now.
 
 from std.collections import InlineArray
 from std.gpu import block_idx, thread_idx
@@ -16,6 +26,11 @@ from layout import TileTensor, TensorLayout, row_major, stack_allocation
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_1d import GHOST_LEFT, GHOST_RIGHT
+
+
+# Default number of elements packed into one CUDA block for the 1D DG
+# core. Per-physics wrappers may override.
+comptime DG_CORE_1D_ELEMS_PER_BLOCK: Int = 4
 
 
 @always_inline
@@ -47,6 +62,7 @@ def _dg_1d_compute_rhs_core[
     ) capturing [_] -> InlineArray[Real, NC],
     QLayout: TensorLayout, RhsLayout: TensorLayout,
     ElemFaceLayout: TensorLayout,
+    ELEMS_PER_BLOCK: Int = 1,
 ](
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
@@ -62,8 +78,13 @@ def _dg_1d_compute_rhs_core[
     law. Volume term via GLL differentiation; surface term via the
     supplied numerical-flux closure on a 3-component unit normal (1D
     callers always pass `(±1, 0, 0)`).
+
+    Thread layout: `block_idx.x = elem_block`, `thread_idx.x = i`,
+    `thread_idx.y = eb_in_block`. Element index
+    `e = block_idx.x · ELEMS_PER_BLOCK + thread_idx.y`.
     """
     comptime num_nodes_per_elem = P + 1
+    comptime EB = ELEMS_PER_BLOCK
     comptime assert q.flat_rank == 1
     comptime assert rhs.flat_rank == 1
     comptime assert elem_left_face.flat_rank == 1
@@ -72,19 +93,21 @@ def _dg_1d_compute_rhs_core[
     comptime assert face_right.flat_rank == 1
     comptime assert face_bc.flat_rank == 1
 
-    var e = Int(block_idx.x)
+    var eb_in_block = Int(thread_idx.y)
+    var e = Int(block_idx.x) * EB + eb_in_block
     var i = Int(thread_idx.x)
     if e >= num_elements or i >= num_nodes_per_elem:
+        barrier()
         return
 
     var f_shared = stack_allocation[
         WXM_DTYPE, address_space=AddressSpace.SHARED,
-    ](row_major[num_nodes_per_elem, NC]())
+    ](row_major[EB, num_nodes_per_elem, NC]())
 
     var q_i = _load_node_1d[P, NC](q, e, i)
     var f_i = flux_x_fn(q_i)
     comptime for c in range(NC):
-        f_shared[i, c] = rebind[f_shared.ElementType](f_i[c])
+        f_shared[eb_in_block, i, c] = rebind[f_shared.ElementType](f_i[c])
 
     barrier()
 
@@ -94,7 +117,7 @@ def _dg_1d_compute_rhs_core[
     comptime for j in range(num_nodes_per_elem):
         var d_ij: Scalar[WXM_DTYPE] = d_flat[i * num_nodes_per_elem + j]
         comptime for c in range(NC):
-            var fj_c = rebind[Scalar[WXM_DTYPE]](f_shared[j, c])
+            var fj_c = rebind[Scalar[WXM_DTYPE]](f_shared[eb_in_block, j, c])
             dfdxi[c] += d_ij * fj_c
 
     # --- Surface term: left and right faces ----------------------------
