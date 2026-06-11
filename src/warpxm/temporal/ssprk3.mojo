@@ -75,3 +75,15 @@ def _ssprk3_combine_kernel[
         var usv = rebind[Scalar[WXM_DTYPE]](u_stage[t])
         var rhv = rebind[Scalar[WXM_DTYPE]](rhs[t])
         output[t] = rebind[output.ElementType](a * u0v + b * (usv + dt * rhv))
+
+
+# DG-perf Task 4 attempt (2026-05-17) — `_ssprk3_combine_inplace_kernel`
+# variant + skipping the `u_save ← u` copy was tried. The eliminated
+# per-step D2D copy is ~0.2 % of step time at current mesh sizes, well
+# below the 5 % target the task plan called for. The in-place kernel
+# variant turned out to be _slower_ than the regular 4-arg combine
+# (Mojo codegen difference, probably memory-fence-related on the
+# aliased read/write), so 2D bench regressed by 1–4 %. Reverted.
+#
+# Recheck after mesh / NC scaling pushes the state buffer larger; for
+# now Task 4 stays unfilled.
