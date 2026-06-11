@@ -40,7 +40,7 @@ src/warpxm/
                # (multi-state coupled steppers).
   variable/    # DGState{1,2,3}D[P, NC] device buffers
 examples/      # polished driver programs (one .mojo per physics setup)
-tests/         # 66 regression tests covering every (physics, dimension) combination
+tests/         # 70 regression tests covering every (physics, dimension) combination
 scripts/       # tooling: gll_tables.py (GLL basis table generator),
                # run_tests.sh (pixi `test` task), build_examples.sh
                # (pixi `build` task).
@@ -101,6 +101,12 @@ Supporting infrastructure:
 | 1D advection convergence        | observed rates 1.98 / 3.01 / 3.99 (theoretical P+1)     |
 | 2D advection convergence        | observed rates 1.90 / 3.03 / 4.00 (theoretical P+1)     |
 | 3D advection convergence        | observed rates 3.12 / 3.99 at P=2,3 (theoretical P+1)   |
+| 1D Maxwell plane-wave conv      | observed rates 1.98 / 3.01 / 4.00 (theoretical P+1)     |
+| 1D Euler entropy-wave conv      | observed rates 1.99 / 2.95 / 4.00 (theoretical P+1)     |
+| 2D MHD Alfvén-wave conv         | observed rates 1.98 / 2.99 / 4.00 (theoretical P+1)     |
+| 3D MHD Alfvén-wave conv         | observed rates 2.98 / 4.02 at P=2,3 (theoretical P+1)   |
+| 1D1V Vlasov free-streaming conv | observed rates 1.78 / 3.10 / 4.29 (theoretical P+1)     |
+| 1D2V Vlasov free-streaming conv | observed rates 1.97 / 3.00 / 3.99 (theoretical P+1)     |
 | 2D Euler hydrostatic balance    | \|v\| ~ 4e-16 after 50 steps (well-balanced source)     |
 | 2D Sod tube                     | analytic plateaus match to 3e-3                         |
 | 1D Langmuir (single-fluid)      | mass drift 2.73e-13, ρ at sample within 7e-6 of IC after period |
@@ -109,7 +115,9 @@ Supporting infrastructure:
 | Pair-plasma asym δ-scaling      | ratio 100.0 / 100.0 between δ ∈ {0.01, 0.001, 0.0001} — physical O(δ²) |
 | 2D Maxwell PEC cavity TM₁₁      | unexcited components stay at 0.0 exactly                |
 | 2D MHD Brio-Wu                  | 1D-extruded into 2D, y-drift 2.8e-13                    |
-| 2D Orszag-Tang vortex           | mass drift 6e-14, ψ² bounded                            |
+| 2D Orszag-Tang (upstream WARPXM units) | mass drift 6e-14, ψ² bounded — domain [0, 2π]², ρ₀=γ², p₀=γ |
+| 2D Orszag-Tang (Athena units)   | ρ ∈ [0.047, 0.547] at t=0.3 (Athena ref), mass drift 8e-14, ψ² 6e-5 |
+| 3D Orszag-Tang (Athena, z-extruded) | z-drift 0.0 exactly; ρ + P + ψ² match 2D bit-for-bit, mass drift 1.7e-12 |
 | 2D GLM ψ-bump decay             | 45000× decay over 4 time units                          |
 | 3D Alfvén wave (SSPRK3)         | B_y / B_z L2 2.4e-5 bit-identical; ρ-drift 2.2e-4       |
 | 3D MHD blast                    | ∫B_x dV preserved to 4e-15 (Faraday's law)              |
@@ -131,7 +139,19 @@ Supporting infrastructure:
 | Adaptive DP45 (3D MHD Alfvén)   | 131 steps for t=1 (vs 1000 SSPRK3), L2 ~2.4e-5 on B/u  |
 | Adaptive DP45 (3D Maxwell)      | 50 steps for t=1 (vs ~2000 SSPRK3), L2 ~8e-4 on E/B    |
 
-Plus 30+ more in `tests/` (66 tests total). Run the suite via:
+**Two Orszag-Tang setups, on purpose.** `test_imhd_orszag_tang_2d`
+uses the upstream WARPXM convention (domain `[0, 2π]²`, `ρ₀ = γ²`,
+`p₀ = γ`) so any port-time regression shows up against the C++
+reference. `test_imhd_orszag_tang_2d_athena` uses the Athena
+convention (domain `[0, 1]²`, `ρ₀ = 25/(36π)`, `p₀ = 5/(12π)`,
+`v₀ = 1`, `B₀ = 1/√(4π)`) so results compare directly with the
+canonical reference at
+<https://www.astro.princeton.edu/~jstone/Athena/tests/orszag-tang/>
+and the broader MHD-code literature that adopts Athena's form. The
+3D variant only exists in Athena units (z-extrusion of the Athena
+2D IC).
+
+Plus 40+ more in `tests/` (94 tests total). Run the suite via:
 ```fish
 pixi run test
 # or, for a single test:
