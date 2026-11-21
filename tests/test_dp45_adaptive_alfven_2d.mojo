@@ -12,7 +12,7 @@
 
 from std.math import cos, sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.imhd import (
@@ -98,11 +98,10 @@ def main() raises:
     )
     var stepper = DormandPrince45_2D[P, MHD_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, MHD_NC],
         mut q_out: DGState2D[P, MHD_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
     var t: Real = 0.0
@@ -112,8 +111,13 @@ def main() raises:
     var max_dt: Real = 0.0
     while t < T_FINAL - Real(1.0e-12):
         var dt_try = dt if (t + dt) < T_FINAL else (T_FINAL - t)
-        var ret = stepper.step_adaptive[compute_rhs](
-            ctx, q, dt_try, atol=ATOL, rtol=RTOL,
+        var ret = stepper.step_adaptive(
+            ctx,
+            q,
+            dt_try,
+            compute_rhs,
+            atol=ATOL,
+            rtol=RTOL,
         )
         var dt_used = ret[0]
         var dt_next = ret[1]

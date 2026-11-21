@@ -9,7 +9,7 @@
 
 from std.math import sin, cos
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.apps.advection import Advection
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -61,22 +61,20 @@ def main() raises:
     var spatial = DGSpatialSolver2D[P, NC](app)
     var stepper = SSPRK3_2D[P, NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, NC],
         mut q_out: DGState2D[P, NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState2D[P, NC]) raises:
+    def no_adjust(mut q_: DGState2D[P, NC]) raises {imm}:
         pass
 
     var t: Real = 0.0
     var step: Int = 0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
         t += dt_use
         step += 1
     ctx.synchronize()

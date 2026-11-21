@@ -13,7 +13,7 @@
 # malformed, wrong counts) without pulling in a heavy dependency.
 
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.euler import (

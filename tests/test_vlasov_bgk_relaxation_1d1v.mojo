@@ -23,7 +23,7 @@
 
 from std.math import exp, sqrt
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.vlasovmaxwell import VLASOV_NC
@@ -55,7 +55,7 @@ comptime DT: Real = 0.01
 
 def compute_three_moments(
     var ctx: DeviceContext,
-    mut mesh: PhaseMesh1D1V[P_X, P_V],
+    mesh: PhaseMesh1D1V[P_X, P_V],
     mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
     mut m_out: Real,
     mut p_out: Real,
@@ -143,25 +143,23 @@ def main() raises:
     var bgk = VlasovBGKSource1D1V[P_X, P_V](ctx, NX)
     var stepper = SSPRK3_1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
 
-    @parameter
     def compute_rhs(
         mut q_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
         mut q_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-    ) raises:
+    ) raises {mut bgk, imm}:
         # BGK alone — zero the residual first because `bgk.apply`
         # *adds* its contribution.
         q_out.buf.enqueue_fill(Real(0.0))
         bgk.apply(ctx, mesh, q_in, q_out, TAU)
 
-    @parameter
-    def no_adjust(mut _q: PhaseState1D1V[P_X, P_V, VLASOV_NC]) raises:
+    def no_adjust(mut _q: PhaseState1D1V[P_X, P_V, VLASOV_NC]) raises {imm}:
         pass
 
     var t: Real = 0.0
     var nsteps: Int = 0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
         t += dt_use
         nsteps += 1
     ctx.synchronize()

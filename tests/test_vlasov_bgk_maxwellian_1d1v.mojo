@@ -19,7 +19,7 @@
 
 from std.math import exp
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.vlasovmaxwell import VLASOV_NC

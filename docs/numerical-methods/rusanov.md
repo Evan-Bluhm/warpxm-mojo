@@ -59,11 +59,11 @@ Rusanov implementation. Example from `apps/imhd.mojo`:
 ```mojo
 @staticmethod
 def numerical_flux_static(
-    q_l: InlineArray[Real, MHD_NC],
-    q_r: InlineArray[Real, MHD_NC],
+    q_l: Array[Real, MHD_NC],
+    q_r: Array[Real, MHD_NC],
     nx: Real, ny: Real, nz: Real,
     gamma: Real, rho_min: Real, press_min: Real,
-) -> InlineArray[Real, MHD_NC]:
+) -> Array[Real, MHD_NC]:
     ...
     var c_max = fmax(fabs(u_n_l) + c_f_l, fabs(u_n_r) + c_f_r)
     ...

@@ -20,7 +20,7 @@
 
 from std.math import isnan
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.adjusters.moe_rossmanith_1d import MoeRossmanith1D
@@ -88,21 +88,19 @@ def main() raises:
     var dt: Real = 2.0e-4
     var t_final: Real = 0.2
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState1D[P, EULER_NC],
         mut q_out: DGState1D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def adjust(mut q_: DGState1D[P, EULER_NC]) raises:
+    def adjust(mut q_: DGState1D[P, EULER_NC]) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
     var t: Real = 0.0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, adjust)
         t += dt_use
     ctx.synchronize()
 
@@ -110,9 +108,9 @@ def main() raises:
     # state values, (c) shock and contact in roughly the right locations.
     var mid_node = nodes_per_elem // 2
     var any_nan = False
-    var rho_at_x = InlineArray[Real, NUM_ELEMENTS](fill=Real(0.0))
-    var u_at_x = InlineArray[Real, NUM_ELEMENTS](fill=Real(0.0))
-    var p_at_x = InlineArray[Real, NUM_ELEMENTS](fill=Real(0.0))
+    var rho_at_x = Array[Real, NUM_ELEMENTS](fill=Real(0.0))
+    var u_at_x = Array[Real, NUM_ELEMENTS](fill=Real(0.0))
+    var p_at_x = Array[Real, NUM_ELEMENTS](fill=Real(0.0))
     with q.buf.map_to_host() as h:
         for e in range(mesh.num_elements):
             var b = (e * nodes_per_elem + mid_node) * EULER_NC

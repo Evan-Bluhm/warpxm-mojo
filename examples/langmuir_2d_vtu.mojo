@@ -23,7 +23,7 @@
 
 from std.math import cos, sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.apps.euler import (
     Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
@@ -171,13 +171,12 @@ def main() raises:
     print("time         ∫ρ_e dV          ∫E_x² dV         rel Δmass")
     print("-----------  ---------------  ---------------  ------------")
 
-    @parameter
     def compute_joint_rhs(
         mut qf_in: DGState2D[P, EULER_NC],
         mut qm_in: DGState2D[P, MAXWELL_NC],
         mut qf_out: DGState2D[P, EULER_NC],
         mut qm_out: DGState2D[P, MAXWELL_NC],
-    ) raises:
+    ) raises {imm}:
         fluid_spatial.compute_rhs(ctx, mesh, qf_in, qf_out)
         maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
         apply_lorentz_source_2d[P](ctx, qf_in, qm_in, qf_out, ALPHA)
@@ -198,7 +197,7 @@ def main() raises:
             var t_target = Real(frame + 1) * frame_dt
             while t < t_target - Real(0.5) * DT:
                 var dt_use = DT if (t + DT) < t_target else (t_target - t)
-                stepper.step[compute_joint_rhs](ctx, q_fluid, q_maxwell, dt_use)
+                stepper.step(ctx, q_fluid, q_maxwell, dt_use, compute_joint_rhs)
                 t += dt_use
 
     fw_fluid.write_pvd()

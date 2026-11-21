@@ -8,9 +8,9 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_1d1v_scaffolding.mojo
 
-from std.collections import InlineArray
+from std.collections import Array
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true, assert_equal
 
 from warpxm.apps.vlasovmaxwell import (
@@ -196,7 +196,7 @@ def main() raises:
     )
 
     # internal_flux_x: vx * f. With vx = 2 and f = 0.5 → 1.0.
-    var f_in = InlineArray[Real, VLASOV_NC](fill=Real(0.5))
+    var f_in = Array[Real, VLASOV_NC](fill=Real(0.5))
     var fx = VlasovMaxwell.internal_flux_x_static[VLASOV_NC](
         f_in, Real(2.0),
     )
@@ -212,8 +212,8 @@ def main() raises:
     )
 
     # Upwind numerical flux: positive wave speed pulls f_l, negative pulls f_r.
-    var f_l = InlineArray[Real, VLASOV_NC](fill=Real(1.0))
-    var f_r = InlineArray[Real, VLASOV_NC](fill=Real(3.0))
+    var f_l = Array[Real, VLASOV_NC](fill=Real(1.0))
+    var f_r = Array[Real, VLASOV_NC](fill=Real(3.0))
     var nf_pos = VlasovMaxwell.numerical_flux_static[VLASOV_NC](
         f_l, f_r, Real(2.0),
     )

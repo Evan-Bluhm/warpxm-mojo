@@ -19,7 +19,7 @@
 
 from std.math import sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
 from warpxm.apps.imhd_glm import ImhdGLM, MHD_GLM_NC, IDX_PSI
@@ -163,16 +163,14 @@ def main() raises:
     print("-----------  ---------------- ---------------- ---------------- ----------  ----------")
 
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, MHD_GLM_NC],
         mut q_out: DGState2D[P, MHD_GLM_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
         apply_glm_damping_2d[P](ctx, q_in, q_out, C_H, C_P_SQ)
 
-    @parameter
-    def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises:
+    def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
     var t: Real = 0.0
@@ -192,7 +190,7 @@ def main() raises:
             var t_target = Real(frame + 1) * frame_dt
             while t < t_target - Real(0.5) * DT:
                 var dt_use = DT if (t + DT) < t_target else (t_target - t)
-                stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+                stepper.step(ctx, q, dt_use, compute_rhs, adjust)
                 t += dt_use
 
     fw.write_pvd()

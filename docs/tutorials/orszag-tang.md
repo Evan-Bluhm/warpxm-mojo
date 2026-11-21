@@ -97,16 +97,14 @@ var spatial = DGImhdGLMSolver2D[P](app)
 var stepper = SSPRK3_2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
 var limiter = MoeRossmanith2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
 
-@parameter
 def compute_rhs(
     mut q_in: DGState2D[P, MHD_GLM_NC],
     mut q_out: DGState2D[P, MHD_GLM_NC],
-) raises:
+) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
     apply_glm_damping_2d[P](ctx, q_in, q_out, C_H, C_P_SQ)
 
-@parameter
-def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises:
+def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises {mut limiter, imm}:
     limiter.apply(ctx, mesh, q_)
 ```
 

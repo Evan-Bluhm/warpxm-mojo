@@ -17,7 +17,7 @@
 #     pixi run mojo run -I src tests/test_vlasov_1d2v_scaffolding.mojo
 
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true, assert_equal
 
 from warpxm.apps.vlasovmaxwell import VLASOV_NC, VlasovMaxwell

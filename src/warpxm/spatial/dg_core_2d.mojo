@@ -5,14 +5,15 @@
 #   1.  Each per-physics kernel file declares a GPU-launchable
 #       `def _<phys>_rhs_kernel_2d[P, ...]` that takes the physics-
 #       specific scalar parameters (γ, c_light, etc.) as kernel arguments.
-#   2.  Inside that kernel it defines four `@parameter def` closures with
+#   2.  Inside that kernel it defines four closures (`def ... {imm}`) with
 #       uniform signatures: `flux_x`, `flux_y`, `num_flux`, `apply_bc`.
 #       The closures capture the kernel's scalar args and call into the
 #       app's static flux methods.
-#   3.  The kernel then calls `_dg_2d_compute_rhs_core[..., flux_x,
-#       flux_y, num_flux, apply_bc]` which does all the DG work.
+#   3.  The kernel then calls `_dg_2d_compute_rhs_core[...](..., flux_x,
+#       flux_y, num_flux, apply_bc)` which does all the DG work.
 #
-# Every closure is `@parameter` and the core is `@always_inline`, so the
+# Each closure has its own static type (the core is generic over
+# `FluxX`, `FluxY`, `NumFlux`, `ApplyBc`) and the core is `@always_inline`, so the
 # generated GPU code is byte-identical to the hand-rolled per-physics
 # kernels we replace.
 #
@@ -26,10 +27,10 @@
 # memory grows by `ELEMS_PER_BLOCK`× but stays well under the 100 KB/SM
 # limit for every (NC, P) combination we ship.
 
-from std.collections import InlineArray
-from std.gpu import block_idx, thread_idx
-from std.gpu.sync import barrier
-from std.gpu.memory import AddressSpace
+from std.collections import Array
+from max.gpu import block_idx, thread_idx
+from max.gpu.sync import barrier
+from max.gpu.memory import AddressSpace
 from layout import TileTensor, TensorLayout, row_major, stack_allocation
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -53,30 +54,33 @@ def _load_node_2d[
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     elem: Int,
     local_node: Int,
-) -> InlineArray[Real, NC]:
+) -> Array[Real, NC]:
     comptime assert q.flat_rank == 1
     comptime num_nodes_per_elem = (P + 1) * (P + 1)
     var base = (elem * num_nodes_per_elem + local_node) * NC
-    var out: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var out: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
     comptime for c in range(NC):
         out[c] = rebind[Scalar[WXM_DTYPE]](q[base + c])
-    return out
+    return out^
 
 
 @always_inline
 def _dg_2d_compute_rhs_core[
-    P: Int, NC: Int,
-    flux_x_fn: def(InlineArray[Real, NC]) capturing [_] -> InlineArray[Real, NC],
-    flux_y_fn: def(InlineArray[Real, NC]) capturing [_] -> InlineArray[Real, NC],
-    num_flux_fn: def(
-        InlineArray[Real, NC], InlineArray[Real, NC], Real, Real,
-    ) capturing [_] -> InlineArray[Real, NC],
-    apply_bc_fn: def(
-        InlineArray[Real, NC], Int, Int,
-    ) capturing [_] -> InlineArray[Real, NC],
-    QLayout: TensorLayout, RhsLayout: TensorLayout,
-    FaceLayout: TensorLayout, EFLayout: TensorLayout,
-    ELEMS_PER_BLOCK: Int = 1,
+    P: Int,
+    NC: Int,
+    QLayout: TensorLayout,
+    RhsLayout: TensorLayout,
+    FaceLayout: TensorLayout,
+    EFLayout: TensorLayout,
+    ELEMS_PER_BLOCK: Int,
+    FluxX: def(Array[Real, NC]) -> Array[Real, NC],
+    FluxY: def(Array[Real, NC]) -> Array[Real, NC],
+    NumFlux: def(
+        Array[Real, NC], Array[Real, NC], Real, Real,
+    ) -> Array[Real, NC],
+    ApplyBc: def(
+        Array[Real, NC], Int, Int,
+    ) -> Array[Real, NC],
 ](
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
@@ -87,6 +91,10 @@ def _dg_2d_compute_rhs_core[
     jacobian_x: Real,
     jacobian_y: Real,
     num_elements: Int,
+    flux_x_fn: FluxX,
+    flux_y_fn: FluxY,
+    num_flux_fn: NumFlux,
+    apply_bc_fn: ApplyBc,
 ):
     """Generic per-node DG residual for a 2D NC-component conservation
     law. Volume term via tensor-product GLL differentiation, surface
@@ -140,8 +148,8 @@ def _dg_2d_compute_rhs_core[
 
     # --- Volume term: ∇·f at this node from tensor-product differentiation --
     var d_flat = NodalBasis1D[P].diff_matrix_flat()
-    var dfdx: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-    var dgdy: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var dfdx: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
+    var dgdy: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
     comptime for kn in range(P1):
         var dx_in_kn: Scalar[WXM_DTYPE] = d_flat[in_ * P1 + kn]
@@ -174,13 +182,13 @@ def _dg_2d_compute_rhs_core[
     var w_0: Scalar[WXM_DTYPE] = weights[0]
     var w_P: Scalar[WXM_DTYPE] = weights[P]
 
-    var surface: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var surface: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
     if in_ == 0:
         var fL = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 4 + FACE_DIR_LEFT]))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[fL]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fL]))
-        var q_neg: InlineArray[Real, NC]
+        var q_neg: Array[Real, NC]
         if neg_e == Int(GHOST_NEG):
             q_neg = apply_bc_fn(q_n, bc_kind, 0)
         else:
@@ -193,7 +201,7 @@ def _dg_2d_compute_rhs_core[
         var fR = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 4 + FACE_DIR_RIGHT]))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[fR]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fR]))
-        var q_pos: InlineArray[Real, NC]
+        var q_pos: Array[Real, NC]
         if pos_e == Int(GHOST_POS):
             q_pos = apply_bc_fn(q_n, bc_kind, 0)
         else:
@@ -206,7 +214,7 @@ def _dg_2d_compute_rhs_core[
         var fB = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 4 + FACE_DIR_BOTTOM]))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[fB]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fB]))
-        var q_neg: InlineArray[Real, NC]
+        var q_neg: Array[Real, NC]
         if neg_e == Int(GHOST_NEG):
             q_neg = apply_bc_fn(q_n, bc_kind, 1)
         else:
@@ -219,7 +227,7 @@ def _dg_2d_compute_rhs_core[
         var fT = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 4 + FACE_DIR_TOP]))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[fT]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fT]))
-        var q_pos: InlineArray[Real, NC]
+        var q_pos: Array[Real, NC]
         if pos_e == Int(GHOST_POS):
             q_pos = apply_bc_fn(q_n, bc_kind, 1)
         else:

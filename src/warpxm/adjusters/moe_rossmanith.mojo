@@ -12,10 +12,10 @@
 # Parametric on the conserved-variable count NC so one kernel handles
 # Euler (NC=5), IMHD (NC=8), GLM-MHD (NC=9), …
 
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs, fmin, fmax
@@ -67,8 +67,9 @@ def _bounds_kernel[
     q_avg: TileTensor[WXM_DTYPE, BoundsLayout, MutAnyOrigin],
     q_min: TileTensor[WXM_DTYPE, BoundsLayout, MutAnyOrigin],
     q_max: TileTensor[WXM_DTYPE, BoundsLayout, MutAnyOrigin],
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
+    var num_elements = Int(num_elements_i64)
     comptime P1 = P + 1
     comptime nodes_per_elem = P1 ** NDIM
     comptime assert q.flat_rank == 1
@@ -115,7 +116,7 @@ def _apply_kernel[
     elem_face_dir: TileTensor[INDEX_DTYPE, EFLayout, MutAnyOrigin],
     alpha_coeff: Real,
     dx_min: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
     """Gather 2*NDIM face neighbors of element e, compute per-element θ,
     apply linear deviation shrink. Face direction d ∈ [0, 2*NDIM) maps
@@ -123,6 +124,7 @@ def _apply_kernel[
     convention: FACE_DIR_LEFT = 0, FACE_DIR_RIGHT = 1, FACE_DIR_BOTTOM
     = 2, FACE_DIR_TOP = 3, FACE_DIR_DOWN = 4, FACE_DIR_UP = 5).
     """
+    var num_elements = Int(num_elements_i64)
     comptime P1 = P + 1
     comptime nodes_per_elem = P1 ** NDIM
     comptime num_neighbors = 2 * NDIM
@@ -138,7 +140,7 @@ def _apply_kernel[
     if e >= num_elements:
         return
 
-    var nbrs: InlineArray[Int, num_neighbors] = InlineArray[Int, num_neighbors](fill=0)
+    var nbrs: Array[Int, num_neighbors] = Array[Int, num_neighbors](fill=0)
     comptime for d in range(num_neighbors):
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](
             elem_face_dir[e * num_neighbors + d]
@@ -212,16 +214,16 @@ struct MoeRossmanith2D[P: Int, NC: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh2D[Self.P],
+        mesh: BlockMesh2D[Self.P],
         mut q: DGState2D[Self.P, Self.NC],
     ) raises:
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var bounds_layout = row_major(Idx(self.num_elements * Self.NC))
-        var face_layout = row_major(Idx(mesh.num_faces))
-        var ef_layout = row_major(Idx(mesh.num_elements * 4))
+        var q_layout = row_major(Int(q.buf_len))
+        var bounds_layout = row_major(Int(self.num_elements * Self.NC))
+        var face_layout = row_major(Int(mesh.num_faces))
+        var ef_layout = row_major(Int(mesh.num_elements * 4))
 
         var q_view = TileTensor(q.buf, q_layout)
         var qa_view = TileTensor(self.q_avg_buf, bounds_layout)
@@ -233,7 +235,7 @@ struct MoeRossmanith2D[P: Int, NC: Int]:
             type_of(q_layout), type_of(bounds_layout),
         ]
         ctx.enqueue_function[k_bounds](
-            q_view, qa_view, qmn_view, qmx_view, self.num_elements,
+            q_view, qa_view, qmn_view, qmx_view, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )
 
@@ -250,7 +252,7 @@ struct MoeRossmanith2D[P: Int, NC: Int]:
         ctx.enqueue_function[k_apply](
             q_view, qa_view, qmn_view, qmx_view,
             fn_view, fp_view, ef_view,
-            self.alpha_coeff, dx_min, self.num_elements,
+            self.alpha_coeff, dx_min, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )
 
@@ -278,16 +280,16 @@ struct MoeRossmanith3D[P: Int, NC: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh3D[Self.P],
+        mesh: BlockMesh3D[Self.P],
         mut q: DGState3D[Self.P, Self.NC],
     ) raises:
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var bounds_layout = row_major(Idx(self.num_elements * Self.NC))
-        var face_layout = row_major(Idx(mesh.num_faces))
-        var ef_layout = row_major(Idx(mesh.num_elements * 6))
+        var q_layout = row_major(Int(q.buf_len))
+        var bounds_layout = row_major(Int(self.num_elements * Self.NC))
+        var face_layout = row_major(Int(mesh.num_faces))
+        var ef_layout = row_major(Int(mesh.num_elements * 6))
 
         var q_view = TileTensor(q.buf, q_layout)
         var qa_view = TileTensor(self.q_avg_buf, bounds_layout)
@@ -299,7 +301,7 @@ struct MoeRossmanith3D[P: Int, NC: Int]:
             type_of(q_layout), type_of(bounds_layout),
         ]
         ctx.enqueue_function[k_bounds](
-            q_view, qa_view, qmn_view, qmx_view, self.num_elements,
+            q_view, qa_view, qmn_view, qmx_view, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )
 
@@ -316,6 +318,6 @@ struct MoeRossmanith3D[P: Int, NC: Int]:
         ctx.enqueue_function[k_apply](
             q_view, qa_view, qmn_view, qmx_view,
             fn_view, fp_view, ef_view,
-            self.alpha_coeff, dx_min, self.num_elements,
+            self.alpha_coeff, dx_min, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )

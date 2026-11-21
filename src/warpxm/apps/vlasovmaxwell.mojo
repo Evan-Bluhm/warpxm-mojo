@@ -16,7 +16,7 @@
 #   * `charge_mass_ratio`  (q / m)
 #   * `skin_depth_norm`    (λ_skin, normalising the Lorentz coupling)
 
-from std.collections import InlineArray
+from std.collections import Array
 
 from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real, WXM_INF, WXM_TINY
@@ -126,37 +126,37 @@ struct VlasovMaxwell(ImplicitlyCopyable, Movable):
     # ------------------------------------------------------------------
     # Internal fluxes — linear in `f`, so they're just `c · f` with `c`
     # the per-node signal speed (v-coordinate for the x-axis, Lorentz
-    # acceleration for the v-axis). Returned as `InlineArray[Real, NC]`
+    # acceleration for the v-axis). Returned as `Array[Real, NC]`
     # to keep the same shape as the other apps' flux helpers.
     # ------------------------------------------------------------------
 
     @staticmethod
     def internal_flux_x_static[NC: Int](
-        f: InlineArray[Real, NC], vx: Real,
-    ) -> InlineArray[Real, NC]:
+        f: Array[Real, NC], vx: Real,
+    ) -> Array[Real, NC]:
         """Physical-x flux: `vx · f` per component. `vx` is the
         v-coordinate of the current phase node."""
-        var out = InlineArray[Real, NC](fill=Real(0.0))
+        var out = Array[Real, NC](fill=Real(0.0))
         comptime for c in range(NC):
             out[c] = vx * f[c]
-        return out
+        return out^
 
     @staticmethod
     def internal_flux_v_static[NC: Int](
-        f: InlineArray[Real, NC], av: Real,
-    ) -> InlineArray[Real, NC]:
+        f: Array[Real, NC], av: Real,
+    ) -> Array[Real, NC]:
         """Velocity-axis flux: `a_v · f` per component. `av` is the
         Lorentz acceleration along the v-axis at the current phase
         node — e.g. `acceleration_v_1d1v_static(Ex, q/m, λ)`."""
-        var out = InlineArray[Real, NC](fill=Real(0.0))
+        var out = Array[Real, NC](fill=Real(0.0))
         comptime for c in range(NC):
             out[c] = av * f[c]
-        return out
+        return out^
 
     @staticmethod
     def internal_flux_v1_static[NC: Int](
-        f: InlineArray[Real, NC], av1: Real,
-    ) -> InlineArray[Real, NC]:
+        f: Array[Real, NC], av1: Real,
+    ) -> Array[Real, NC]:
         """1D2V v1-axis flux: `a_v1 · f` per component. Thin alias over
         `internal_flux_v_static`; named separately so the 1D2V DG
         kernel's call site reads symmetrically with `internal_flux_x_static`
@@ -165,8 +165,8 @@ struct VlasovMaxwell(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def internal_flux_v2_static[NC: Int](
-        f: InlineArray[Real, NC], av2: Real,
-    ) -> InlineArray[Real, NC]:
+        f: Array[Real, NC], av2: Real,
+    ) -> Array[Real, NC]:
         """1D2V v2-axis flux: `a_v2 · f` per component. Counterpart to
         `internal_flux_v1_static`."""
         return Self.internal_flux_v_static[NC](f, av2)
@@ -182,20 +182,20 @@ struct VlasovMaxwell(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def numerical_flux_static[NC: Int](
-        f_l: InlineArray[Real, NC], f_r: InlineArray[Real, NC],
+        f_l: Array[Real, NC], f_r: Array[Real, NC],
         wave_speed: Real,
-    ) -> InlineArray[Real, NC]:
+    ) -> Array[Real, NC]:
         """Upwind flux on a single phase-space face. `wave_speed > 0`
         ⇒ pulls from the left state; `wave_speed < 0` ⇒ from the
         right. Identical formula on both axes — the caller decides
         which speed to feed in."""
         var abs_c = fabs(wave_speed)
-        var out = InlineArray[Real, NC](fill=Real(0.0))
+        var out = Array[Real, NC](fill=Real(0.0))
         comptime for c in range(NC):
             out[c] = Real(0.5) * (
                 wave_speed * (f_l[c] + f_r[c]) + abs_c * (f_l[c] - f_r[c])
             )
-        return out
+        return out^
 
     # ------------------------------------------------------------------
     # CFL helper. Mirrors upstream's combined-bound formula in

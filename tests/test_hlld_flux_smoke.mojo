@@ -24,7 +24,7 @@ def main() raises:
     var p_min: Real = 1e-12
 
     # ---- (a) Consistency: L == R -----------------------------------------
-    var q = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var q = Array[Real, MHD_NC](fill=Real(0.0))
     q[IDX_RHO] = 1.0
     q[IDX_MX] = 0.5
     q[IDX_MY] = -0.3
@@ -60,14 +60,14 @@ def main() raises:
     assert_true(max_err_y < Real(1.0e-12), "HLLD inconsistent on y-normal smooth state")
 
     # ---- (b) Brio-Wu Riemann problem -------------------------------------
-    var q_l = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var q_l = Array[Real, MHD_NC](fill=Real(0.0))
     q_l[IDX_RHO] = 1.0
     q_l[IDX_BX] = 0.75
     q_l[IDX_BY] = 1.0
     var bsq_l = 0.75*0.75 + 1.0*1.0
     q_l[IDX_E] = 1.0 / (Real(2.0) - Real(1.0)) + Real(0.5) * bsq_l
 
-    var q_r = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var q_r = Array[Real, MHD_NC](fill=Real(0.0))
     q_r[IDX_RHO] = 0.125
     q_r[IDX_BX] = 0.75
     q_r[IDX_BY] = -1.0
@@ -92,8 +92,8 @@ def main() raises:
 
     # ---- (c) Small perturbation: HLLD ≈ Rusanov to first order ----------
     var eps_pert: Real = 0.001
-    var q_l2 = InlineArray[Real, MHD_NC](fill=Real(0.0))
-    var q_r2 = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var q_l2 = Array[Real, MHD_NC](fill=Real(0.0))
+    var q_r2 = Array[Real, MHD_NC](fill=Real(0.0))
     for c in range(MHD_NC):
         q_l2[c] = q[c] - eps_pert * Real(c + 1) * Real(0.1)
         q_r2[c] = q[c] + eps_pert * Real(c + 1) * Real(0.1)

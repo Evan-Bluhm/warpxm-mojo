@@ -23,7 +23,7 @@
 # A 1D caller passes `nx = ±1, ny = 0, nz = 0`; the unused y/z terms in
 # the numerical flux multiply by zero and the compiler folds them away.
 
-from std.collections import InlineArray
+from std.collections import Array
 
 from warpxm.core.math_compat import fabs, fmax, sqrt
 from warpxm.core.types import Real
@@ -41,13 +41,13 @@ comptime IDX_E: Int = 4
 
 
 @always_inline
-def _rho_floored(q: InlineArray[Real, EULER_NC], rho_min: Real) -> Real:
+def _rho_floored(q: Array[Real, EULER_NC], rho_min: Real) -> Real:
     return fmax(q[IDX_RHO], rho_min)
 
 
 @always_inline
 def _pressure_floored(
-    q: InlineArray[Real, EULER_NC], gamma: Real, rho_min: Real, press_min: Real,
+    q: Array[Real, EULER_NC], gamma: Real, rho_min: Real, press_min: Real,
 ) -> Real:
     """γ-law pressure with floors. Mirrors `euler_getPressureFloored`."""
     var rho = _rho_floored(q, rho_min)
@@ -84,22 +84,22 @@ struct Euler(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def internal_flux_axis_static[axis: Int](
-        q: InlineArray[Real, EULER_NC],
+        q: Array[Real, EULER_NC],
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, EULER_NC]:
+    ) -> Array[Real, EULER_NC]:
         comptime assert axis >= 0 and axis < 3, "axis must be 0, 1, or 2"
         var rho = _rho_floored(q, rho_min)
         var p = _pressure_floored(q, gamma, rho_min, press_min)
         comptime mom_idx = IDX_MX + axis
         var u_axis = q[mom_idx] / rho
-        var f: InlineArray[Real, EULER_NC] = InlineArray[Real, EULER_NC](fill=Real(0.0))
+        var f: Array[Real, EULER_NC] = Array[Real, EULER_NC](fill=Real(0.0))
         f[IDX_RHO] = q[mom_idx]
         f[IDX_MX] = q[IDX_MX] * u_axis
         f[IDX_MY] = q[IDX_MY] * u_axis
         f[IDX_MZ] = q[IDX_MZ] * u_axis
         f[mom_idx] += p
         f[IDX_E] = u_axis * (q[IDX_E] + p)
-        return f
+        return f^
 
     # Backward-compatible per-axis named methods. They forward to
     # `internal_flux_axis_static[axis]` so per-dim DG kernels can call
@@ -107,23 +107,23 @@ struct Euler(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def internal_flux_x_static(
-        q: InlineArray[Real, EULER_NC],
+        q: Array[Real, EULER_NC],
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, EULER_NC]:
+    ) -> Array[Real, EULER_NC]:
         return Self.internal_flux_axis_static[0](q, gamma, rho_min, press_min)
 
     @staticmethod
     def internal_flux_y_static(
-        q: InlineArray[Real, EULER_NC],
+        q: Array[Real, EULER_NC],
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, EULER_NC]:
+    ) -> Array[Real, EULER_NC]:
         return Self.internal_flux_axis_static[1](q, gamma, rho_min, press_min)
 
     @staticmethod
     def internal_flux_z_static(
-        q: InlineArray[Real, EULER_NC],
+        q: Array[Real, EULER_NC],
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, EULER_NC]:
+    ) -> Array[Real, EULER_NC]:
         return Self.internal_flux_axis_static[2](q, gamma, rho_min, press_min)
 
     # The 1D-style entry point — always x-direction. Kept so the 1D DG
@@ -131,9 +131,9 @@ struct Euler(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def internal_flux_static(
-        q: InlineArray[Real, EULER_NC],
+        q: Array[Real, EULER_NC],
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, EULER_NC]:
+    ) -> Array[Real, EULER_NC]:
         return Self.internal_flux_axis_static[0](q, gamma, rho_min, press_min)
 
     # ------------------------------------------------------------------
@@ -143,11 +143,11 @@ struct Euler(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def numerical_flux_static(
-        q_l: InlineArray[Real, EULER_NC],
-        q_r: InlineArray[Real, EULER_NC],
+        q_l: Array[Real, EULER_NC],
+        q_r: Array[Real, EULER_NC],
         nx: Real, ny: Real, nz: Real,
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, EULER_NC]:
+    ) -> Array[Real, EULER_NC]:
         var rho_l = _rho_floored(q_l, rho_min)
         var rho_r = _rho_floored(q_r, rho_min)
         var p_l = _pressure_floored(q_l, gamma, rho_min, press_min)
@@ -167,9 +167,9 @@ struct Euler(ImplicitlyCopyable, Movable):
         var fy_r = Self.internal_flux_axis_static[1](q_r, gamma, rho_min, press_min)
         var fz_r = Self.internal_flux_axis_static[2](q_r, gamma, rho_min, press_min)
 
-        var f: InlineArray[Real, EULER_NC] = InlineArray[Real, EULER_NC](fill=Real(0.0))
+        var f: Array[Real, EULER_NC] = Array[Real, EULER_NC](fill=Real(0.0))
         comptime for c in range(EULER_NC):
             var f_n_l = nx * fx_l[c] + ny * fy_l[c] + nz * fz_l[c]
             var f_n_r = nx * fx_r[c] + ny * fy_r[c] + nz * fz_r[c]
             f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
-        return f
+        return f^

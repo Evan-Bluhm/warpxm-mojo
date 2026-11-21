@@ -26,9 +26,9 @@
 
 from std.math import sin, exp, ceildiv
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
-from layout import TileTensor, Idx, row_major
+from layout import TileTensor, row_major
 
 from warpxm.apps.vlasovmaxwell import (
     VlasovMaxwell, VLASOV_NC, VLASOV_AUX_NC,
@@ -133,7 +133,7 @@ def main() raises:
     var size = q.buf_len
     comptime BLOCK = 256
     var grid = ceildiv(size, BLOCK)
-    var layout = row_major(Idx(size))
+    var layout = row_major(Int(size))
 
     var t: Real = 0.0
     var nsteps: Int = 0
@@ -147,7 +147,7 @@ def main() raises:
             TileTensor(q.buf, layout),
             TileTensor(rhs.buf, layout),
             TileTensor(q_tmp.buf, layout),
-            dt_use, size, grid_dim=grid, block_dim=BLOCK,
+            dt_use, Int64(size), grid_dim=grid, block_dim=BLOCK,
         )
         ctx.enqueue_copy(dst_buf=q.buf, src_buf=q_tmp.buf)
         t += dt_use

@@ -18,10 +18,10 @@
 # per-dim DGState type used at the host-side API. The kernel body is
 # identical across dimensions and runs flat over `(P+1)^NDIM` nodes.
 
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -73,8 +73,9 @@ def _positivity_kernel_euler[
 ](
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     rho_eps: Real, p_eps: Real, gamma: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
+    var num_elements = Int(num_elements_i64)
     comptime P1 = P + 1
     comptime NC = EULER_NC
     comptime nodes_per_elem = P1 ** NDIM
@@ -206,16 +207,16 @@ struct PositivityEuler1D[P: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh1D[Self.P],
+        mesh: BlockMesh1D[Self.P],
         mut q: DGState1D[Self.P, EULER_NC],
     ) raises:
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
-        var q_layout = row_major(Idx(q.buf_len))
+        var q_layout = row_major(Int(q.buf_len))
         var q_view = TileTensor(q.buf, q_layout)
         comptime k_fn = _positivity_kernel_euler[Self.P, 1, type_of(q_layout)]
         ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, self.num_elements,
+            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )
 
@@ -240,16 +241,16 @@ struct PositivityEuler2D[P: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh2D[Self.P],
+        mesh: BlockMesh2D[Self.P],
         mut q: DGState2D[Self.P, EULER_NC],
     ) raises:
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
-        var q_layout = row_major(Idx(q.buf_len))
+        var q_layout = row_major(Int(q.buf_len))
         var q_view = TileTensor(q.buf, q_layout)
         comptime k_fn = _positivity_kernel_euler[Self.P, 2, type_of(q_layout)]
         ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, self.num_elements,
+            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )
 
@@ -274,15 +275,15 @@ struct PositivityEuler3D[P: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh3D[Self.P],
+        mesh: BlockMesh3D[Self.P],
         mut q: DGState3D[Self.P, EULER_NC],
     ) raises:
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
-        var q_layout = row_major(Idx(q.buf_len))
+        var q_layout = row_major(Int(q.buf_len))
         var q_view = TileTensor(q.buf, q_layout)
         comptime k_fn = _positivity_kernel_euler[Self.P, 3, type_of(q_layout)]
         ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, self.num_elements,
+            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )

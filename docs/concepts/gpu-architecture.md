@@ -16,7 +16,7 @@ element. With $P = 2$ and a 2D problem that's a $3 \times 3$ block of 9
 threads. Each thread:
 
 1. Loads its own conserved-variable values into a register-resident
-   `InlineArray[Real, NC]` and evaluates the flux $\mathbf{F}(\mathbf{q})$
+   `Array[Real, NC]` and evaluates the flux $\mathbf{F}(\mathbf{q})$
    at its node.
 2. Writes those flux values into a per-element **shared-memory** stage
    (`f_shared` in `dg_core_{1,2,3}d.mojo`); a `barrier()` then makes
@@ -77,7 +77,7 @@ We don't pass raw `UnsafePointer`s to kernels — we wrap each
 `DeviceBuffer[Real.dtype]` in a `TileTensor` with a known layout:
 
 ```mojo
-var q_layout = row_major(Idx(q.buf_len))
+var q_layout = row_major(Int(q.buf_len))
 var q_view = TileTensor(q.buf, q_layout)
 ctx.enqueue_function[kernel](q_view, ..., grid_dim=..., block_dim=...)
 ```

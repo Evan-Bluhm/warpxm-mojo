@@ -19,8 +19,8 @@
 # (e.g. BGK collisions, ponderomotive force) be composed by the
 # driver without changing the stepper.
 
-from std.gpu.host import DeviceContext
-from layout import TileTensor, Idx, row_major
+from max.gpu.host import DeviceContext
+from layout import TileTensor, row_major
 
 from std.math import ceildiv
 
@@ -65,26 +65,27 @@ struct SSPRK3_VlasovMaxwell_1D1V[P_x: Int, P_v: Int]:
         self.qm_rhs = DGState1D[Self.P_x, MAXWELL_NC](ctx, num_x)
 
     def step[
-        compute_joint_rhs_fn: def(
+        ComputeJointRhs: def(
             mut PhaseState1D1V[Self.P_x, Self.P_v, VLASOV_NC],
             mut DGState1D[Self.P_x, MAXWELL_NC],
             mut PhaseState1D1V[Self.P_x, Self.P_v, VLASOV_NC],
             mut DGState1D[Self.P_x, MAXWELL_NC],
-        ) raises capturing [_] -> None,
+        ) raises -> None,
     ](
         mut self,
         var ctx: DeviceContext,
         mut q_phase: PhaseState1D1V[Self.P_x, Self.P_v, VLASOV_NC],
         mut q_maxwell: DGState1D[Self.P_x, MAXWELL_NC],
         dt: Real,
+        compute_joint_rhs_fn: ComputeJointRhs,
     ) raises:
         var p_size = q_phase.buf_len
         var m_size = q_maxwell.buf_len
         comptime BLOCK = 256
         var p_grid = ceildiv(p_size, BLOCK)
         var m_grid = ceildiv(m_size, BLOCK)
-        var pl = row_major(Idx(p_size))
-        var ml = row_major(Idx(m_size))
+        var pl = row_major(Int(p_size))
+        var ml = row_major(Int(m_size))
 
         ctx.enqueue_copy(dst_buf=self.qp_save.buf, src_buf=q_phase.buf)
         ctx.enqueue_copy(dst_buf=self.qm_save.buf, src_buf=q_maxwell.buf)
@@ -111,13 +112,13 @@ struct SSPRK3_VlasovMaxwell_1D1V[P_x: Int, P_v: Int]:
             TileTensor(self.qp_save.buf, pl),
             TileTensor(self.qp_rhs.buf, pl),
             TileTensor(self.qp_stage1.buf, pl),
-            dt, p_size, grid_dim=p_grid, block_dim=BLOCK,
+            dt, Int64(p_size), grid_dim=p_grid, block_dim=BLOCK,
         )
         ctx.enqueue_function[k_euler_m](
             TileTensor(self.qm_save.buf, ml),
             TileTensor(self.qm_rhs.buf, ml),
             TileTensor(self.qm_stage1.buf, ml),
-            dt, m_size, grid_dim=m_grid, block_dim=BLOCK,
+            dt, Int64(m_size), grid_dim=m_grid, block_dim=BLOCK,
         )
 
         # Stage 2: u^(2) = 3/4 u^n + 1/4 (u^(1) + dt L(u^(1)))
@@ -130,7 +131,7 @@ struct SSPRK3_VlasovMaxwell_1D1V[P_x: Int, P_v: Int]:
             TileTensor(self.qp_stage1.buf, pl),
             TileTensor(self.qp_rhs.buf, pl),
             TileTensor(self.qp_stage2.buf, pl),
-            Real(0.75), Real(0.25), dt, p_size,
+            Real(0.75), Real(0.25), dt, Int64(p_size),
             grid_dim=p_grid, block_dim=BLOCK,
         )
         ctx.enqueue_function[k_combine_m](
@@ -138,7 +139,7 @@ struct SSPRK3_VlasovMaxwell_1D1V[P_x: Int, P_v: Int]:
             TileTensor(self.qm_stage1.buf, ml),
             TileTensor(self.qm_rhs.buf, ml),
             TileTensor(self.qm_stage2.buf, ml),
-            Real(0.75), Real(0.25), dt, m_size,
+            Real(0.75), Real(0.25), dt, Int64(m_size),
             grid_dim=m_grid, block_dim=BLOCK,
         )
 
@@ -152,7 +153,7 @@ struct SSPRK3_VlasovMaxwell_1D1V[P_x: Int, P_v: Int]:
             TileTensor(self.qp_stage2.buf, pl),
             TileTensor(self.qp_rhs.buf, pl),
             TileTensor(q_phase.buf, pl),
-            Real(1.0) / Real(3.0), Real(2.0) / Real(3.0), dt, p_size,
+            Real(1.0) / Real(3.0), Real(2.0) / Real(3.0), dt, Int64(p_size),
             grid_dim=p_grid, block_dim=BLOCK,
         )
         ctx.enqueue_function[k_combine_m](
@@ -160,6 +161,6 @@ struct SSPRK3_VlasovMaxwell_1D1V[P_x: Int, P_v: Int]:
             TileTensor(self.qm_stage2.buf, ml),
             TileTensor(self.qm_rhs.buf, ml),
             TileTensor(q_maxwell.buf, ml),
-            Real(1.0) / Real(3.0), Real(2.0) / Real(3.0), dt, m_size,
+            Real(1.0) / Real(3.0), Real(2.0) / Real(3.0), dt, Int64(m_size),
             grid_dim=m_grid, block_dim=BLOCK,
         )

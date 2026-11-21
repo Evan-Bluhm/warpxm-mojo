@@ -7,7 +7,7 @@
 
 from std.math import sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.euler import Euler
@@ -69,21 +69,19 @@ def main() raises:
     var dt: Real = 1.0e-3
     var t_final: Real = 1.0
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState1D[P, EULER_NC],
         mut q_out: DGState1D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState1D[P, EULER_NC]) raises:
+    def no_adjust(mut q_: DGState1D[P, EULER_NC]) raises {imm}:
         pass
 
     var t: Real = 0.0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
         t += dt_use
     ctx.synchronize()
 

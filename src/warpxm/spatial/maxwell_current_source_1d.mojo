@@ -1,9 +1,9 @@
 # 1D Maxwell current source: fluid → Maxwell coupling. Delegates to the
 # 2D kernel function definition.
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, Idx, row_major
+from layout import TileTensor, row_major
 
 from warpxm.apps.euler import EULER_NC
 from warpxm.apps.maxwell import MAXWELL_NC
@@ -23,8 +23,8 @@ def apply_current_source_1d[P: Int](
     var num_total_nodes = q_fluid.total_nodes
     comptime BLOCK = 256
     var grid = ceildiv(num_total_nodes, BLOCK)
-    var fl = row_major(Idx(q_fluid.buf_len))
-    var ml = row_major(Idx(rhs_maxwell.buf_len))
+    var fl = row_major(Int(q_fluid.buf_len))
+    var ml = row_major(Int(rhs_maxwell.buf_len))
 
     comptime kernel = _current_source_kernel_2d[
         P, type_of(fl), type_of(ml),
@@ -32,6 +32,6 @@ def apply_current_source_1d[P: Int](
     ctx.enqueue_function[kernel](
         TileTensor(q_fluid.buf, fl),
         TileTensor(rhs_maxwell.buf, ml),
-        alpha, eps0, num_total_nodes,
+        alpha, eps0, Int64(num_total_nodes),
         grid_dim=grid, block_dim=BLOCK,
     )

@@ -16,12 +16,18 @@ mid-2024 still emit that **don't work** in this codebase:
 | `@parameter if cond:` | `comptime if cond:` |
 | `@parameter for i in range(N):` | `comptime for i in range(N):` |
 | `let x = 5` | `var x = 5` |
-| `borrowed x: Int` | `read x: Int` (usually implicit, rarely written) |
+| `borrowed x: Int` / `read x: Int` | `imm x: Int` (usually implicit, rarely written) |
 | `owned x: List[Int]` | `var x: List[Int]` (in arg lists) |
 | `List[T](a, b, c)` | bracket literal `[a, b, c]` |
 | `from collections import List` | `from std.collections import List` |
 | `T` (bare param inside its struct) | `Self.T` |
 | `constrained(cond, msg)` | `comptime assert cond, msg` |
+| `InlineArray[T, N]` | `Array[T, N]` — no longer implicitly copyable: `return out^` for locals, `q.copy()` for borrowed args |
+| `from std.gpu import …` | `from max.gpu import …` (ships in the `max-core` package) |
+| `@parameter def f(...)` passed as `step[f](...)` | `def f(...) raises {mut limiter, imm}:` passed as a trailing argument, `step(..., f)`; name `mut` only for what the closure mutates |
+| `row_major(Idx(n))` | `row_major(Int(n))` |
+| `n: Int` as a GPU-kernel argument | `n_i64: Int64`, then `var n = Int(n_i64)` in the body; pass `Int64(n)` at the launch site (`Int` is not `DevicePassable`) |
+| `comptime if P == 1: … elif P == 2: …` chains | `comptime match P:` with `case 1:` / `case _:` |
 
 When in doubt: search the existing source for the construct you're
 about to write. If it doesn't appear there, you're probably about to

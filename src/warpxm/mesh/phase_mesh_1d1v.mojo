@@ -18,7 +18,7 @@
 # The v-axis is always treated as non-periodic — `f` is truncated to zero
 # outside `[v_min, v_max]`. The x-axis can be periodic or non-periodic.
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_VLASOV_OUTFLOW

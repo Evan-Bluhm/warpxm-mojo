@@ -4,10 +4,10 @@
 # `USE_HLLD` selecting between the Rusanov and HLLD numerical fluxes inside
 # the `num_flux` closure.
 
-from std.collections import InlineArray
-from std.gpu.host import DeviceContext
+from std.collections import Array
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.imhd import IMHD, MHD_NC
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
@@ -20,10 +20,10 @@ from warpxm.variable.state_2d import DGState2D
 
 @always_inline
 def _apply_bc_imhd(
-    q_interior: InlineArray[Real, MHD_NC],
+    q_interior: Array[Real, MHD_NC],
     bc_kind: Int,
     face_axis: Int,
-) -> InlineArray[Real, MHD_NC]:
+) -> Array[Real, MHD_NC]:
     """Ghost-state synthesis for 2D ideal MHD. Currently a copyout
     fallback for every `bc_kind` — the 2D MHD tests that pass
     `BC_WALL_FREESLIP` (Brio-Wu y-walls, etc.) happen to have $v_y = 0$
@@ -33,7 +33,7 @@ def _apply_bc_imhd(
     `BC_WALL_FREESLIP` and normal momentum + normal B on
     `BC_PEC_WALL`; we'd port the same dispatch here if a 2D test
     needs genuine wall behaviour."""
-    return q_interior
+    return q_interior.copy()
 
 
 def _imhd_rhs_kernel_2d[
@@ -52,22 +52,20 @@ def _imhd_rhs_kernel_2d[
     press_min: Real,
     jacobian_x: Real,
     jacobian_y: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
-    @parameter
-    def flux_x(qn: InlineArray[Real, MHD_NC]) -> InlineArray[Real, MHD_NC]:
+    var num_elements = Int(num_elements_i64)
+    def flux_x(qn: Array[Real, MHD_NC]) {imm} -> Array[Real, MHD_NC]:
         return IMHD.internal_flux_x_static(qn, gamma, rho_min, press_min)
 
-    @parameter
-    def flux_y(qn: InlineArray[Real, MHD_NC]) -> InlineArray[Real, MHD_NC]:
+    def flux_y(qn: Array[Real, MHD_NC]) {imm} -> Array[Real, MHD_NC]:
         return IMHD.internal_flux_y_static(qn, gamma, rho_min, press_min)
 
-    @parameter
     def num_flux(
-        q_l: InlineArray[Real, MHD_NC],
-        q_r: InlineArray[Real, MHD_NC],
+        q_l: Array[Real, MHD_NC],
+        q_r: Array[Real, MHD_NC],
         nx: Real, ny: Real,
-    ) -> InlineArray[Real, MHD_NC]:
+    ) {imm} -> Array[Real, MHD_NC]:
         comptime if USE_HLLD:
             return IMHD.numerical_flux_hlld_static(
                 q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min,
@@ -77,20 +75,20 @@ def _imhd_rhs_kernel_2d[
                 q_l, q_r, nx, ny, Real(0.0), gamma, rho_min, press_min,
             )
 
-    @parameter
     def apply_bc(
-        q_interior: InlineArray[Real, MHD_NC],
+        q_interior: Array[Real, MHD_NC],
         bc_kind: Int, face_axis: Int,
-    ) -> InlineArray[Real, MHD_NC]:
+    ) {imm} -> Array[Real, MHD_NC]:
         return _apply_bc_imhd(q_interior, bc_kind, face_axis)
 
     _dg_2d_compute_rhs_core[
-        P, MHD_NC, flux_x, flux_y, num_flux, apply_bc,
+        P, MHD_NC,
         QLayout, RhsLayout, FaceLayout, EFLayout,
         DG_CORE_2D_ELEMS_PER_BLOCK,
     ](
         q, rhs, face_neg_elem, face_pos_elem, elem_face_dir, face_bc,
         jacobian_x, jacobian_y, num_elements,
+        flux_x, flux_y, num_flux, apply_bc,
     )
 
 
@@ -109,15 +107,15 @@ struct DGImhdSolver2D[P: Int, USE_HLLD: Bool = False]:
     def compute_rhs(
         self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh2D[Self.P],
+        mesh: BlockMesh2D[Self.P],
         mut q: DGState2D[Self.P, MHD_NC],
         mut rhs: DGState2D[Self.P, MHD_NC],
     ) raises:
         comptime P1 = Self.P + 1
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var face_layout = row_major(Idx(mesh.num_faces))
-        var ef_layout = row_major(Idx(mesh.num_elements * 4))
+        var q_layout = row_major(Int(q.buf_len))
+        var face_layout = row_major(Int(mesh.num_faces))
+        var ef_layout = row_major(Int(mesh.num_elements * 4))
 
         var q_view = TileTensor(q.buf, q_layout)
         var rhs_view = TileTensor(rhs.buf, q_layout)
@@ -135,7 +133,7 @@ struct DGImhdSolver2D[P: Int, USE_HLLD: Bool = False]:
         ctx.enqueue_function[kernel](
             q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             self.app.gas_gamma, self.app.min_density, self.app.min_pressure,
-            mesh.jacobian_x, mesh.jacobian_y, mesh.num_elements,
+            mesh.jacobian_x, mesh.jacobian_y, Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(P1, P1, EB),
         )

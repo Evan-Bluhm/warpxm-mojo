@@ -12,7 +12,7 @@
 
 from std.math import isnan
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
@@ -91,22 +91,20 @@ def main() raises:
     )
     var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, EULER_NC],
         mut q_out: DGState2D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def adjust(mut q: DGState2D[P, EULER_NC]) raises:
+    def adjust(mut q: DGState2D[P, EULER_NC]) raises {mut limiter, mut positivity, imm}:
         limiter.apply(ctx, mesh, q)
         positivity.apply(ctx, mesh, q)
 
     var t: Real = 0.0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, adjust)
         t += dt_use
     ctx.synchronize()
 
@@ -116,7 +114,7 @@ def main() raises:
     var min_p: Real = 1.0e30
     var max_rho: Real = -1.0e30
     var max_y_drift: Real = 0.0
-    var rho_row = InlineArray[Real, NX](fill=Real(0.0))
+    var rho_row = Array[Real, NX](fill=Real(0.0))
     with q.buf.map_to_host() as h:
         # j=0 row first.
         for i in range(NX):

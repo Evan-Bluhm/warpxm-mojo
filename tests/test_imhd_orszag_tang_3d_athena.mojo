@@ -23,7 +23,7 @@
 
 from std.math import sin, cos, isnan
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.adjusters.moe_rossmanith import MoeRossmanith3D
@@ -148,23 +148,21 @@ def main() raises:
                                 * host[b + IDX_RHO]
                             )
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState3D[P, MHD_GLM_NC],
         mut q_out: DGState3D[P, MHD_GLM_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
         apply_glm_damping_3d[P, MHD_GLM_NC](ctx, q_in, q_out, C_H, C_P_SQ)
 
-    @parameter
-    def adjust(mut q_: DGState3D[P, MHD_GLM_NC]) raises:
+    def adjust(mut q_: DGState3D[P, MHD_GLM_NC]) raises {mut limiter, mut positivity, imm}:
         limiter.apply(ctx, mesh, q_)
         positivity.apply(ctx, mesh, q_)
 
     var t: Real = 0.0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, adjust)
         t += dt_use
     ctx.synchronize()
 

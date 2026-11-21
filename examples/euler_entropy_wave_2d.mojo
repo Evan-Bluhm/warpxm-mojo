@@ -18,7 +18,7 @@
 
 from std.math import sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.apps.euler import Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -84,15 +84,13 @@ def main() raises:
     var spatial = DGEulerSolver2D[P](app)
     var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, EULER_NC],
         mut q_out: DGState2D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    def no_adjust(mut q_: DGState2D[P, EULER_NC]) raises {imm}:
         pass
 
     var dt: Real = 1.0e-3
@@ -101,7 +99,7 @@ def main() raises:
     var step: Int = 0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
         t += dt_use
         step += 1
     ctx.synchronize()

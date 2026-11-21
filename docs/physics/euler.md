@@ -95,8 +95,7 @@ from warpxm.temporal.ssprk3_2d import SSPRK3_2D
 var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)
 
-@parameter
-def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, imm}:
     limiter.apply(ctx, mesh, q_)
 ```
 
@@ -108,8 +107,7 @@ from warpxm.adjusters.positivity_euler import PositivityEuler2D
 
 var positivity = PositivityEuler2D[P](mesh.num_elements, gamma=GAMMA)
 
-@parameter
-def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, mut positivity, imm}:
     limiter.apply(ctx, mesh, q_)
     positivity.apply(ctx, mesh, q_)
 ```

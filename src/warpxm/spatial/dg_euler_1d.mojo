@@ -1,10 +1,10 @@
 # 1D nodal DG spatial solver for 5-moment Euler — thin wrapper over the
 # shared `_dg_1d_compute_rhs_core` template.
 
-from std.collections import InlineArray
-from std.gpu.host import DeviceContext
+from std.collections import Array
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import Euler, EULER_NC, IDX_MX
 from warpxm.core.bc import BC_WALL_FREESLIP
@@ -18,13 +18,13 @@ from warpxm.variable.state_1d import DGState1D
 
 @always_inline
 def _apply_bc_euler_1d(
-    q_interior: InlineArray[Real, EULER_NC], bc_kind: Int,
-) -> InlineArray[Real, EULER_NC]:
+    q_interior: Array[Real, EULER_NC], bc_kind: Int,
+) -> Array[Real, EULER_NC]:
     """Free-slip wall flips the x-momentum; everything else copies."""
-    var q: InlineArray[Real, EULER_NC] = q_interior
+    var q: Array[Real, EULER_NC] = q_interior.copy()
     if bc_kind == BC_WALL_FREESLIP:
         q[IDX_MX] = -q_interior[IDX_MX]
-    return q
+    return q^
 
 
 def _euler_rhs_kernel_1d[
@@ -44,35 +44,34 @@ def _euler_rhs_kernel_1d[
     rho_min: Real,
     press_min: Real,
     jacobian: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
-    @parameter
-    def flux_x(qn: InlineArray[Real, EULER_NC]) -> InlineArray[Real, EULER_NC]:
+    var num_elements = Int(num_elements_i64)
+    def flux_x(qn: Array[Real, EULER_NC]) {imm} -> Array[Real, EULER_NC]:
         return Euler.internal_flux_x_static(qn, gamma, rho_min, press_min)
 
-    @parameter
     def num_flux(
-        q_l: InlineArray[Real, EULER_NC], q_r: InlineArray[Real, EULER_NC],
+        q_l: Array[Real, EULER_NC], q_r: Array[Real, EULER_NC],
         nx: Real, ny: Real, nz: Real,
-    ) -> InlineArray[Real, EULER_NC]:
+    ) {imm} -> Array[Real, EULER_NC]:
         return Euler.numerical_flux_static(
             q_l, q_r, nx, ny, nz, gamma, rho_min, press_min,
         )
 
-    @parameter
     def apply_bc(
-        q_interior: InlineArray[Real, EULER_NC], bc_kind: Int,
-    ) -> InlineArray[Real, EULER_NC]:
+        q_interior: Array[Real, EULER_NC], bc_kind: Int,
+    ) {imm} -> Array[Real, EULER_NC]:
         return _apply_bc_euler_1d(q_interior, bc_kind)
 
     _dg_1d_compute_rhs_core[
-        P, EULER_NC, flux_x, num_flux, apply_bc,
+        P, EULER_NC,
         QLayout, RhsLayout, ElemFaceLayout,
         DG_CORE_1D_ELEMS_PER_BLOCK,
     ](
         q, rhs, elem_left_face, elem_right_face,
         face_left, face_right, face_bc,
         jacobian, num_elements,
+        flux_x, num_flux, apply_bc,
     )
 
 
@@ -87,15 +86,15 @@ struct DGEulerSolver1D[P: Int]:
     def compute_rhs(
         self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh1D[Self.P],
+        mesh: BlockMesh1D[Self.P],
         mut q: DGState1D[Self.P, EULER_NC],
         mut rhs: DGState1D[Self.P, EULER_NC],
     ) raises:
         comptime num_nodes_per_elem = Self.P + 1
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var face_layout = row_major(Idx(mesh.num_faces))
-        var elem_face_layout = row_major(Idx(mesh.num_elements))
+        var q_layout = row_major(Int(q.buf_len))
+        var face_layout = row_major(Int(mesh.num_faces))
+        var elem_face_layout = row_major(Int(mesh.num_elements))
 
         var q_view = TileTensor(q.buf, q_layout)
         var rhs_view = TileTensor(rhs.buf, q_layout)
@@ -113,7 +112,7 @@ struct DGEulerSolver1D[P: Int]:
         ctx.enqueue_function[kernel](
             q_view, rhs_view, elf_view, erf_view, fl_view, fr_view, fbc_view,
             self.app.gas_gamma, self.app.min_density, self.app.min_pressure,
-            mesh.jacobian, mesh.num_elements,
+            mesh.jacobian, Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(num_nodes_per_elem, EB),
         )

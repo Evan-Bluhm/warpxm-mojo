@@ -6,7 +6,7 @@
 #     E_x, E_y, E_z, B_x, B_y, B_z   (raw field components)
 #     E_energy = ½|E|²,  B_energy = ½|B|²  (per-node energy densities)
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.apps.maxwell import (
     MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,

@@ -8,7 +8,7 @@
 
 from std.math import sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.maxwell import (
@@ -75,11 +75,10 @@ def main() raises:
 
     var t_final: Real = inv_sqrt2
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, MAXWELL_NC],
         mut q_out: DGState2D[P, MAXWELL_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
     var t: Real = 0.0
@@ -89,8 +88,13 @@ def main() raises:
     var max_dt: Real = 0.0
     while t < t_final - Real(1.0e-12):
         var dt_try = dt if (t + dt) < t_final else (t_final - t)
-        var ret = stepper.step_adaptive[compute_rhs](
-            ctx, q, dt_try, atol=ATOL, rtol=RTOL,
+        var ret = stepper.step_adaptive(
+            ctx,
+            q,
+            dt_try,
+            compute_rhs,
+            atol=ATOL,
+            rtol=RTOL,
         )
         var dt_used = ret[0]
         var dt_next = ret[1]

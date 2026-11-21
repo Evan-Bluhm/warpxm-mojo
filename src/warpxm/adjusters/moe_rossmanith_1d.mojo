@@ -32,10 +32,10 @@
 # with α(dx) = α_coeff · dx^{1.5} a safety margin that disables the limiter
 # in smooth-flow regions. Default α_coeff = 1000 (upstream default).
 
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import EULER_NC
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -78,8 +78,9 @@ def _bounds_kernel_1d[
     q_avg: TileTensor[WXM_DTYPE, BoundsLayout, MutAnyOrigin],
     q_min: TileTensor[WXM_DTYPE, BoundsLayout, MutAnyOrigin],
     q_max: TileTensor[WXM_DTYPE, BoundsLayout, MutAnyOrigin],
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
+    var num_elements = Int(num_elements_i64)
     comptime num_nodes_per_elem = P + 1
     comptime NC = EULER_NC
     comptime assert q.flat_rank == 1
@@ -134,8 +135,9 @@ def _apply_kernel_1d[
     face_right: TileTensor[INDEX_DTYPE, EFLayout, MutAnyOrigin],
     alpha_coeff: Real,
     dx: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
+    var num_elements = Int(num_elements_i64)
     comptime num_nodes_per_elem = P + 1
     comptime NC = EULER_NC
     comptime assert q.flat_rank == 1
@@ -225,17 +227,17 @@ struct MoeRossmanith1D[P: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh1D[Self.P],
+        mesh: BlockMesh1D[Self.P],
         mut q: DGState1D[Self.P, EULER_NC],
     ) raises:
         """Run the limiter in place on `q`."""
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var bounds_layout = row_major(Idx(self.num_elements * EULER_NC))
-        var ef_layout = row_major(Idx(mesh.num_elements))
-        var face_layout = row_major(Idx(mesh.num_faces))
+        var q_layout = row_major(Int(q.buf_len))
+        var bounds_layout = row_major(Int(self.num_elements * EULER_NC))
+        var ef_layout = row_major(Int(mesh.num_elements))
+        var face_layout = row_major(Int(mesh.num_faces))
 
         var q_view = TileTensor(q.buf, q_layout)
         var qa_view = TileTensor(self.q_avg_buf, bounds_layout)
@@ -246,7 +248,7 @@ struct MoeRossmanith1D[P: Int]:
             Self.P, type_of(q_layout), type_of(bounds_layout),
         ]
         ctx.enqueue_function[k_bounds](
-            q_view, qa_view, qmn_view, qmx_view, self.num_elements,
+            q_view, qa_view, qmn_view, qmx_view, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )
 
@@ -261,6 +263,6 @@ struct MoeRossmanith1D[P: Int]:
         ctx.enqueue_function[k_apply](
             q_view, qa_view, qmn_view, qmx_view,
             elf_view, erf_view, fl_view, fr_view,
-            self.alpha_coeff, mesh.dx, self.num_elements,
+            self.alpha_coeff, mesh.dx, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )

@@ -7,8 +7,8 @@
 # flat-buffer ops and require no change — this stepper just hands them
 # the phase-state buffers.
 
-from std.gpu.host import DeviceContext
-from layout import TileTensor, Idx, row_major
+from max.gpu.host import DeviceContext
+from layout import TileTensor, row_major
 from std.math import ceildiv
 
 from warpxm.core.types import Real
@@ -51,23 +51,25 @@ struct SSPRK3_1D1V[P_x: Int, P_v: Int, NC: Int]:
         )
 
     def step[
-        compute_rhs_fn: def(
+        ComputeRhs: def(
             mut PhaseState1D1V[Self.P_x, Self.P_v, Self.NC],
             mut PhaseState1D1V[Self.P_x, Self.P_v, Self.NC],
-        ) raises capturing [_] -> None,
-        adjust_fn: def(
+        ) raises -> None,
+        Adjust: def(
             mut PhaseState1D1V[Self.P_x, Self.P_v, Self.NC],
-        ) raises capturing [_] -> None,
+        ) raises -> None,
     ](
         mut self,
         var ctx: DeviceContext,
         mut u: PhaseState1D1V[Self.P_x, Self.P_v, Self.NC],
         dt: Real,
+        compute_rhs_fn: ComputeRhs,
+        adjust_fn: Adjust,
     ) raises:
         var size = u.buf_len
         comptime BLOCK = 256
         var grid = ceildiv(size, BLOCK)
-        var layout = row_major(Idx(size))
+        var layout = row_major(Int(size))
 
         adjust_fn(u)
         ctx.enqueue_copy(dst_buf=self.u_save.buf, src_buf=u.buf)
@@ -80,7 +82,7 @@ struct SSPRK3_1D1V[P_x: Int, P_v: Int, NC: Int]:
             TileTensor(self.u_save.buf, layout),
             TileTensor(self.rhs.buf, layout),
             TileTensor(self.stage1.buf, layout),
-            dt, size, grid_dim=grid, block_dim=BLOCK,
+            dt, Int64(size), grid_dim=grid, block_dim=BLOCK,
         )
         adjust_fn(self.stage1)
 
@@ -93,7 +95,7 @@ struct SSPRK3_1D1V[P_x: Int, P_v: Int, NC: Int]:
             TileTensor(self.stage1.buf, layout),
             TileTensor(self.rhs.buf, layout),
             TileTensor(self.stage2.buf, layout),
-            Real(0.75), Real(0.25), dt, size,
+            Real(0.75), Real(0.25), dt, Int64(size),
             grid_dim=grid, block_dim=BLOCK,
         )
         adjust_fn(self.stage2)
@@ -104,7 +106,7 @@ struct SSPRK3_1D1V[P_x: Int, P_v: Int, NC: Int]:
             TileTensor(self.stage2.buf, layout),
             TileTensor(self.rhs.buf, layout),
             TileTensor(u.buf, layout),
-            Real(1.0) / Real(3.0), Real(2.0) / Real(3.0), dt, size,
+            Real(1.0) / Real(3.0), Real(2.0) / Real(3.0), dt, Int64(size),
             grid_dim=grid, block_dim=BLOCK,
         )
         adjust_fn(u)

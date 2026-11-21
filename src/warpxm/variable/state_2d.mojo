@@ -8,7 +8,7 @@
 # where `e` is the element index and `n = jn * (P+1) + in` is the row-major
 # 2D node index inside the element (η outer, ξ inner).
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.core.types import Real
 
 

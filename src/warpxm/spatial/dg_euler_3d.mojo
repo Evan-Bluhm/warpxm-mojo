@@ -1,10 +1,10 @@
 # 3D nodal DG spatial solver for 5-moment Euler — thin wrapper over the
 # shared `_dg_3d_compute_rhs_core` template. Mirrors `dg_euler_2d.mojo`.
 
-from std.collections import InlineArray
-from std.gpu.host import DeviceContext
+from std.collections import Array
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import Euler, EULER_NC, IDX_MX, IDX_MY, IDX_MZ
 from warpxm.core.bc import BC_WALL_FREESLIP
@@ -18,14 +18,14 @@ from warpxm.variable.state_3d import DGState3D
 
 @always_inline
 def _apply_bc_euler_3d(
-    q_interior: InlineArray[Real, EULER_NC],
+    q_interior: Array[Real, EULER_NC],
     bc_kind: Int,
     face_axis: Int,
-) -> InlineArray[Real, EULER_NC]:
+) -> Array[Real, EULER_NC]:
     """Ghost-state synthesis. `face_axis` ∈ {0, 1, 2} selects which
     momentum component flips for BC_WALL_FREESLIP. Other BC kinds fall
     back to copy-out."""
-    var q: InlineArray[Real, EULER_NC] = q_interior
+    var q: Array[Real, EULER_NC] = q_interior.copy()
     if bc_kind == BC_WALL_FREESLIP:
         if face_axis == 0:
             q[IDX_MX] = -q_interior[IDX_MX]
@@ -33,7 +33,7 @@ def _apply_bc_euler_3d(
             q[IDX_MY] = -q_interior[IDX_MY]
         else:
             q[IDX_MZ] = -q_interior[IDX_MZ]
-    return q
+    return q^
 
 
 def _euler_rhs_kernel_3d[
@@ -49,44 +49,41 @@ def _euler_rhs_kernel_3d[
     face_bc: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     gamma: Real, rho_min: Real, press_min: Real,
     jacobian_x: Real, jacobian_y: Real, jacobian_z: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
-    @parameter
-    def flux_x(qn: InlineArray[Real, EULER_NC]) -> InlineArray[Real, EULER_NC]:
+    var num_elements = Int(num_elements_i64)
+    def flux_x(qn: Array[Real, EULER_NC]) {imm} -> Array[Real, EULER_NC]:
         return Euler.internal_flux_x_static(qn, gamma, rho_min, press_min)
 
-    @parameter
-    def flux_y(qn: InlineArray[Real, EULER_NC]) -> InlineArray[Real, EULER_NC]:
+    def flux_y(qn: Array[Real, EULER_NC]) {imm} -> Array[Real, EULER_NC]:
         return Euler.internal_flux_y_static(qn, gamma, rho_min, press_min)
 
-    @parameter
-    def flux_z(qn: InlineArray[Real, EULER_NC]) -> InlineArray[Real, EULER_NC]:
+    def flux_z(qn: Array[Real, EULER_NC]) {imm} -> Array[Real, EULER_NC]:
         return Euler.internal_flux_z_static(qn, gamma, rho_min, press_min)
 
-    @parameter
     def num_flux(
-        q_l: InlineArray[Real, EULER_NC],
-        q_r: InlineArray[Real, EULER_NC],
+        q_l: Array[Real, EULER_NC],
+        q_r: Array[Real, EULER_NC],
         nx: Real, ny: Real, nz: Real,
-    ) -> InlineArray[Real, EULER_NC]:
+    ) {imm} -> Array[Real, EULER_NC]:
         return Euler.numerical_flux_static(
             q_l, q_r, nx, ny, nz, gamma, rho_min, press_min,
         )
 
-    @parameter
     def apply_bc(
-        q_interior: InlineArray[Real, EULER_NC],
+        q_interior: Array[Real, EULER_NC],
         bc_kind: Int, face_axis: Int,
-    ) -> InlineArray[Real, EULER_NC]:
+    ) {imm} -> Array[Real, EULER_NC]:
         return _apply_bc_euler_3d(q_interior, bc_kind, face_axis)
 
     _dg_3d_compute_rhs_core[
-        P, EULER_NC, flux_x, flux_y, flux_z, num_flux, apply_bc,
+        P, EULER_NC,
         QLayout, RhsLayout, FaceLayout, EFLayout,
         DG_CORE_3D_ELEMS_PER_BLOCK,
     ](
         q, rhs, face_neg_elem, face_pos_elem, elem_face_dir, face_bc,
         jacobian_x, jacobian_y, jacobian_z, num_elements,
+        flux_x, flux_y, flux_z, num_flux, apply_bc,
     )
 
 
@@ -101,15 +98,15 @@ struct DGEulerSolver3D[P: Int]:
     def compute_rhs(
         self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh3D[Self.P],
+        mesh: BlockMesh3D[Self.P],
         mut q: DGState3D[Self.P, EULER_NC],
         mut rhs: DGState3D[Self.P, EULER_NC],
     ) raises:
         comptime P1 = Self.P + 1
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var face_layout = row_major(Idx(mesh.num_faces))
-        var ef_layout = row_major(Idx(mesh.num_elements * 6))
+        var q_layout = row_major(Int(q.buf_len))
+        var face_layout = row_major(Int(mesh.num_faces))
+        var ef_layout = row_major(Int(mesh.num_elements * 6))
 
         var q_view = TileTensor(q.buf, q_layout)
         var rhs_view = TileTensor(rhs.buf, q_layout)
@@ -127,7 +124,7 @@ struct DGEulerSolver3D[P: Int]:
             q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             self.app.gas_gamma, self.app.min_density, self.app.min_pressure,
             mesh.jacobian_x, mesh.jacobian_y, mesh.jacobian_z,
-            mesh.num_elements,
+            Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(P1, P1, P1 * EB),
         )

@@ -6,7 +6,7 @@
 
 from std.math import sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
 from warpxm.apps.imhd_glm import ImhdGLM, MHD_GLM_NC, IDX_PSI
@@ -89,26 +89,24 @@ def main() raises:
     var stepper = SSPRK3_2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
     var limiter = MoeRossmanith2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, MHD_GLM_NC],
         mut q_out: DGState2D[P, MHD_GLM_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
         apply_glm_damping_2d[P](ctx, q_in, q_out, C_H, C_P_SQ)
 
-    @parameter
-    def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises:
+    def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
     # Warmup steps (JIT / first-launch overheads land here).
     for _ in range(WARMUP):
-        stepper.step[compute_rhs, adjust](ctx, q, DT)
+        stepper.step(ctx, q, DT, compute_rhs, adjust)
     ctx.synchronize()
     print("warmup_done")
 
     # Measurement window.
     for _ in range(N_STEPS):
-        stepper.step[compute_rhs, adjust](ctx, q, DT)
+        stepper.step(ctx, q, DT, compute_rhs, adjust)
     ctx.synchronize()
     print("measure_done", N_STEPS, "steps NX=", NX, "NY=", NY, "P=", P)

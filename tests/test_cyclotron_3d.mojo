@@ -14,7 +14,7 @@
 #   * Density / energy / B unchanged at machine precision
 
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.euler import (
@@ -99,13 +99,12 @@ def main() raises:
     # cyclotron test isolates the Lorentz response (matches the 2D test).
     var eps0_decoupled: Real = 1.0e30
 
-    @parameter
     def compute_joint_rhs(
         mut qf_in: DGState3D[P, EULER_NC],
         mut qm_in: DGState3D[P, MAXWELL_NC],
         mut qf_out: DGState3D[P, EULER_NC],
         mut qm_out: DGState3D[P, MAXWELL_NC],
-    ) raises:
+    ) raises {imm}:
         fluid_spatial.compute_rhs(ctx, mesh, qf_in, qf_out)
         maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
         apply_lorentz_source_3d[P](ctx, qf_in, qm_in, qf_out, ALPHA)
@@ -114,7 +113,7 @@ def main() raises:
     var t: Real = 0.0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        stepper.step[compute_joint_rhs](ctx, q_fluid, q_maxwell, dt_use)
+        stepper.step(ctx, q_fluid, q_maxwell, dt_use, compute_joint_rhs)
         t += dt_use
     ctx.synchronize()
 

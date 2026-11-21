@@ -13,7 +13,7 @@
 
 from std.math import sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.advection import Advection
@@ -52,17 +52,16 @@ def _run_dp45(var ctx: DeviceContext) raises -> Real:
     )
     var stepper = DormandPrince45_1D[P, 1](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState1D[P, 1],
         mut q_out: DGState1D[P, 1],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
     var t: Real = 0.0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs)
         t += dt_use
     ctx.synchronize()
 
@@ -98,21 +97,19 @@ def _run_ssprk3(var ctx: DeviceContext) raises -> Real:
     )
     var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState1D[P, 1],
         mut q_out: DGState1D[P, 1],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState1D[P, 1]) raises:
+    def no_adjust(mut q_: DGState1D[P, 1]) raises {imm}:
         pass
 
     var t: Real = 0.0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
         t += dt_use
     ctx.synchronize()
 
@@ -137,10 +134,13 @@ def main() raises:
     print("SSPRK3 L2 error (same setup):           ", err_rk)
     # DP45 is 5th-order in time vs SSPRK3's 3rd; on a smooth problem with
     # the same dt, DP45 should be at least as accurate (typically much more).
-    assert_true(err_dp < Real(1.0e-4),
-                "DP45 L2 error larger than expected for smooth advection")
+    assert_true(
+        err_dp < Real(1.0e-4),
+        "DP45 L2 error larger than expected for smooth advection",
+    )
     # Both should agree on the qualitative answer (the analytic solution is
     # identity at t=1 since v=1, period=1).
-    assert_true(err_dp < err_rk * Real(2.0),
-                "DP45 surprisingly worse than SSPRK3")
+    assert_true(
+        err_dp < err_rk * Real(2.0), "DP45 surprisingly worse than SSPRK3"
+    )
     print("PASSED")

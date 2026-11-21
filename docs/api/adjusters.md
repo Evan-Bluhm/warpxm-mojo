@@ -92,12 +92,11 @@ Adjusters are composed at the call site via the SSPRK3 `adjust_fn`
 closure:
 
 ```mojo
-@parameter
-def adjust(mut q_: DGState2D[P, NC]) raises:
+def adjust(mut q_: DGState2D[P, NC]) raises {mut limiter, mut positivity, imm}:
     limiter.apply(ctx, mesh, q_)
     positivity.apply(ctx, mesh, q_)
 
-stepper.step[compute_rhs, adjust](ctx, q, dt)
+stepper.step(ctx, q, dt, compute_rhs, adjust)
 ```
 
 Order matters: limiter first (shape-preserving on conserved

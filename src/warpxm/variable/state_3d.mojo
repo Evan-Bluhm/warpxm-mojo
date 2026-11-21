@@ -9,7 +9,7 @@
 #     n = kn · (P+1)² + jn · (P+1) + in_
 # is the row-major 3D node index inside the element (ζ outer, then η, then ξ).
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.core.types import Real
 
 

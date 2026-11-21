@@ -1,9 +1,9 @@
 # 3D GLM ψ-damping wrapper. The kernel function is dimension-agnostic
 # (operates on a flat per-node buffer), so we just thread a 3D state in.
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, Idx, row_major
+from layout import TileTensor, row_major
 
 from warpxm.apps.imhd_glm import MHD_GLM_NC
 from warpxm.core.types import Real
@@ -27,13 +27,13 @@ def apply_glm_damping_3d[P: Int, NC: Int](
     var num_total_nodes = q.total_nodes
     comptime BLOCK = 256
     var grid = ceildiv(num_total_nodes, BLOCK)
-    var layout = row_major(Idx(q.buf_len))
+    var layout = row_major(Int(q.buf_len))
     var decay_rate = (c_h * c_h) / c_p_sq
 
     comptime kernel = _glm_damping_kernel[P, type_of(layout), type_of(layout)]
     ctx.enqueue_function[kernel](
         TileTensor(q.buf, layout),
         TileTensor(rhs.buf, layout),
-        decay_rate, num_total_nodes,
+        decay_rate, Int64(num_total_nodes),
         grid_dim=grid, block_dim=BLOCK,
     )

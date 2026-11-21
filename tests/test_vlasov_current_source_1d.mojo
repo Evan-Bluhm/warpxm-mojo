@@ -10,7 +10,7 @@
 
 from std.math import exp, sqrt, erf
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.maxwell import MAXWELL_NC, IDX_EX

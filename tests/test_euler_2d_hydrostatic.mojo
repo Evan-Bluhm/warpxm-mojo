@@ -18,7 +18,7 @@
 # deviation of ρ and E from their initial values all stay below 1e-12.
 
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.euler import (
@@ -94,21 +94,19 @@ def main() raises:
     var spatial = DGEulerSolver2D[P](app)
     var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, EULER_NC],
         mut q_out: DGState2D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
         apply_gravity_source_2d[P](ctx, q_in, q_out, GX, GY)
 
-    @parameter
-    def no_adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    def no_adjust(mut q_: DGState2D[P, EULER_NC]) raises {imm}:
         pass
 
     var dt: Real = 1.0e-3
     for _ in range(50):
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt)
+        stepper.step(ctx, q, dt, compute_rhs, no_adjust)
     ctx.synchronize()
 
     var max_v_abs: Real = 0.0

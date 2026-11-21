@@ -14,9 +14,9 @@
 # the 1D1V variant — adequate at current 1D2V phase-space sizes; switch
 # to a block-level tree reduction if benchmarks later show this is hot.
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.host import DeviceContext
-from layout import TileTensor, TensorLayout, Idx, row_major
+from max.gpu import block_idx, thread_idx
+from max.gpu.host import DeviceContext
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.vlasovmaxwell import VLASOV_NC
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -51,12 +51,15 @@ def _zeroth_moment_kernel_1d2v[
 ](
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     rho: TileTensor[WXM_DTYPE, RhoLayout, MutAnyOrigin],
-    num_x: Int, num_v1: Int, num_v2: Int,
+    num_x_i64: Int64, num_v1_i64: Int64, num_v2_i64: Int64,
     jacobian_v1: Real, jacobian_v2: Real,
 ):
     """Compute `ρ(x) = ∫∫ f(x, v1, v2) dv1 dv2` per x-node via tensor-
     product GLL quadrature. Thread layout: `block_idx.x = ex`,
     `thread_idx.x = ix`."""
+    var num_x = Int(num_x_i64)
+    var num_v1 = Int(num_v1_i64)
+    var num_v2 = Int(num_v2_i64)
     comptime P1x = P_x + 1
     comptime P1v1 = P_v1 + 1
     comptime P1v2 = P_v2 + 1
@@ -95,10 +98,13 @@ def _first_moment_v1_kernel_1d2v[
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     node_v1: TileTensor[WXM_DTYPE, NodeV1Layout, MutAnyOrigin],
     j: TileTensor[WXM_DTYPE, JLayout, MutAnyOrigin],
-    num_x: Int, num_v1: Int, num_v2: Int,
+    num_x_i64: Int64, num_v1_i64: Int64, num_v2_i64: Int64,
     jacobian_v1: Real, jacobian_v2: Real,
 ):
     """Compute `J_x(x) = ∫∫ v1 · f(x, v1, v2) dv1 dv2` per x-node."""
+    var num_x = Int(num_x_i64)
+    var num_v1 = Int(num_v1_i64)
+    var num_v2 = Int(num_v2_i64)
     comptime P1x = P_x + 1
     comptime P1v1 = P_v1 + 1
     comptime P1v2 = P_v2 + 1
@@ -143,12 +149,15 @@ def _first_moment_v2_kernel_1d2v[
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     node_v2: TileTensor[WXM_DTYPE, NodeV2Layout, MutAnyOrigin],
     j: TileTensor[WXM_DTYPE, JLayout, MutAnyOrigin],
-    num_x: Int, num_v1: Int, num_v2: Int,
+    num_x_i64: Int64, num_v1_i64: Int64, num_v2_i64: Int64,
     jacobian_v1: Real, jacobian_v2: Real,
 ):
     """Compute `J_y(x) = ∫∫ v2 · f(x, v1, v2) dv1 dv2` per x-node — the
     second component of the species current density that only appears in
     1D2V (the 1D1V kernel had a single `v` axis)."""
+    var num_x = Int(num_x_i64)
+    var num_v1 = Int(num_v1_i64)
+    var num_v2 = Int(num_v2_i64)
     comptime P1x = P_x + 1
     comptime P1v1 = P_v1 + 1
     comptime P1v2 = P_v2 + 1
@@ -194,13 +203,16 @@ def _second_moment_kernel_1d2v[
     node_v1: TileTensor[WXM_DTYPE, NodeV1Layout, MutAnyOrigin],
     node_v2: TileTensor[WXM_DTYPE, NodeV2Layout, MutAnyOrigin],
     e_dens: TileTensor[WXM_DTYPE, ELayout, MutAnyOrigin],
-    num_x: Int, num_v1: Int, num_v2: Int,
+    num_x_i64: Int64, num_v1_i64: Int64, num_v2_i64: Int64,
     jacobian_v1: Real, jacobian_v2: Real,
 ):
     """Compute `E_kin(x) = ½ ∫∫ (v1² + v2²) · f(x, v1, v2) dv1 dv2` per
     x-node. With ρ and the two first moments this gives the bulk
     velocity `u = J / ρ` and the temperature
     `T = (2 E_kin / ρ) − |u|²` once `ρ` and `J` are also known."""
+    var num_x = Int(num_x_i64)
+    var num_v1 = Int(num_v1_i64)
+    var num_v2 = Int(num_v2_i64)
     comptime P1x = P_x + 1
     comptime P1v1 = P_v1 + 1
     comptime P1v2 = P_v2 + 1
@@ -251,7 +263,7 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
     def zeroth_moment(
         self,
         var ctx: DeviceContext,
-        mut mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
+        mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
         mut q: PhaseState1D2V[
             Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
         ],
@@ -259,8 +271,8 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
     ) raises:
         """Compute `ρ(x) = ∫∫ f dv1 dv2` into `rho`."""
         comptime P1x = Self.P_x + 1
-        var q_layout = row_major(Idx(q.buf_len))
-        var rho_layout = row_major(Idx(rho.buf_len))
+        var q_layout = row_major(Int(q.buf_len))
+        var rho_layout = row_major(Int(rho.buf_len))
 
         var q_view = TileTensor(q.buf, q_layout)
         var rho_view = TileTensor(rho.buf, rho_layout)
@@ -271,7 +283,7 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         ]
         ctx.enqueue_function[kernel](
             q_view, rho_view,
-            mesh.num_x, mesh.num_v1, mesh.num_v2,
+            Int64(mesh.num_x), Int64(mesh.num_v1), Int64(mesh.num_v2),
             mesh.jacobian_v1, mesh.jacobian_v2,
             grid_dim=mesh.num_x,
             block_dim=P1x,
@@ -280,7 +292,7 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
     def first_moment_v1(
         self,
         var ctx: DeviceContext,
-        mut mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
+        mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
         mut q: PhaseState1D2V[
             Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
         ],
@@ -289,9 +301,9 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         """Compute `J_x(x) = ∫∫ v1 · f dv1 dv2` into `j`."""
         comptime P1x = Self.P_x + 1
         comptime P1v1 = Self.P_v1 + 1
-        var q_layout = row_major(Idx(q.buf_len))
-        var j_layout = row_major(Idx(j.buf_len))
-        var node_v1_layout = row_major(Idx(mesh.num_v1 * P1v1))
+        var q_layout = row_major(Int(q.buf_len))
+        var j_layout = row_major(Int(j.buf_len))
+        var node_v1_layout = row_major(Int(mesh.num_v1 * P1v1))
 
         var q_view = TileTensor(q.buf, q_layout)
         var node_v1_view = TileTensor(mesh.node_v1_buf, node_v1_layout)
@@ -303,7 +315,7 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         ]
         ctx.enqueue_function[kernel](
             q_view, node_v1_view, j_view,
-            mesh.num_x, mesh.num_v1, mesh.num_v2,
+            Int64(mesh.num_x), Int64(mesh.num_v1), Int64(mesh.num_v2),
             mesh.jacobian_v1, mesh.jacobian_v2,
             grid_dim=mesh.num_x,
             block_dim=P1x,
@@ -312,7 +324,7 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
     def first_moment_v2(
         self,
         var ctx: DeviceContext,
-        mut mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
+        mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
         mut q: PhaseState1D2V[
             Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
         ],
@@ -321,9 +333,9 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         """Compute `J_y(x) = ∫∫ v2 · f dv1 dv2` into `j`."""
         comptime P1x = Self.P_x + 1
         comptime P1v2 = Self.P_v2 + 1
-        var q_layout = row_major(Idx(q.buf_len))
-        var j_layout = row_major(Idx(j.buf_len))
-        var node_v2_layout = row_major(Idx(mesh.num_v2 * P1v2))
+        var q_layout = row_major(Int(q.buf_len))
+        var j_layout = row_major(Int(j.buf_len))
+        var node_v2_layout = row_major(Int(mesh.num_v2 * P1v2))
 
         var q_view = TileTensor(q.buf, q_layout)
         var node_v2_view = TileTensor(mesh.node_v2_buf, node_v2_layout)
@@ -335,7 +347,7 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         ]
         ctx.enqueue_function[kernel](
             q_view, node_v2_view, j_view,
-            mesh.num_x, mesh.num_v1, mesh.num_v2,
+            Int64(mesh.num_x), Int64(mesh.num_v1), Int64(mesh.num_v2),
             mesh.jacobian_v1, mesh.jacobian_v2,
             grid_dim=mesh.num_x,
             block_dim=P1x,
@@ -344,7 +356,7 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
     def second_moment(
         self,
         var ctx: DeviceContext,
-        mut mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
+        mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
         mut q: PhaseState1D2V[
             Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
         ],
@@ -354,10 +366,10 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         comptime P1x = Self.P_x + 1
         comptime P1v1 = Self.P_v1 + 1
         comptime P1v2 = Self.P_v2 + 1
-        var q_layout = row_major(Idx(q.buf_len))
-        var e_layout = row_major(Idx(e_dens.buf_len))
-        var node_v1_layout = row_major(Idx(mesh.num_v1 * P1v1))
-        var node_v2_layout = row_major(Idx(mesh.num_v2 * P1v2))
+        var q_layout = row_major(Int(q.buf_len))
+        var e_layout = row_major(Int(e_dens.buf_len))
+        var node_v1_layout = row_major(Int(mesh.num_v1 * P1v1))
+        var node_v2_layout = row_major(Int(mesh.num_v2 * P1v2))
 
         var q_view = TileTensor(q.buf, q_layout)
         var node_v1_view = TileTensor(mesh.node_v1_buf, node_v1_layout)
@@ -371,7 +383,7 @@ struct VlasovMoments1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         ]
         ctx.enqueue_function[kernel](
             q_view, node_v1_view, node_v2_view, e_view,
-            mesh.num_x, mesh.num_v1, mesh.num_v2,
+            Int64(mesh.num_x), Int64(mesh.num_v1), Int64(mesh.num_v2),
             mesh.jacobian_v1, mesh.jacobian_v2,
             grid_dim=mesh.num_x,
             block_dim=P1x,

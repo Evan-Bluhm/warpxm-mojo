@@ -18,10 +18,10 @@
 # Each follows the same pattern: read q and rhs of matching
 # `DGStateNd[P, NC]`, update rhs in place.
 
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_E
 from warpxm.core.types import Real, WXM_DTYPE
@@ -48,8 +48,9 @@ def _gravity_source_kernel_2d[
     rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
     gx: Real,
     gy: Real,
-    num_total_nodes: Int,
+    num_total_nodes_i64: Int64,
 ):
+    var num_total_nodes = Int(num_total_nodes_i64)
     comptime assert q.flat_rank == 1
     comptime assert rhs.flat_rank == 1
     comptime NC = EULER_NC
@@ -96,7 +97,7 @@ def apply_gravity_source_2d[P: Int](
     var num_total_nodes = q.total_nodes
     comptime BLOCK = 256
     var grid = ceildiv(num_total_nodes, BLOCK)
-    var layout = row_major(Idx(q.buf_len))
+    var layout = row_major(Int(q.buf_len))
 
     comptime kernel = _gravity_source_kernel_2d[
         P, type_of(layout), type_of(layout),
@@ -104,6 +105,6 @@ def apply_gravity_source_2d[P: Int](
     ctx.enqueue_function[kernel](
         TileTensor(q.buf, layout),
         TileTensor(rhs.buf, layout),
-        gx, gy, num_total_nodes,
+        gx, gy, Int64(num_total_nodes),
         grid_dim=grid, block_dim=BLOCK,
     )

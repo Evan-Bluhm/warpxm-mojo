@@ -10,7 +10,7 @@
 # kernel cheaply.
 
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.euler import Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
@@ -81,20 +81,18 @@ def main() raises:
     # Also evolve a few steps and confirm nothing drifts.
     var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, EULER_NC],
         mut q_out: DGState2D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    def no_adjust(mut q_: DGState2D[P, EULER_NC]) raises {imm}:
         pass
 
     var dt: Real = 1.0e-3
     for _ in range(50):
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt)
+        stepper.step(ctx, q, dt, compute_rhs, no_adjust)
     ctx.synchronize()
 
     var max_dev: Real = 0.0

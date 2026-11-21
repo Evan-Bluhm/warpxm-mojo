@@ -21,7 +21,7 @@
 
 from std.math import cos, sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.apps.maxwell import Maxwell
 from warpxm.apps.maxwell import (
@@ -104,15 +104,13 @@ def main() raises:
     print("-----  ----------  ----------------  ----------------  ----------------")
 
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState3D[P, MAXWELL_NC],
         mut q_out: DGState3D[P, MAXWELL_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState3D[P, MAXWELL_NC]) raises:
+    def no_adjust(mut q_: DGState3D[P, MAXWELL_NC]) raises {imm}:
         pass
 
     var t: Real = 0.0
@@ -147,7 +145,7 @@ def main() raises:
             var t_target = Real(frame + 1) * frame_dt
             while t < t_target - Real(0.5) * dt:
                 var dt_use = dt if (t + dt) < t_target else (t_target - t)
-                stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+                stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
                 t += dt_use
 
     fw.write_pvd()

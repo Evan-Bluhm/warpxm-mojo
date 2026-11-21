@@ -16,7 +16,7 @@
 
 from std.math import exp
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.imhd_glm import (
@@ -117,23 +117,21 @@ def main() raises:
 
     var psi2_max: Real = psi2_0
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, MHD_GLM_NC],
         mut q_out: DGState2D[P, MHD_GLM_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
         apply_glm_damping_2d[P](ctx, q_in, q_out, C_H, C_P_SQ)
 
-    @parameter
-    def no_adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises:
+    def no_adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises {imm}:
         pass
 
     var t: Real = 0.0
     var t_charge: Real = 0.5
     var t_final: Real = 4.0
     while t < t_charge - Real(0.5) * DT:
-        stepper.step[compute_rhs, no_adjust](ctx, q, DT)
+        stepper.step(ctx, q, DT, compute_rhs, no_adjust)
         t += DT
     ctx.synchronize()
     with q.buf.map_to_host() as h:
@@ -150,7 +148,7 @@ def main() raises:
     print("t =", t, ": ∫ψ²  =", psi2_max, "  (charging done)")
 
     while t < t_final - Real(0.5) * DT:
-        stepper.step[compute_rhs, no_adjust](ctx, q, DT)
+        stepper.step(ctx, q, DT, compute_rhs, no_adjust)
         t += DT
     ctx.synchronize()
 

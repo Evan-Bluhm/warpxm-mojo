@@ -1,10 +1,10 @@
 # 3D nodal DG spatial solver for Maxwell — thin wrapper over the shared
 # `_dg_3d_compute_rhs_core` template.
 
-from std.collections import InlineArray
-from std.gpu.host import DeviceContext
+from std.collections import Array
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.maxwell import (
     Maxwell, MAXWELL_NC,
@@ -21,17 +21,17 @@ from warpxm.variable.state_3d import DGState3D
 
 @always_inline
 def _apply_bc_maxwell_3d(
-    q_interior: InlineArray[Real, MAXWELL_NC],
+    q_interior: Array[Real, MAXWELL_NC],
     bc_kind: Int,
     face_axis: Int,
-) -> InlineArray[Real, MAXWELL_NC]:
+) -> Array[Real, MAXWELL_NC]:
     """Ghost-state synthesis. `face_axis` ∈ {0, 1, 2} selects the wall normal.
 
     `BC_PEC_WALL`: flip the two tangential E components and the normal B.
     `BC_PMC_WALL`: dual — flip the normal E and the two tangential B.
     Anything else copies the interior state.
     """
-    var q: InlineArray[Real, MAXWELL_NC] = q_interior
+    var q: Array[Real, MAXWELL_NC] = q_interior.copy()
     if bc_kind == BC_PEC_WALL:
         if face_axis == 0:
             q[IDX_EY] = -q_interior[IDX_EY]
@@ -58,7 +58,7 @@ def _apply_bc_maxwell_3d(
             q[IDX_EZ] = -q_interior[IDX_EZ]
             q[IDX_BX] = -q_interior[IDX_BX]
             q[IDX_BY] = -q_interior[IDX_BY]
-    return q
+    return q^
 
 
 def _maxwell_rhs_kernel_3d[
@@ -74,42 +74,39 @@ def _maxwell_rhs_kernel_3d[
     face_bc: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     c_light: Real,
     jacobian_x: Real, jacobian_y: Real, jacobian_z: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
-    @parameter
-    def flux_x(qn: InlineArray[Real, MAXWELL_NC]) -> InlineArray[Real, MAXWELL_NC]:
+    var num_elements = Int(num_elements_i64)
+    def flux_x(qn: Array[Real, MAXWELL_NC]) {imm} -> Array[Real, MAXWELL_NC]:
         return Maxwell.internal_flux_x_static(qn, c_light)
 
-    @parameter
-    def flux_y(qn: InlineArray[Real, MAXWELL_NC]) -> InlineArray[Real, MAXWELL_NC]:
+    def flux_y(qn: Array[Real, MAXWELL_NC]) {imm} -> Array[Real, MAXWELL_NC]:
         return Maxwell.internal_flux_y_static(qn, c_light)
 
-    @parameter
-    def flux_z(qn: InlineArray[Real, MAXWELL_NC]) -> InlineArray[Real, MAXWELL_NC]:
+    def flux_z(qn: Array[Real, MAXWELL_NC]) {imm} -> Array[Real, MAXWELL_NC]:
         return Maxwell.internal_flux_z_static(qn, c_light)
 
-    @parameter
     def num_flux(
-        q_l: InlineArray[Real, MAXWELL_NC],
-        q_r: InlineArray[Real, MAXWELL_NC],
+        q_l: Array[Real, MAXWELL_NC],
+        q_r: Array[Real, MAXWELL_NC],
         nx: Real, ny: Real, nz: Real,
-    ) -> InlineArray[Real, MAXWELL_NC]:
+    ) {imm} -> Array[Real, MAXWELL_NC]:
         return Maxwell.numerical_flux_static(q_l, q_r, nx, ny, nz, c_light)
 
-    @parameter
     def apply_bc(
-        q_interior: InlineArray[Real, MAXWELL_NC],
+        q_interior: Array[Real, MAXWELL_NC],
         bc_kind: Int, face_axis: Int,
-    ) -> InlineArray[Real, MAXWELL_NC]:
+    ) {imm} -> Array[Real, MAXWELL_NC]:
         return _apply_bc_maxwell_3d(q_interior, bc_kind, face_axis)
 
     _dg_3d_compute_rhs_core[
-        P, MAXWELL_NC, flux_x, flux_y, flux_z, num_flux, apply_bc,
+        P, MAXWELL_NC,
         QLayout, RhsLayout, FaceLayout, EFLayout,
         DG_CORE_3D_ELEMS_PER_BLOCK,
     ](
         q, rhs, face_neg_elem, face_pos_elem, elem_face_dir, face_bc,
         jacobian_x, jacobian_y, jacobian_z, num_elements,
+        flux_x, flux_y, flux_z, num_flux, apply_bc,
     )
 
 
@@ -124,15 +121,15 @@ struct DGMaxwellSolver3D[P: Int]:
     def compute_rhs(
         self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh3D[Self.P],
+        mesh: BlockMesh3D[Self.P],
         mut q: DGState3D[Self.P, MAXWELL_NC],
         mut rhs: DGState3D[Self.P, MAXWELL_NC],
     ) raises:
         comptime P1 = Self.P + 1
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var face_layout = row_major(Idx(mesh.num_faces))
-        var ef_layout = row_major(Idx(mesh.num_elements * 6))
+        var q_layout = row_major(Int(q.buf_len))
+        var face_layout = row_major(Int(mesh.num_faces))
+        var ef_layout = row_major(Int(mesh.num_elements * 6))
 
         var q_view = TileTensor(q.buf, q_layout)
         var rhs_view = TileTensor(rhs.buf, q_layout)
@@ -150,7 +147,7 @@ struct DGMaxwellSolver3D[P: Int]:
             q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             self.app.c_light,
             mesh.jacobian_x, mesh.jacobian_y, mesh.jacobian_z,
-            mesh.num_elements,
+            Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(P1, P1, P1 * EB),
         )

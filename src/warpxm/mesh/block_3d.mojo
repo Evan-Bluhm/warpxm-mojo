@@ -23,7 +23,7 @@
 # non-INTERIOR `face_bc_buf` entry. Spatial kernels detect these sentinels
 # and synthesize ghost states via the BC dispatch.
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT
 from warpxm.core.types import Real, INDEX_DTYPE

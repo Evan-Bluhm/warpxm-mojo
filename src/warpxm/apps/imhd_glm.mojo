@@ -25,7 +25,7 @@
 #   * HLLD: 8 MHD components via IMHD HLLD; (B_n, ψ) block solved exactly
 #     as a decoupled 2x2 Riemann at speeds ±c_h.
 
-from std.collections import InlineArray
+from std.collections import Array
 
 from warpxm.apps.imhd import (
     IMHD, MHD_NC,
@@ -68,51 +68,51 @@ struct ImhdGLM(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def internal_flux_x_static(
-        q: InlineArray[Real, MHD_GLM_NC],
+        q: Array[Real, MHD_GLM_NC],
         gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
-    ) -> InlineArray[Real, MHD_GLM_NC]:
-        var q_mhd: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    ) -> Array[Real, MHD_GLM_NC]:
+        var q_mhd: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
             q_mhd[c] = q[c]
         var f_mhd = IMHD.internal_flux_x_static(q_mhd, gamma, rho_min, press_min)
-        var f: InlineArray[Real, MHD_GLM_NC] = InlineArray[Real, MHD_GLM_NC](fill=Real(0.0))
+        var f: Array[Real, MHD_GLM_NC] = Array[Real, MHD_GLM_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
             f[c] = f_mhd[c]
         f[IDX_BX] = q[IDX_PSI]
         f[IDX_PSI] = c_h * c_h * q[IDX_BX]
-        return f
+        return f^
 
     @staticmethod
     def internal_flux_y_static(
-        q: InlineArray[Real, MHD_GLM_NC],
+        q: Array[Real, MHD_GLM_NC],
         gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
-    ) -> InlineArray[Real, MHD_GLM_NC]:
-        var q_mhd: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    ) -> Array[Real, MHD_GLM_NC]:
+        var q_mhd: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
             q_mhd[c] = q[c]
         var f_mhd = IMHD.internal_flux_y_static(q_mhd, gamma, rho_min, press_min)
-        var f: InlineArray[Real, MHD_GLM_NC] = InlineArray[Real, MHD_GLM_NC](fill=Real(0.0))
+        var f: Array[Real, MHD_GLM_NC] = Array[Real, MHD_GLM_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
             f[c] = f_mhd[c]
         f[IDX_BY] = q[IDX_PSI]
         f[IDX_PSI] = c_h * c_h * q[IDX_BY]
-        return f
+        return f^
 
     @staticmethod
     def internal_flux_z_static(
-        q: InlineArray[Real, MHD_GLM_NC],
+        q: Array[Real, MHD_GLM_NC],
         gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
-    ) -> InlineArray[Real, MHD_GLM_NC]:
-        var q_mhd: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    ) -> Array[Real, MHD_GLM_NC]:
+        var q_mhd: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
             q_mhd[c] = q[c]
         var f_mhd = IMHD.internal_flux_z_static(q_mhd, gamma, rho_min, press_min)
-        var f: InlineArray[Real, MHD_GLM_NC] = InlineArray[Real, MHD_GLM_NC](fill=Real(0.0))
+        var f: Array[Real, MHD_GLM_NC] = Array[Real, MHD_GLM_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
             f[c] = f_mhd[c]
         f[IDX_BZ] = q[IDX_PSI]
         f[IDX_PSI] = c_h * c_h * q[IDX_BZ]
-        return f
+        return f^
 
     # ------------------------------------------------------------------
     # Rusanov numerical flux on a 3-component unit normal. Max signal
@@ -121,11 +121,11 @@ struct ImhdGLM(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def numerical_flux_static(
-        q_l: InlineArray[Real, MHD_GLM_NC],
-        q_r: InlineArray[Real, MHD_GLM_NC],
+        q_l: Array[Real, MHD_GLM_NC],
+        q_r: Array[Real, MHD_GLM_NC],
         nx: Real, ny: Real, nz: Real,
         gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
-    ) -> InlineArray[Real, MHD_GLM_NC]:
+    ) -> Array[Real, MHD_GLM_NC]:
         var rho_l = fmax(q_l[IDX_RHO], rho_min)
         var rho_r = fmax(q_r[IDX_RHO], rho_min)
         var bsq_l = q_l[IDX_BX] * q_l[IDX_BX] + q_l[IDX_BY] * q_l[IDX_BY] + q_l[IDX_BZ] * q_l[IDX_BZ]
@@ -152,12 +152,12 @@ struct ImhdGLM(ImplicitlyCopyable, Movable):
         var fy_r = Self.internal_flux_y_static(q_r, gamma, rho_min, press_min, c_h)
         var fz_r = Self.internal_flux_z_static(q_r, gamma, rho_min, press_min, c_h)
 
-        var f: InlineArray[Real, MHD_GLM_NC] = InlineArray[Real, MHD_GLM_NC](fill=Real(0.0))
+        var f: Array[Real, MHD_GLM_NC] = Array[Real, MHD_GLM_NC](fill=Real(0.0))
         comptime for c in range(MHD_GLM_NC):
             var f_n_l = nx * fx_l[c] + ny * fy_l[c] + nz * fz_l[c]
             var f_n_r = nx * fx_r[c] + ny * fy_r[c] + nz * fz_r[c]
             f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
-        return f
+        return f^
 
     # ------------------------------------------------------------------
     # HLLD with GLM divergence cleaning. The (B·n, ψ) subsystem is a 2x2
@@ -171,13 +171,13 @@ struct ImhdGLM(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def numerical_flux_hlld_static(
-        q_l: InlineArray[Real, MHD_GLM_NC],
-        q_r: InlineArray[Real, MHD_GLM_NC],
+        q_l: Array[Real, MHD_GLM_NC],
+        q_r: Array[Real, MHD_GLM_NC],
         nx: Real, ny: Real, nz: Real,
         gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
-    ) -> InlineArray[Real, MHD_GLM_NC]:
-        var q_l_mhd: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
-        var q_r_mhd: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    ) -> Array[Real, MHD_GLM_NC]:
+        var q_l_mhd: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
+        var q_r_mhd: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
             q_l_mhd[c] = q_l[c]
             q_r_mhd[c] = q_r[c]
@@ -192,11 +192,11 @@ struct ImhdGLM(ImplicitlyCopyable, Movable):
         var psi_hat = Real(0.5) * (psi_l + psi_r) - Real(0.5) * c_h * (B_n_r - B_n_l)
         var B_n_hat = Real(0.5) * (B_n_l + B_n_r) - Real(0.5) * (psi_r - psi_l) / c_h
 
-        var f: InlineArray[Real, MHD_GLM_NC] = InlineArray[Real, MHD_GLM_NC](fill=Real(0.0))
+        var f: Array[Real, MHD_GLM_NC] = Array[Real, MHD_GLM_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
             f[c] = f_mhd[c]
         f[IDX_BX] += nx * psi_hat
         f[IDX_BY] += ny * psi_hat
         f[IDX_BZ] += nz * psi_hat
         f[IDX_PSI] = c_h * c_h * B_n_hat
-        return f
+        return f^

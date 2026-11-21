@@ -60,19 +60,17 @@ var positivity = PositivityEuler2D[P](
 )
 var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 
-@parameter
 def compute_rhs(
     mut q_in: DGState2D[P, EULER_NC],
     mut q_out: DGState2D[P, EULER_NC],
-) raises:
+) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-@parameter
-def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, mut positivity, imm}:
     limiter.apply(ctx, mesh, q_)
     positivity.apply(ctx, mesh, q_)
 
-stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+stepper.step(ctx, q, dt_use, compute_rhs, adjust)
 ```
 
 The `adjust` closure runs `limiter.apply(...)` then `positivity.apply(...)`

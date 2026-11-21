@@ -16,10 +16,10 @@
 # component) record, so a single thread per x-node updates both. Half
 # the launch overhead vs. running the 1D version twice.
 
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.maxwell import MAXWELL_NC, IDX_EX, IDX_EY
 from warpxm.core.types import Real, WXM_DTYPE
@@ -35,8 +35,9 @@ def _vlasov_current_source_kernel_1d2v[
     rhs_maxwell: TileTensor[WXM_DTYPE, RhsMLayout, MutAnyOrigin],
     alpha: Real,
     inv_eps0: Real,
-    num_total_nodes: Int,
+    num_total_nodes_i64: Int64,
 ):
+    var num_total_nodes = Int(num_total_nodes_i64)
     comptime assert j_x.flat_rank == 1
     comptime assert j_y.flat_rank == 1
     comptime assert rhs_maxwell.flat_rank == 1
@@ -72,8 +73,8 @@ def apply_vlasov_current_source_1d2v[P: Int](
     var num_total_nodes = j_x.total_nodes
     comptime BLOCK = 256
     var grid = ceildiv(num_total_nodes, BLOCK)
-    var jl = row_major(Idx(j_x.buf_len))
-    var ml = row_major(Idx(rhs_maxwell.buf_len))
+    var jl = row_major(Int(j_x.buf_len))
+    var ml = row_major(Int(rhs_maxwell.buf_len))
 
     comptime kernel = _vlasov_current_source_kernel_1d2v[
         P, type_of(jl), type_of(ml),
@@ -82,6 +83,6 @@ def apply_vlasov_current_source_1d2v[P: Int](
         TileTensor(j_x.buf, jl),
         TileTensor(j_y.buf, jl),
         TileTensor(rhs_maxwell.buf, ml),
-        alpha, Real(1.0) / eps0, num_total_nodes,
+        alpha, Real(1.0) / eps0, Int64(num_total_nodes),
         grid_dim=grid, block_dim=BLOCK,
     )

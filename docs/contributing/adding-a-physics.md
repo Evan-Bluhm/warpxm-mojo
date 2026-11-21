@@ -16,7 +16,7 @@ The five-step pattern (one shared app file across dimensions):
 2. **DG kernel** — `spatial/dg_<phys>_<N>d.mojo` for each dimension you
    need. Thin wrapper over the shared
    `_dg_<N>d_compute_rhs_core` template in
-   `spatial/dg_core_<N>d.mojo`. The wrapper declares `@parameter def`
+   `spatial/dg_core_<N>d.mojo`. The wrapper declares nested `def ... {imm}`
    closures that dispatch to the app's static methods with the right
    normal triples (e.g. 2D passes `(nx, ny, 0)`):
    - 1D: `flux_x`, `num_flux`, `apply_bc` (three closures);

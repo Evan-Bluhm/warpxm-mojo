@@ -60,20 +60,19 @@ from warpxm.temporal.dormand_prince_2d import DormandPrince45_2D
 
 var stepper = DormandPrince45_2D[P, NC](ctx, mesh.num_elements)
 
-@parameter
 def compute_rhs(
     mut q_in: DGState2D[P, NC],
     mut q_out: DGState2D[P, NC],
-) raises:
+) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
     # add source kernels here if needed
 
 # Fixed-step (same dt every call):
-stepper.step[compute_rhs](ctx, q, dt)
+stepper.step(ctx, q, dt, compute_rhs)
 
 # Adaptive (dt floats):
-var ret = stepper.step_adaptive[compute_rhs](
-    ctx, q, dt_try,
+var ret = stepper.step_adaptive(
+    ctx, q, dt_try, compute_rhs,
     atol=Real(1.0e-8), rtol=Real(1.0e-6),
 )
 var dt_used = ret[0]
@@ -87,8 +86,8 @@ var t: Real = 0.0
 var dt = DT_INIT
 while t < T_FINAL - 1e-12:
     var dt_try = dt if (t + dt) < T_FINAL else (T_FINAL - t)
-    var ret = stepper.step_adaptive[compute_rhs](ctx, q, dt_try,
-                                                  atol=ATOL, rtol=RTOL)
+    var ret = stepper.step_adaptive(ctx, q, dt_try, compute_rhs,
+                                    atol=ATOL, rtol=RTOL)
     t += ret[0]
     dt = ret[1]
 ```
@@ -121,7 +120,7 @@ are smaller but you don't have to hand-tune $\Delta t$.
 | Plasma (3 coupled states) | Not in scope — plasma steppers use SSPRK3 only |
 
 All three steppers use the same two-closure pattern
-(`step[compute_rhs_fn]`, `step_adaptive[compute_rhs_fn]`). The combine
+(`step(..., compute_rhs_fn)`, `step_adaptive(..., compute_rhs_fn)`). The combine
 kernels `_combine1`–`_combine5`, the per-cell error kernel
 `_dp45_error_kernel`, and the single-block error-norm reduction
 `_dp45_sum_sq_kernel` all live in `dormand_prince_1d.mojo` and are

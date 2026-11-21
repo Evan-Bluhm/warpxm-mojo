@@ -27,10 +27,10 @@
 # Maxwellian. Useful for kicking off a Vlasov simulation from an
 # equilibrated Euler state, or for hybrid fluid/kinetic IC's.
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.host import DeviceContext
+from max.gpu import block_idx, thread_idx
+from max.gpu.host import DeviceContext
 from std.math import exp
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 from warpxm.apps.vlasovmaxwell import VLASOV_NC
@@ -52,16 +52,18 @@ def _5moment_to_kinetic_kernel_1d1v[
     fluid: TileTensor[WXM_DTYPE, FluidLayout, MutAnyOrigin],
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     node_v: TileTensor[WXM_DTYPE, NodeVLayout, MutAnyOrigin],
-    num_v: Int,
+    num_v_i64: Int64,
     mass: Real,
     gamma: Real,
-    num_phase_elements: Int,
+    num_phase_elements_i64: Int64,
 ):
     """Per-phase-node Maxwellian projection. Overwrites `q` (does not
     accumulate).
 
     Thread layout: `block_idx.x = phase_e`,
     `(thread_idx.x, thread_idx.y) = (ix, iv)`."""
+    var num_v = Int(num_v_i64)
+    var num_phase_elements = Int(num_phase_elements_i64)
     comptime P1x = P_x + 1
     comptime P1v = P_v + 1
     comptime nodes_per_phase = P1x * P1v
@@ -116,7 +118,7 @@ def _5moment_to_kinetic_kernel_1d1v[
 
 def apply_5moment_to_kinetic_1d1v[P_x: Int, P_v: Int](
     var ctx: DeviceContext,
-    mut mesh: PhaseMesh1D1V[P_x, P_v],
+    mesh: PhaseMesh1D1V[P_x, P_v],
     mut fluid: DGState1D[P_x, EULER_NC],
     mut q: PhaseState1D1V[P_x, P_v, VLASOV_NC],
     mass: Real,
@@ -126,9 +128,9 @@ def apply_5moment_to_kinetic_1d1v[P_x: Int, P_v: Int](
     the 5-moment Euler state `fluid` at each x-node. Overwrites `q`."""
     comptime P1x = P_x + 1
     comptime P1v = P_v + 1
-    var fluid_layout = row_major(Idx(fluid.buf_len))
-    var q_layout = row_major(Idx(q.buf_len))
-    var node_v_layout = row_major(Idx(mesh.num_v * P1v))
+    var fluid_layout = row_major(Int(fluid.buf_len))
+    var q_layout = row_major(Int(q.buf_len))
+    var node_v_layout = row_major(Int(mesh.num_v * P1v))
 
     var fluid_view = TileTensor(fluid.buf, fluid_layout)
     var q_view = TileTensor(q.buf, q_layout)
@@ -140,7 +142,7 @@ def apply_5moment_to_kinetic_1d1v[P_x: Int, P_v: Int](
     ]
     ctx.enqueue_function[kernel](
         fluid_view, q_view, node_v_view,
-        mesh.num_v, mass, gamma, mesh.num_phase_elements,
+        Int64(mesh.num_v), mass, gamma, Int64(mesh.num_phase_elements),
         grid_dim=mesh.num_phase_elements,
         block_dim=(P1x, P1v),
     )

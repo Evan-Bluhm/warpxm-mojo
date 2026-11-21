@@ -26,7 +26,7 @@
 #   dir 2 → bottom face (axis 1, negative side of element)
 #   dir 3 → top    face (axis 1, positive side of element)
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT
 from warpxm.core.types import Real, INDEX_DTYPE

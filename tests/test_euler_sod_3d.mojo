@@ -13,7 +13,7 @@
 
 from std.math import isnan
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.adjusters.moe_rossmanith import MoeRossmanith3D
@@ -92,21 +92,19 @@ def main() raises:
     var limiter = MoeRossmanith3D[P, EULER_NC](ctx, mesh.num_elements)
 
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState3D[P, EULER_NC],
         mut q_out: DGState3D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def adjust(mut q_: DGState3D[P, EULER_NC]) raises:
+    def adjust(mut q_: DGState3D[P, EULER_NC]) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
     var t: Real = 0.0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, adjust)
         t += dt_use
     ctx.synchronize()
 
@@ -115,7 +113,7 @@ def main() raises:
     var any_nan = False
     var max_y_drift: Real = 0.0
     var max_z_drift: Real = 0.0
-    var rho_row = InlineArray[Real, NX](fill=Real(0.0))
+    var rho_row = Array[Real, NX](fill=Real(0.0))
     with q.buf.map_to_host() as h:
         # First pass: row 0 in z=0 plane.
         for i in range(NX):

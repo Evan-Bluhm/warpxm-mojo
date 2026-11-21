@@ -5,10 +5,10 @@
 # with the four other field components (E_y, E_z, B_y, B_z) coupling
 # in the x-flux. E_x and B_x are stationary in 1D since ∂/∂y = ∂/∂z = 0.
 
-from std.collections import InlineArray
-from std.gpu.host import DeviceContext
+from std.collections import Array
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.maxwell import (
     Maxwell, MAXWELL_NC,
@@ -25,8 +25,8 @@ from warpxm.variable.state_1d import DGState1D
 
 @always_inline
 def _apply_bc_maxwell_1d(
-    q_interior: InlineArray[Real, MAXWELL_NC], bc_kind: Int,
-) -> InlineArray[Real, MAXWELL_NC]:
+    q_interior: Array[Real, MAXWELL_NC], bc_kind: Int,
+) -> Array[Real, MAXWELL_NC]:
     """Ghost-state synthesis for 1D Maxwell.
 
     `BC_PEC_WALL` (perfect electric conductor): wall normal is ±x̂, so
@@ -34,7 +34,7 @@ def _apply_bc_maxwell_1d(
     (B_x). `BC_PMC_WALL` (perfect magnetic conductor): flip normal E
     (E_x) and the two tangential B (B_y, B_z). Anything else copies.
     """
-    var q: InlineArray[Real, MAXWELL_NC] = q_interior
+    var q: Array[Real, MAXWELL_NC] = q_interior.copy()
     if bc_kind == BC_PEC_WALL:
         q[IDX_EY] = -q_interior[IDX_EY]
         q[IDX_EZ] = -q_interior[IDX_EZ]
@@ -43,7 +43,7 @@ def _apply_bc_maxwell_1d(
         q[IDX_EX] = -q_interior[IDX_EX]
         q[IDX_BY] = -q_interior[IDX_BY]
         q[IDX_BZ] = -q_interior[IDX_BZ]
-    return q
+    return q^
 
 
 def _maxwell_rhs_kernel_1d[
@@ -60,34 +60,33 @@ def _maxwell_rhs_kernel_1d[
     face_bc: TileTensor[INDEX_DTYPE, ElemFaceLayout, MutAnyOrigin],
     c_light: Real,
     jacobian: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
-    @parameter
-    def flux_x(qn: InlineArray[Real, MAXWELL_NC]) -> InlineArray[Real, MAXWELL_NC]:
+    var num_elements = Int(num_elements_i64)
+    def flux_x(qn: Array[Real, MAXWELL_NC]) {imm} -> Array[Real, MAXWELL_NC]:
         return Maxwell.internal_flux_x_static(qn, c_light)
 
-    @parameter
     def num_flux(
-        q_l: InlineArray[Real, MAXWELL_NC],
-        q_r: InlineArray[Real, MAXWELL_NC],
+        q_l: Array[Real, MAXWELL_NC],
+        q_r: Array[Real, MAXWELL_NC],
         nx: Real, ny: Real, nz: Real,
-    ) -> InlineArray[Real, MAXWELL_NC]:
+    ) {imm} -> Array[Real, MAXWELL_NC]:
         return Maxwell.numerical_flux_static(q_l, q_r, nx, ny, nz, c_light)
 
-    @parameter
     def apply_bc(
-        q_interior: InlineArray[Real, MAXWELL_NC], bc_kind: Int,
-    ) -> InlineArray[Real, MAXWELL_NC]:
+        q_interior: Array[Real, MAXWELL_NC], bc_kind: Int,
+    ) {imm} -> Array[Real, MAXWELL_NC]:
         return _apply_bc_maxwell_1d(q_interior, bc_kind)
 
     _dg_1d_compute_rhs_core[
-        P, MAXWELL_NC, flux_x, num_flux, apply_bc,
+        P, MAXWELL_NC,
         QLayout, RhsLayout, ElemFaceLayout,
         DG_CORE_1D_ELEMS_PER_BLOCK,
     ](
         q, rhs, elem_left_face, elem_right_face,
         face_left, face_right, face_bc,
         jacobian, num_elements,
+        flux_x, num_flux, apply_bc,
     )
 
 
@@ -102,15 +101,15 @@ struct DGMaxwellSolver1D[P: Int]:
     def compute_rhs(
         self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh1D[Self.P],
+        mesh: BlockMesh1D[Self.P],
         mut q: DGState1D[Self.P, MAXWELL_NC],
         mut rhs: DGState1D[Self.P, MAXWELL_NC],
     ) raises:
         comptime num_nodes_per_elem = Self.P + 1
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var face_layout = row_major(Idx(mesh.num_faces))
-        var elem_face_layout = row_major(Idx(mesh.num_elements))
+        var q_layout = row_major(Int(q.buf_len))
+        var face_layout = row_major(Int(mesh.num_faces))
+        var elem_face_layout = row_major(Int(mesh.num_elements))
 
         var q_view = TileTensor(q.buf, q_layout)
         var rhs_view = TileTensor(rhs.buf, q_layout)
@@ -127,7 +126,7 @@ struct DGMaxwellSolver1D[P: Int]:
         comptime EB = DG_CORE_1D_ELEMS_PER_BLOCK
         ctx.enqueue_function[kernel](
             q_view, rhs_view, elf_view, erf_view, fl_view, fr_view, fbc_view,
-            self.app.c_light, mesh.jacobian, mesh.num_elements,
+            self.app.c_light, mesh.jacobian, Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(num_nodes_per_elem, EB),
         )

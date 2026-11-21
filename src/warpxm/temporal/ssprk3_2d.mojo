@@ -1,6 +1,6 @@
 # Generic SSPRK3 (three-stage Shu-Osher strong-stability-preserving
-# Runge-Kutta) stepper for 2D DG fields, parameterised on two `@parameter`
-# closures that the caller supplies:
+# Runge-Kutta) stepper for 2D DG fields, driven by two closures that
+# the caller passes as trailing arguments:
 #
 #   * `compute_rhs_fn(q_in, q_out)` — evaluates the spatial DG residual
 #     for the supplied input state and writes it to `q_out`. Captures
@@ -21,24 +21,27 @@
 #     var limiter = MoeRossmanith2D[P, EULER_NC](ctx, num_elements)
 #     var stepper = SSPRK3_2D[P, EULER_NC](ctx, num_elements)
 #
-#     @parameter
 #     def compute_rhs(
 #         mut q_in: DGState2D[P, EULER_NC],
 #         mut q_out: DGState2D[P, EULER_NC],
-#     ) raises:
+#     ) raises {imm}:
 #         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 #
-#     @parameter
-#     def adjust(mut q: DGState2D[P, EULER_NC]) raises:
+#     def adjust(mut q: DGState2D[P, EULER_NC]) raises {mut limiter, imm}:
 #         limiter.apply(ctx, mesh, q)            # one or more adjusters
 #
-#     stepper.step[compute_rhs, adjust](ctx, u, dt)
+#     stepper.step(ctx, u, dt, compute_rhs, adjust)
+#
+# Both closures are alive across the `step` call, so they must not both
+# capture the same object mutably: name `mut` only for what a closure
+# actually mutates (the limiter's scratch buffers here) and leave the
+# rest to the implicit read-only `imm` capture.
 #
 # For "no adjuster" (smooth problems, Maxwell, advection) pass
 # `no_op_adjust_2d[P, NC]`.
 
-from std.gpu.host import DeviceContext
-from layout import TileTensor, Idx, row_major
+from max.gpu.host import DeviceContext
+from layout import TileTensor, row_major
 from std.math import ceildiv
 
 from warpxm.core.types import Real
@@ -75,18 +78,20 @@ struct SSPRK3_2D[P: Int, NC: Int]:
         self.rhs = DGState2D[Self.P, Self.NC](ctx, num_elements)
 
     def step[
-        compute_rhs_fn: def(
+        ComputeRhs: def(
             mut DGState2D[Self.P, Self.NC],
             mut DGState2D[Self.P, Self.NC],
-        ) raises capturing [_] -> None,
-        adjust_fn: def(
+        ) raises -> None,
+        Adjust: def(
             mut DGState2D[Self.P, Self.NC],
-        ) raises capturing [_] -> None,
+        ) raises -> None,
     ](
         mut self,
         var ctx: DeviceContext,
         mut u: DGState2D[Self.P, Self.NC],
         dt: Real,
+        compute_rhs_fn: ComputeRhs,
+        adjust_fn: Adjust,
     ) raises:
         """One full SSPRK3 step on `u`.
 
@@ -97,7 +102,7 @@ struct SSPRK3_2D[P: Int, NC: Int]:
         var size = u.buf_len
         comptime BLOCK = 256
         var grid = ceildiv(size, BLOCK)
-        var layout = row_major(Idx(size))
+        var layout = row_major(Int(size))
 
         adjust_fn(u)
         ctx.enqueue_copy(dst_buf=self.u_save.buf, src_buf=u.buf)
@@ -111,7 +116,7 @@ struct SSPRK3_2D[P: Int, NC: Int]:
             TileTensor(self.u_save.buf, layout),
             TileTensor(self.rhs.buf, layout),
             TileTensor(self.stage1.buf, layout),
-            dt, size, grid_dim=grid, block_dim=BLOCK,
+            dt, Int64(size), grid_dim=grid, block_dim=BLOCK,
         )
         adjust_fn(self.stage1)
 
@@ -125,7 +130,7 @@ struct SSPRK3_2D[P: Int, NC: Int]:
             TileTensor(self.stage1.buf, layout),
             TileTensor(self.rhs.buf, layout),
             TileTensor(self.stage2.buf, layout),
-            Real(0.75), Real(0.25), dt, size,
+            Real(0.75), Real(0.25), dt, Int64(size),
             grid_dim=grid, block_dim=BLOCK,
         )
         adjust_fn(self.stage2)
@@ -137,7 +142,7 @@ struct SSPRK3_2D[P: Int, NC: Int]:
             TileTensor(self.stage2.buf, layout),
             TileTensor(self.rhs.buf, layout),
             TileTensor(u.buf, layout),
-            Real(1.0) / Real(3.0), Real(2.0) / Real(3.0), dt, size,
+            Real(1.0) / Real(3.0), Real(2.0) / Real(3.0), dt, Int64(size),
             grid_dim=grid, block_dim=BLOCK,
         )
         adjust_fn(u)

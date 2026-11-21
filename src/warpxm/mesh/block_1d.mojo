@@ -15,7 +15,7 @@
 # `GHOST_LEFT` / `GHOST_RIGHT` (negative sentinels). Boundary-condition
 # adjusters look at these sentinels to fill in face states.
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from layout import TileTensor
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D

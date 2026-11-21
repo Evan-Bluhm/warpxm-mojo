@@ -23,7 +23,7 @@
 
 from std.math import exp
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
 from warpxm.adjusters.positivity_euler import PositivityEuler2D
@@ -119,15 +119,13 @@ def main() raises:
     var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
     var fw = FrameWriter(BASENAME, OUTPUT_DIR)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, EULER_NC],
         mut q_out: DGState2D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, mut positivity, imm}:
         limiter.apply(ctx, mesh, q_)
         positivity.apply(ctx, mesh, q_)
 
@@ -176,7 +174,7 @@ def main() raises:
             var t_target = Real(frame + 1) * frame_dt
             while t < t_target - Real(0.5) * DT:
                 var dt_use = DT if (t + DT) < t_target else (t_target - t)
-                stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+                stepper.step(ctx, q, dt_use, compute_rhs, adjust)
                 t += dt_use
 
     fw.write_pvd()

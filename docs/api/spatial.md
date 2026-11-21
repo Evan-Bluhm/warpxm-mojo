@@ -6,7 +6,7 @@ that issue the GPU kernels.
 
 Each per-dim solver is a thin wrapper over a shared NC-parametric DG
 core (`dg_core_{1,2,3}d.mojo`). The wrapper declares four
-`@parameter def` closures — `flux_x`, `flux_y` (+ `flux_z` in 3D),
+closures (nested `def`s with an `{imm}` capture list) — `flux_x`, `flux_y` (+ `flux_z` in 3D),
 `num_flux`, `apply_bc` — that dispatch to the app's static methods
 and calls the core with them. This is the "flux launcher owns
 dimensionality, app operates on local node values" pattern from

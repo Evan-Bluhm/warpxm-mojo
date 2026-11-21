@@ -1,6 +1,6 @@
 # warpxm-mojo
 
-A GPU-only rewrite of [WARPXM](https://github.com/csumlak/warpxm) in Mojo. The
+A GPU-only rewrite of [WARPXM](https://github.com/UW-Computational-Plasma-Group/warpxm) in Mojo. The
 reference C++ codebase lives at `~/GitHub/warpxm`.
 
 ## Design departures from upstream WARPXM
@@ -229,6 +229,39 @@ writing Mojo. The most common pretraining-era mistakes:
 - `from collections import …` → `from std.collections import …`
 - Struct-parameter access inside a struct → `Self.T`, not bare `T`
 
+Mojo 1.2.0 specifics (toolchain is pinned to `mojo ==1.2.0` +
+`max-core ==26.7.0` from the stable `max` channel):
+
+- `InlineArray` → `Array`. It is `Copyable` but not `ImplicitlyCopyable`:
+  return locals with `return out^`, copy borrowed arguments with
+  `q.copy()`, and bring comptime tables to runtime with
+  `materialize[_TABLE]()`.
+- `std.gpu` → `max.gpu` (`max.gpu.host`, `max.gpu.memory`, `max.gpu.sync`).
+  `layout` and `max` come from the `max-core` conda package, not `mojo`.
+- Closures are unified closures: a nested `def` with a capture list,
+  passed as an ordinary trailing argument. `@parameter` / `@__parameter`
+  and `capturing [_]` parameters are gone.
+  - Host side: `def adjust(mut q: ...) raises {mut limiter, imm}:` then
+    `stepper.step(ctx, q, dt, compute_rhs, adjust)`. Capture `mut` only what
+    the closure mutates; two closures passed to one call may not both
+    capture the same object mutably (that is why solver / adjuster methods
+    take `mesh` read-only).
+  - Kernel side: `def flux_x(qn: Array[Real, NC]) {imm} -> Array[Real, NC]:`
+    passed as `_dg_<N>d_compute_rhs_core[P, NC, ...layouts, EB](..., flux_x,
+    num_flux, apply_bc)`.
+  - Accepting one: a type parameter bounded by the closure type plus an
+    argument of that type — `def step[ComputeRhs: def(mut S, mut S) raises
+    -> None](..., compute_rhs_fn: ComputeRhs)`.
+- `Int` is not `DevicePassable`. Kernel scalar arguments are `Int64`
+  (`size_i64: Int64`, then `var size = Int(size_i64)` in the body) and
+  launch sites pass `Int64(size)`.
+- `row_major(Idx(n))` → `row_major(Int(n))`.
+- Prefer `comptime match` over `comptime if / elif` chains on a parameter.
+- `NodalBasis1D.nodes()/weights()/diff_matrix_flat()` are `@inline(.never)` to
+  dodge a 1.2.0 optimizer bug (an `Array` returned by an inlined function
+  reads back as garbage in host code after a `ctx.enqueue_copy`). See the
+  note in `basis/nodal_basis_1d.mojo` before removing it.
+
 ### Apps architecture
 
 Each of the five core physics packages (advection, euler, maxwell, imhd,
@@ -261,7 +294,7 @@ the canonical struct directly: `from warpxm.apps.euler import Euler`,
    conversions.
 2. **DG kernel**: write `spatial/dg_<phys>_<N>d.mojo` for each dimension you
    need as a thin wrapper over the shared `_dg_<N>d_compute_rhs_core` (in
-   `spatial/dg_core_<N>d.mojo`). The wrapper declares `@parameter def`
+   `spatial/dg_core_<N>d.mojo`). The wrapper declares `def ... {imm}`
    closures that dispatch to the app's static methods and pass the right
    normal triples (e.g. 2D passes `(nx, ny, 0)`):
    - 1D: `flux_x`, `num_flux`, `apply_bc` (three closures);

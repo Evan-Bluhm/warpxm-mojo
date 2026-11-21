@@ -31,12 +31,12 @@
 # `spatial/dg_core_3d.mojo`'s `kn · P1² + jn · P1 + in_` so the kernel
 # structure carries over almost verbatim.
 
-from std.collections import InlineArray
-from std.gpu import block_idx, thread_idx
-from std.gpu.host import DeviceContext
-from std.gpu.sync import barrier
-from std.gpu.memory import AddressSpace
-from layout import TileTensor, TensorLayout, Idx, row_major, stack_allocation
+from std.collections import Array
+from max.gpu import block_idx, thread_idx
+from max.gpu.host import DeviceContext
+from max.gpu.sync import barrier
+from max.gpu.memory import AddressSpace
+from layout import TileTensor, TensorLayout, row_major, stack_allocation
 
 from warpxm.apps.vlasovmaxwell import (
     VlasovMaxwell, VLASOV_NC, VLASOV_AUX_NC,
@@ -63,14 +63,14 @@ def _load_phase_node_1d2v[
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     phase_e: Int,
     local_node: Int,
-) -> InlineArray[Real, NC]:
+) -> Array[Real, NC]:
     comptime assert q.flat_rank == 1
     comptime nodes_per_phase = (P_x + 1) * (P_v1 + 1) * (P_v2 + 1)
     var base = (phase_e * nodes_per_phase + local_node) * NC
-    var out: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var out: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
     comptime for c in range(NC):
         out[c] = rebind[Scalar[WXM_DTYPE]](q[base + c])
-    return out
+    return out^
 
 
 def _vlasov_rhs_kernel_1d2v[
@@ -89,10 +89,10 @@ def _vlasov_rhs_kernel_1d2v[
     node_v1: TileTensor[WXM_DTYPE, NodeV1Layout, MutAnyOrigin],
     node_v2: TileTensor[WXM_DTYPE, NodeV2Layout, MutAnyOrigin],
     aux: TileTensor[WXM_DTYPE, AuxLayout, MutAnyOrigin],
-    num_v1: Int, num_v2: Int,
+    num_v1_i64: Int64, num_v2_i64: Int64,
     charge_mass_ratio: Real, skin_depth_norm: Real,
     jacobian_x: Real, jacobian_v1: Real, jacobian_v2: Real,
-    num_phase_elements: Int,
+    num_phase_elements_i64: Int64,
 ):
     """Per-phase-node DG residual for 1D2V Vlasov.
 
@@ -105,6 +105,9 @@ def _vlasov_rhs_kernel_1d2v[
     Thread layout: `block_idx.x = phase_e`,
     `(thread_idx.x, thread_idx.y, thread_idx.z) = (ix, iv1, iv2)`.
     """
+    var num_v1 = Int(num_v1_i64)
+    var num_v2 = Int(num_v2_i64)
+    var num_phase_elements = Int(num_phase_elements_i64)
     comptime P1x = P_x + 1
     comptime P1v1 = P_v1 + 1
     comptime P1v2 = P_v2 + 1
@@ -187,9 +190,9 @@ def _vlasov_rhs_kernel_1d2v[
     var dx_flat = NodalBasis1D[P_x].diff_matrix_flat()
     var dv1_flat = NodalBasis1D[P_v1].diff_matrix_flat()
     var dv2_flat = NodalBasis1D[P_v2].diff_matrix_flat()
-    var dfdx: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-    var dgdv1: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
-    var dhdv2: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var dfdx: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
+    var dgdv1: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
+    var dhdv2: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
     comptime for kx in range(P1x):
         var dx_ix_kx: Scalar[WXM_DTYPE] = dx_flat[ix * P1x + kx]
@@ -227,7 +230,7 @@ def _vlasov_rhs_kernel_1d2v[
     var wv2_0: Scalar[WXM_DTYPE] = weights_v2[0]
     var wv2_P: Scalar[WXM_DTYPE] = weights_v2[P_v2]
 
-    var surface: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var surface: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
     # x-LEFT (axis-0 negative).
     if ix == 0:
@@ -235,9 +238,9 @@ def _vlasov_rhs_kernel_1d2v[
             elem_face_dir[phase_e * 6 + FACE_DIR_LEFT_3D]
         ))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[fL]))
-        var q_neg: InlineArray[Real, NC]
+        var q_neg: Array[Real, NC]
         if neg_e == Int(GHOST_NEG_3D):
-            q_neg = f_n  # BC_COPYOUT fallback on non-periodic x.
+            q_neg = f_n.copy()  # BC_COPYOUT fallback on non-periodic x.
         else:
             q_neg = _load_phase_node_1d2v[P_x, P_v1, P_v2, NC](
                 q, neg_e, (iv2 * P1v1 + iv1) * P1x + P_x,
@@ -254,9 +257,9 @@ def _vlasov_rhs_kernel_1d2v[
             elem_face_dir[phase_e * 6 + FACE_DIR_RIGHT_3D]
         ))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[fR]))
-        var q_pos: InlineArray[Real, NC]
+        var q_pos: Array[Real, NC]
         if pos_e == Int(GHOST_POS_3D):
-            q_pos = f_n
+            q_pos = f_n.copy()
         else:
             q_pos = _load_phase_node_1d2v[P_x, P_v1, P_v2, NC](
                 q, pos_e, (iv2 * P1v1 + iv1) * P1x + 0,
@@ -273,13 +276,13 @@ def _vlasov_rhs_kernel_1d2v[
             elem_face_dir[phase_e * 6 + FACE_DIR_BOTTOM_3D]
         ))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[fB]))
-        var q_neg: InlineArray[Real, NC]
+        var q_neg: Array[Real, NC]
         if neg_e == Int(GHOST_NEG_3D):
             var bc = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fB]))
             if bc == BC_VLASOV_OUTFLOW:
-                q_neg = InlineArray[Real, NC](fill=Real(0.0))
+                q_neg = Array[Real, NC](fill=Real(0.0))
             else:
-                q_neg = f_n
+                q_neg = f_n.copy()
         else:
             q_neg = _load_phase_node_1d2v[P_x, P_v1, P_v2, NC](
                 q, neg_e, (iv2 * P1v1 + P_v1) * P1x + ix,
@@ -296,13 +299,13 @@ def _vlasov_rhs_kernel_1d2v[
             elem_face_dir[phase_e * 6 + FACE_DIR_TOP_3D]
         ))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[fT]))
-        var q_pos: InlineArray[Real, NC]
+        var q_pos: Array[Real, NC]
         if pos_e == Int(GHOST_POS_3D):
             var bc = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fT]))
             if bc == BC_VLASOV_OUTFLOW:
-                q_pos = InlineArray[Real, NC](fill=Real(0.0))
+                q_pos = Array[Real, NC](fill=Real(0.0))
             else:
-                q_pos = f_n
+                q_pos = f_n.copy()
         else:
             q_pos = _load_phase_node_1d2v[P_x, P_v1, P_v2, NC](
                 q, pos_e, (iv2 * P1v1 + 0) * P1x + ix,
@@ -319,13 +322,13 @@ def _vlasov_rhs_kernel_1d2v[
             elem_face_dir[phase_e * 6 + FACE_DIR_DOWN_3D]
         ))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[fD]))
-        var q_neg: InlineArray[Real, NC]
+        var q_neg: Array[Real, NC]
         if neg_e == Int(GHOST_NEG_3D):
             var bc = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fD]))
             if bc == BC_VLASOV_OUTFLOW:
-                q_neg = InlineArray[Real, NC](fill=Real(0.0))
+                q_neg = Array[Real, NC](fill=Real(0.0))
             else:
-                q_neg = f_n
+                q_neg = f_n.copy()
         else:
             q_neg = _load_phase_node_1d2v[P_x, P_v1, P_v2, NC](
                 q, neg_e, (P_v2 * P1v1 + iv1) * P1x + ix,
@@ -342,13 +345,13 @@ def _vlasov_rhs_kernel_1d2v[
             elem_face_dir[phase_e * 6 + FACE_DIR_UP_3D]
         ))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[fU]))
-        var q_pos: InlineArray[Real, NC]
+        var q_pos: Array[Real, NC]
         if pos_e == Int(GHOST_POS_3D):
             var bc = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fU]))
             if bc == BC_VLASOV_OUTFLOW:
-                q_pos = InlineArray[Real, NC](fill=Real(0.0))
+                q_pos = Array[Real, NC](fill=Real(0.0))
             else:
-                q_pos = f_n
+                q_pos = f_n.copy()
         else:
             q_pos = _load_phase_node_1d2v[P_x, P_v1, P_v2, NC](
                 q, pos_e, (0 * P1v1 + iv1) * P1x + ix,
@@ -387,7 +390,7 @@ struct DGVlasovSolver1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
     def compute_rhs(
         self,
         var ctx: DeviceContext,
-        mut mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
+        mesh: PhaseMesh1D2V[Self.P_x, Self.P_v1, Self.P_v2],
         mut q: PhaseState1D2V[Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC],
         mut aux: DGState1D[Self.P_x, VLASOV_AUX_NC],
         mut rhs: PhaseState1D2V[Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC],
@@ -396,12 +399,12 @@ struct DGVlasovSolver1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         comptime P1v1 = Self.P_v1 + 1
         comptime P1v2 = Self.P_v2 + 1
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var face_layout = row_major(Idx(mesh.num_faces))
-        var ef_layout = row_major(Idx(mesh.num_phase_elements * 6))
-        var node_v1_layout = row_major(Idx(mesh.num_v1 * P1v1))
-        var node_v2_layout = row_major(Idx(mesh.num_v2 * P1v2))
-        var aux_layout = row_major(Idx(aux.buf_len))
+        var q_layout = row_major(Int(q.buf_len))
+        var face_layout = row_major(Int(mesh.num_faces))
+        var ef_layout = row_major(Int(mesh.num_phase_elements * 6))
+        var node_v1_layout = row_major(Int(mesh.num_v1 * P1v1))
+        var node_v2_layout = row_major(Int(mesh.num_v2 * P1v2))
+        var aux_layout = row_major(Int(aux.buf_len))
 
         var q_view = TileTensor(q.buf, q_layout)
         var rhs_view = TileTensor(rhs.buf, q_layout)
@@ -423,10 +426,10 @@ struct DGVlasovSolver1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         ctx.enqueue_function[kernel](
             q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             node_v1_view, node_v2_view, aux_view,
-            mesh.num_v1, mesh.num_v2,
+            Int64(mesh.num_v1), Int64(mesh.num_v2),
             self.app.charge_mass_ratio, self.app.skin_depth_norm,
             mesh.jacobian_x, mesh.jacobian_v1, mesh.jacobian_v2,
-            mesh.num_phase_elements,
+            Int64(mesh.num_phase_elements),
             grid_dim=mesh.num_phase_elements,
             block_dim=(P1x, P1v1, P1v2),
         )

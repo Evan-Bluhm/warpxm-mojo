@@ -14,7 +14,7 @@ precondition** in every entry point — there is no CPU fallback path.
 ## Prerequisites
 
 * **pixi** — single binary, [install instructions on pixi.sh](https://pixi.sh/latest/#installation).
-  pixi manages the conda channels (`max-nightly`, `conda-forge`) that
+  pixi manages the conda channels (`max`, `conda-forge`) that
   ship Mojo and resolves a lock file so every checkout gets the same
   toolchain.
 * A working GPU driver. Confirm with `nvidia-smi` (NVIDIA),

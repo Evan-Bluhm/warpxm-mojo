@@ -91,15 +91,13 @@ flow that don't actually shear.
 var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)
 
-@parameter
-def compute_rhs(mut q_in, mut q_out) raises:
+def compute_rhs(mut q_in, mut q_out) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-@parameter
-def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, imm}:
     limiter.apply(ctx, mesh, q_)
 
-stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+stepper.step(ctx, q, dt_use, compute_rhs, adjust)
 ```
 
 Standard Euler driver pattern — no sources, just the limiter as

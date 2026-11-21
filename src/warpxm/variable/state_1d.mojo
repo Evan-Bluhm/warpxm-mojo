@@ -14,7 +14,7 @@
 # buffer because all downstream kernels (flux assembly, RK stage combinations,
 # diagnostics) prefer node-contiguous loads.
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.core.types import Real
 
 

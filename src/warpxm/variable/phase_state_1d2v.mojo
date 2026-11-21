@@ -20,7 +20,7 @@
 # Mirrors 1D1V `PhaseState1D1V[P_x, P_v, NC]` in
 # `variable/phase_state_1d1v.mojo`.
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.core.types import Real
 
 

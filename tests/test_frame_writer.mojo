@@ -5,7 +5,7 @@
 #   * the .pvd collection lists all 3 frames with their times
 
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
@@ -94,16 +94,14 @@ def main() raises:
 
     var dt: Real = 5.0e-3
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, MHD_GLM_NC],
         mut q_out: DGState2D[P, MHD_GLM_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
         apply_glm_damping_2d[P](ctx, q_in, q_out, Real(4.0), Real(0.5))
 
-    @parameter
-    def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises:
+    def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
     var t: Real = 0.0
@@ -111,7 +109,7 @@ def main() raises:
     for i in range(len(t_targets)):
         var t_target = t_targets[i]
         while t < t_target - Real(0.5) * dt:
-            stepper.step[compute_rhs, adjust](ctx, q, dt)
+            stepper.step(ctx, q, dt, compute_rhs, adjust)
             t += dt
         ctx.synchronize()
         dump_imhd_glm_2d_frame[P, MHD_GLM_NC](fw.next_path(t), ctx, mesh, q, GAMMA)

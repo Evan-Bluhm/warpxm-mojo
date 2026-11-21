@@ -78,15 +78,13 @@ var spatial = DGEulerSolver2D[P](app)
 var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)
 
-@parameter
 def compute_rhs(
     mut q_in: DGState2D[P, EULER_NC],
     mut q_out: DGState2D[P, EULER_NC],
-) raises:
+) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-@parameter
-def adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, imm}:
     limiter.apply(ctx, mesh, q_)
 ```
 
@@ -102,7 +100,7 @@ shock ratios > ~100 you'd add `positivity.apply(ctx, mesh, q_)` inside
 var t: Real = 0.0
 while t < T_FINAL - 0.5 * DT:
     var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-    stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+    stepper.step(ctx, q, dt_use, compute_rhs, adjust)
     t += dt_use
 ctx.synchronize()
 

@@ -17,10 +17,10 @@
 # (Euler → Maxwell, closing the two-fluid plasma coupling) lives in
 # `maxwell_current_source_2d.mojo`.
 
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 from warpxm.apps.maxwell import (
@@ -38,8 +38,9 @@ def _lorentz_source_kernel_2d[
     q_maxwell: TileTensor[WXM_DTYPE, QMLayout, MutAnyOrigin],
     rhs_fluid: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
     alpha: Real,
-    num_total_nodes: Int,
+    num_total_nodes_i64: Int64,
 ):
+    var num_total_nodes = Int(num_total_nodes_i64)
     comptime assert q_fluid.flat_rank == 1
     comptime assert q_maxwell.flat_rank == 1
     comptime assert rhs_fluid.flat_rank == 1
@@ -95,8 +96,8 @@ def apply_lorentz_source_2d[P: Int](
     var num_total_nodes = q_fluid.total_nodes
     comptime BLOCK = 256
     var grid = ceildiv(num_total_nodes, BLOCK)
-    var fl = row_major(Idx(q_fluid.buf_len))
-    var ml = row_major(Idx(q_maxwell.buf_len))
+    var fl = row_major(Int(q_fluid.buf_len))
+    var ml = row_major(Int(q_maxwell.buf_len))
 
     comptime kernel = _lorentz_source_kernel_2d[
         P, type_of(fl), type_of(ml), type_of(fl),
@@ -105,6 +106,6 @@ def apply_lorentz_source_2d[P: Int](
         TileTensor(q_fluid.buf, fl),
         TileTensor(q_maxwell.buf, ml),
         TileTensor(rhs_fluid.buf, fl),
-        alpha, num_total_nodes,
+        alpha, Int64(num_total_nodes),
         grid_dim=grid, block_dim=BLOCK,
     )

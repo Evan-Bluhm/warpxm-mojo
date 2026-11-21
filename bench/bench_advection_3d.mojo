@@ -3,7 +3,7 @@
 
 from std.math import sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.time import perf_counter_ns
 
 from warpxm.apps.advection import Advection
@@ -70,23 +70,21 @@ def main() raises:
     var spatial = DGSpatialSolver3D[P, NC](app)
     var stepper = SSPRK3_3D[P, NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState3D[P, NC], mut q_out: DGState3D[P, NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState3D[P, NC]) raises:
+    def no_adjust(mut q_: DGState3D[P, NC]) raises {imm}:
         pass
 
     for _ in range(WARMUP):
-        stepper.step[compute_rhs, no_adjust](ctx, q, DT)
+        stepper.step(ctx, q, DT, compute_rhs, no_adjust)
     ctx.synchronize()
 
     var t0 = perf_counter_ns()
     for _ in range(N_STEPS):
-        stepper.step[compute_rhs, no_adjust](ctx, q, DT)
+        stepper.step(ctx, q, DT, compute_rhs, no_adjust)
     ctx.synchronize()
     var t1 = perf_counter_ns()
 

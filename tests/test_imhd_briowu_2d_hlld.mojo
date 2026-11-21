@@ -5,7 +5,7 @@
 
 from std.math import isnan
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
@@ -86,28 +86,26 @@ def main() raises:
     var limiter = MoeRossmanith2D[P, MHD_NC](ctx, mesh.num_elements)
 
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, MHD_NC],
         mut q_out: DGState2D[P, MHD_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def adjust(mut q_: DGState2D[P, MHD_NC]) raises:
+    def adjust(mut q_: DGState2D[P, MHD_NC]) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
     var t: Real = 0.0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, adjust)
         t += dt_use
     ctx.synchronize()
 
     var mid_node = nodes_per_elem // 2
     var any_nan = False
     var max_y_drift: Real = 0.0
-    var rho_row0 = InlineArray[Real, NX](fill=Real(0.0))
+    var rho_row0 = Array[Real, NX](fill=Real(0.0))
     var max_grad: Real = 0.0
     with q.buf.map_to_host() as h:
         for j in range(NY):

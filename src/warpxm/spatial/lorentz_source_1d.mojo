@@ -3,9 +3,9 @@
 # flat per-node buffers and is dimension-agnostic — so we delegate to
 # the 2D kernel function definition with 1D state types.
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, Idx, row_major
+from layout import TileTensor, row_major
 
 from warpxm.apps.euler import EULER_NC
 from warpxm.apps.maxwell import MAXWELL_NC
@@ -25,8 +25,8 @@ def apply_lorentz_source_1d[P: Int](
     var num_total_nodes = q_fluid.total_nodes
     comptime BLOCK = 256
     var grid = ceildiv(num_total_nodes, BLOCK)
-    var fl = row_major(Idx(q_fluid.buf_len))
-    var ml = row_major(Idx(q_maxwell.buf_len))
+    var fl = row_major(Int(q_fluid.buf_len))
+    var ml = row_major(Int(q_maxwell.buf_len))
 
     comptime kernel = _lorentz_source_kernel_2d[
         P, type_of(fl), type_of(ml), type_of(fl),
@@ -35,6 +35,6 @@ def apply_lorentz_source_1d[P: Int](
         TileTensor(q_fluid.buf, fl),
         TileTensor(q_maxwell.buf, ml),
         TileTensor(rhs_fluid.buf, fl),
-        alpha, num_total_nodes,
+        alpha, Int64(num_total_nodes),
         grid_dim=grid, block_dim=BLOCK,
     )

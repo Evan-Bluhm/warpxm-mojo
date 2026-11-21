@@ -56,7 +56,7 @@ One generic stepper per dimension:
 | `ssprk3_3d.mojo` | `SSPRK3_3D[P, NC]` | Every 3D problem |
 
 Limiters, positivity preservers, source kernels (gravity, GLM damping,
-…) are composed at the call site as `@parameter def` closures — see
+…) are composed at the call site as closures (nested `def`s with a capture list) — see
 [Time integration](../concepts/time-integration.md). The plasma family
 (`ssprk3_plasma_{1,2,3}d`, `ssprk3_twofluid_{1,2,3}d`) is kept
 specialised because it juggles three (or two) coupled states.

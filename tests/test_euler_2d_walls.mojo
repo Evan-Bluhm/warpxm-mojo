@@ -13,7 +13,7 @@
 
 from std.math import exp
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.euler import Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
@@ -105,15 +105,13 @@ def main() raises:
     var spatial = DGEulerSolver2D[P](app)
     var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, EULER_NC],
         mut q_out: DGState2D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState2D[P, EULER_NC]) raises:
+    def no_adjust(mut q_: DGState2D[P, EULER_NC]) raises {imm}:
         pass
 
     var dt: Real = 5.0e-4
@@ -121,7 +119,7 @@ def main() raises:
     var t: Real = 0.0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
         t += dt_use
     ctx.synchronize()
 

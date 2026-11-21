@@ -7,10 +7,10 @@
 # With `c_p²` ~ 0.18·c_h·L_domain (Mignone & Tzeferacos 2010) the e-folding
 # time is τ = c_p²/c_h² ~ 0.18·L_domain/c_h, i.e. a few crossing times.
 
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.imhd_glm import MHD_GLM_NC, IDX_PSI
 from warpxm.core.types import Real, WXM_DTYPE
@@ -24,9 +24,10 @@ def _glm_damping_kernel[
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
     decay_rate: Real,
-    num_total_nodes: Int,
+    num_total_nodes_i64: Int64,
 ):
     """rhs[ψ] += -decay_rate · q[ψ], where decay_rate = c_h² / c_p²."""
+    var num_total_nodes = Int(num_total_nodes_i64)
     comptime assert q.flat_rank == 1
     comptime assert rhs.flat_rank == 1
     comptime NC = MHD_GLM_NC
@@ -52,13 +53,13 @@ def apply_glm_damping_2d[P: Int](
     var num_total_nodes = q.total_nodes
     comptime BLOCK = 256
     var grid = ceildiv(num_total_nodes, BLOCK)
-    var layout = row_major(Idx(q.buf_len))
+    var layout = row_major(Int(q.buf_len))
     var decay_rate = (c_h * c_h) / c_p_sq
 
     comptime kernel = _glm_damping_kernel[P, type_of(layout), type_of(layout)]
     ctx.enqueue_function[kernel](
         TileTensor(q.buf, layout),
         TileTensor(rhs.buf, layout),
-        decay_rate, num_total_nodes,
+        decay_rate, Int64(num_total_nodes),
         grid_dim=grid, block_dim=BLOCK,
     )

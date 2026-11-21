@@ -11,7 +11,7 @@
 # `warpy.dt_calc.fixed_dt` path from upstream; a CFL-driven controller can be
 # layered on later.
 
-from std.gpu import global_idx
+from max.gpu import global_idx
 from layout import TileTensor, TensorLayout
 
 from warpxm.core.types import Real, WXM_DTYPE
@@ -32,8 +32,9 @@ def _euler_step_kernel[
     rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
     output: TileTensor[WXM_DTYPE, OutLayout, MutAnyOrigin],
     dt: Real,
-    size: Int,
+    size_i64: Int64,
 ):
+    var size = Int(size_i64)
     comptime assert x.flat_rank == 1, "euler_step expects 1D x"
     comptime assert rhs.flat_rank == 1, "euler_step expects 1D rhs"
     comptime assert output.flat_rank == 1, "euler_step expects 1D output"
@@ -63,8 +64,9 @@ def _ssprk3_combine_kernel[
     a: Real,
     b: Real,
     dt: Real,
-    size: Int,
+    size_i64: Int64,
 ):
+    var size = Int(size_i64)
     comptime assert u0.flat_rank == 1, "combine expects 1D u0"
     comptime assert u_stage.flat_rank == 1, "combine expects 1D u_stage"
     comptime assert rhs.flat_rank == 1, "combine expects 1D rhs"

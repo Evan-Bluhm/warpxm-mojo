@@ -13,11 +13,11 @@
 # Bisection on [0, 1] for 50 iterations gives ~2^-50 ≈ 9e-16
 # precision — more than enough.
 
-from std.collections import InlineArray
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext
+from std.collections import Array
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.imhd import (
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
@@ -67,8 +67,9 @@ def _positivity_kernel_mhd[
 ](
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     rho_eps: Real, p_eps: Real, gamma: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
+    var num_elements = Int(num_elements_i64)
     comptime P1 = P + 1
     comptime nodes_per_elem = P1 ** NDIM
     comptime assert q.flat_rank == 1
@@ -81,7 +82,7 @@ def _positivity_kernel_mhd[
     var c_e = p_eps / (gamma - Real(1.0))
 
     # Per-component cell means (covers ρ, m, E, B, and ψ if present).
-    var bar = InlineArray[Scalar[WXM_DTYPE], NC](fill=Scalar[WXM_DTYPE](0.0))
+    var bar = Array[Scalar[WXM_DTYPE], NC](fill=Scalar[WXM_DTYPE](0.0))
     comptime for n in range(nodes_per_elem):
         var base = (e * nodes_per_elem + n) * NC
         var w = _gll_cell_weight[P, NDIM](n)
@@ -180,18 +181,18 @@ struct PositivityMHD2D[P: Int, NC: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh2D[Self.P],
+        mesh: BlockMesh2D[Self.P],
         mut q: DGState2D[Self.P, Self.NC],
     ) raises:
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
-        var q_layout = row_major(Idx(q.buf_len))
+        var q_layout = row_major(Int(q.buf_len))
         var q_view = TileTensor(q.buf, q_layout)
         comptime k_fn = _positivity_kernel_mhd[
             Self.P, 2, Self.NC, type_of(q_layout),
         ]
         ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, self.num_elements,
+            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )
 
@@ -216,17 +217,17 @@ struct PositivityMHD3D[P: Int, NC: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh3D[Self.P],
+        mesh: BlockMesh3D[Self.P],
         mut q: DGState3D[Self.P, Self.NC],
     ) raises:
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
-        var q_layout = row_major(Idx(q.buf_len))
+        var q_layout = row_major(Int(q.buf_len))
         var q_view = TileTensor(q.buf, q_layout)
         comptime k_fn = _positivity_kernel_mhd[
             Self.P, 3, Self.NC, type_of(q_layout),
         ]
         ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, self.num_elements,
+            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )

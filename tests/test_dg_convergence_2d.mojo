@@ -9,7 +9,7 @@
 
 from std.math import cos, log2, sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.advection import Advection
@@ -55,21 +55,19 @@ def _one_run[P: Int](
     )
     var stepper = SSPRK3_2D[P, 1](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, 1],
         mut q_out: DGState2D[P, 1],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState2D[P, 1]) raises:
+    def no_adjust(mut q_: DGState2D[P, 1]) raises {imm}:
         pass
 
     var t: Real = 0.0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
         t += dt_use
     ctx.synchronize()
 

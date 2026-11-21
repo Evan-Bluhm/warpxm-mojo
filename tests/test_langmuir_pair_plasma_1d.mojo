@@ -20,7 +20,7 @@
 
 from std.math import cos, sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.euler import (
@@ -121,7 +121,6 @@ def main() raises:
     var maxwell_spatial = DGMaxwellSolver1D[P](maxwell_app)
     var stepper = SSPRK3_Plasma_1D[P](ctx, mesh.num_elements)
 
-    @parameter
     def compute_joint_rhs(
         mut q1_in: DGState1D[P, EULER_NC],
         mut q2_in: DGState1D[P, EULER_NC],
@@ -129,7 +128,7 @@ def main() raises:
         mut q1_out: DGState1D[P, EULER_NC],
         mut q2_out: DGState1D[P, EULER_NC],
         mut qm_out: DGState1D[P, MAXWELL_NC],
-    ) raises:
+    ) raises {imm}:
         fluid_spatial.compute_rhs(ctx, mesh, q1_in, q1_out)
         fluid_spatial.compute_rhs(ctx, mesh, q2_in, q2_out)
         maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
@@ -141,7 +140,7 @@ def main() raises:
     var t: Real = 0.0
     while t < t_final - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < t_final else (t_final - t)
-        stepper.step[compute_joint_rhs](ctx, q_s1, q_s2, q_maxwell, dt_use)
+        stepper.step(ctx, q_s1, q_s2, q_maxwell, dt_use, compute_joint_rhs)
         t += dt_use
     ctx.synchronize()
 

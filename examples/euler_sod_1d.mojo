@@ -20,7 +20,7 @@
 # locations at `t = 0.2`.
 
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.apps.euler import Euler
 from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
@@ -91,22 +91,20 @@ def main() raises:
     var limiter = MoeRossmanith1D[P](ctx, mesh.num_elements)
 
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState1D[P, EULER_NC],
         mut q_out: DGState1D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def adjust(mut q_: DGState1D[P, EULER_NC]) raises:
+    def adjust(mut q_: DGState1D[P, EULER_NC]) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
     var t: Real = 0.0
     var step: Int = 0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, adjust)
         t += dt_use
         step += 1
     ctx.synchronize()

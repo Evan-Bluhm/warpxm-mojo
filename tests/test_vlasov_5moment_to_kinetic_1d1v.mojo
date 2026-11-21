@@ -15,7 +15,7 @@
 #     pixi run mojo run -I src tests/test_vlasov_5moment_to_kinetic_1d1v.mojo
 
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E

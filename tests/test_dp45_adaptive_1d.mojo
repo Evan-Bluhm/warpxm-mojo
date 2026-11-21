@@ -11,7 +11,7 @@
 
 from std.math import sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.advection import Advection
@@ -54,11 +54,10 @@ def main() raises:
     )
     var stepper = DormandPrince45_1D[P, 1](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState1D[P, 1],
         mut q_out: DGState1D[P, 1],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
     var t: Real = 0.0
@@ -69,8 +68,13 @@ def main() raises:
     while t < T_FINAL - Real(1.0e-12):
         # Clip so we don't overshoot t_final.
         var dt_try = dt if (t + dt) < T_FINAL else (T_FINAL - t)
-        var ret = stepper.step_adaptive[compute_rhs](
-            ctx, q, dt_try, atol=ATOL, rtol=RTOL,
+        var ret = stepper.step_adaptive(
+            ctx,
+            q,
+            dt_try,
+            compute_rhs,
+            atol=ATOL,
+            rtol=RTOL,
         )
         var dt_used = ret[0]
         var dt_next = ret[1]

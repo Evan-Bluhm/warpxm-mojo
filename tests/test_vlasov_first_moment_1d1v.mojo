@@ -19,7 +19,7 @@
 
 from std.math import exp, sqrt, erf
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.vlasovmaxwell import VLASOV_NC
@@ -45,7 +45,7 @@ comptime SIGMA_SQ: Real = 0.5
 def fill_shifted_maxwellian(
     var ctx: DeviceContext,
     mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-    mut mesh: PhaseMesh1D1V[P_X, P_V],
+    mesh: PhaseMesh1D1V[P_X, P_V],
     u: Real,
 ) raises:
     """Fill `q` with `f(x, v) = exp(-(v - u)² / σ²)` (x-independent)."""
@@ -70,7 +70,7 @@ def fill_shifted_maxwellian(
 def first_moment_max_err(
     var ctx: DeviceContext,
     mut moments: VlasovMoments1D1V[P_X, P_V],
-    mut mesh: PhaseMesh1D1V[P_X, P_V],
+    mesh: PhaseMesh1D1V[P_X, P_V],
     mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
     j_analytic: Real,
 ) raises -> Real:

@@ -23,7 +23,7 @@
 #
 # Mirrors configuration-space `DGState1D[P, NC]` in `state_1d.mojo`.
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.core.types import Real
 
 

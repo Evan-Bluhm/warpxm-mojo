@@ -4,7 +4,7 @@ Explicit time integrators. The architecture mirrors upstream WARPXM's
 `spatial_solver + variable_adjuster` separation: one generic stepper
 per dimension; the spatial RHS evaluation and the adjuster list (slope
 limiter, positivity preserver, GLM damping, source terms, …) are
-composed at the call site via `@parameter def` closures.
+composed at the call site via closures (nested `def`s with a capture list).
 
 ## Files
 
@@ -22,15 +22,13 @@ composed at the call site via `@parameter def` closures.
 
 ## The two-closure pattern
 
-`SSPRK3_{1,2,3}D[P, NC].step` takes two comptime closure parameters:
+`SSPRK3_{1,2,3}D[P, NC].step` takes two closures as trailing arguments:
 
 ```mojo
 def step[
-    compute_rhs_fn: def(mut DGStateNd[P, NC], mut DGStateNd[P, NC])
-                      raises capturing[_] -> None,
-    adjust_fn:      def(mut DGStateNd[P, NC])
-                      raises capturing[_] -> None,
-](mut self, var ctx, mut u, dt) raises
+    ComputeRhs: def(mut DGStateNd[P, NC], mut DGStateNd[P, NC]) raises -> None,
+    Adjust:     def(mut DGStateNd[P, NC]) raises -> None,
+](mut self, var ctx, mut u, dt, compute_rhs_fn: ComputeRhs, adjust_fn: Adjust) raises
 ```
 
 `compute_rhs_fn(q_in, q_out)` evaluates the spatial RHS for the supplied
@@ -50,22 +48,20 @@ in a few lines at the call site.
 var spatial = DG<Physics>Solver<D>D[P](app)
 var stepper = SSPRK3_<D>D[P, <Physics>_NC](ctx, mesh.num_elements)
 
-@parameter
 def compute_rhs(
     mut q_in: DGState<D>D[P, <Physics>_NC],
     mut q_out: DGState<D>D[P, <Physics>_NC],
-) raises:
+) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
     # ... add source kernels here (gravity, GLM damping, Lorentz, …)
 
-@parameter
-def adjust(mut q_: DGState<D>D[P, <Physics>_NC]) raises:
+def adjust(mut q_: DGState<D>D[P, <Physics>_NC]) raises {mut limiter, mut positivity, imm}:
     limiter.apply(ctx, mesh, q_)        # zero, one, or many
     positivity.apply(ctx, mesh, q_)
 
 # Time loop
 while t < t_final:
-    stepper.step[compute_rhs, adjust](ctx, q, dt)
+    stepper.step(ctx, q, dt, compute_rhs, adjust)
     t += dt
 ```
 
@@ -73,8 +69,7 @@ For smooth problems (advection, Maxwell, smooth Euler), supply a no-op
 adjuster:
 
 ```mojo
-@parameter
-def no_adjust(mut q_: DGState<D>D[P, <Physics>_NC]) raises:
+def no_adjust(mut q_: DGState<D>D[P, <Physics>_NC]) raises {imm}:
     pass
 ```
 
@@ -85,14 +80,12 @@ inside `compute_rhs`:
 
 ```mojo
 # Euler with gravity:
-@parameter
-def compute_rhs(mut q_in, mut q_out) raises:
+def compute_rhs(mut q_in, mut q_out) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
     apply_gravity_source_2d[P](ctx, q_in, q_out, gx, gy)
 
 # Ideal MHD with GLM cleaning:
-@parameter
-def compute_rhs(mut q_in, mut q_out) raises:
+def compute_rhs(mut q_in, mut q_out) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
     apply_glm_damping_2d[P](ctx, q_in, q_out, c_h, c_p_sq)
 ```
@@ -105,7 +98,7 @@ def compute_rhs(mut q_in, mut q_out) raises:
 var spatial = DGImhdSolver2D[P, USE_HLLD=True](app)
 var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)
 # ... compute_rhs / adjust closures ...
-stepper.step[compute_rhs, adjust](ctx, q, dt)
+stepper.step(ctx, q, dt, compute_rhs, adjust)
 ```
 
 The closure picks up `spatial`, so whether you used `USE_HLLD=True` or
@@ -114,8 +107,8 @@ the default is captured automatically.
 ## Adaptive RK45 (Dormand-Prince)
 
 `DormandPrince45_{1,2,3}D[P, NC]` use the same two-closure pattern as
-SSPRK3 — `step[compute_rhs_fn]` for fixed-dt and
-`step_adaptive[compute_rhs_fn]` for embedded 4th-order error control.
+SSPRK3 — `step(..., compute_rhs_fn)` for fixed-dt and
+`step_adaptive(..., compute_rhs_fn)` for embedded 4th-order error control.
 Three families of helper kernels live in `dormand_prince_1d.mojo` and
 are imported by the 2D and 3D wrappers — all three operate on flat
 buffers, so they don't care about dimensionality:
@@ -142,7 +135,6 @@ combined hyperbolic + source RHS for all states. Source ordering,
 the driver:
 
 ```mojo
-@parameter
 def compute_joint_rhs(
     mut q1_in: DGState2D[P, EULER_NC],
     mut q2_in: DGState2D[P, EULER_NC],
@@ -150,7 +142,7 @@ def compute_joint_rhs(
     mut q1_out: DGState2D[P, EULER_NC],
     mut q2_out: DGState2D[P, EULER_NC],
     mut qm_out: DGState2D[P, MAXWELL_NC],
-) raises:
+) raises {imm}:
     fluid_spatial.compute_rhs(ctx, mesh, q1_in, q1_out)
     fluid_spatial.compute_rhs(ctx, mesh, q2_in, q2_out)
     maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
@@ -159,7 +151,7 @@ def compute_joint_rhs(
     apply_current_source_2d[P](ctx, q1_in, qm_out, ALPHA_1, EPS0)
     apply_current_source_2d[P](ctx, q2_in, qm_out, ALPHA_2, EPS0)
 
-stepper.step[compute_joint_rhs](ctx, q_s1, q_s2, q_maxwell, dt)
+stepper.step(ctx, q_s1, q_s2, q_maxwell, dt, compute_joint_rhs)
 ```
 
 `SSPRK3_TwoFluid_{1,2,3}D` is the 2-state shape `compute_joint_rhs(qf_in,

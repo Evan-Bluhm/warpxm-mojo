@@ -19,7 +19,7 @@
 #
 # Numerical flux: central + Lax-Friedrichs at speed c.
 
-from std.collections import InlineArray
+from std.collections import Array
 
 from warpxm.core.types import Real
 
@@ -49,45 +49,45 @@ struct Maxwell(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def internal_flux_x_static(
-        q: InlineArray[Real, MAXWELL_NC], c: Real,
-    ) -> InlineArray[Real, MAXWELL_NC]:
+        q: Array[Real, MAXWELL_NC], c: Real,
+    ) -> Array[Real, MAXWELL_NC]:
         var c2 = c * c
-        var f: InlineArray[Real, MAXWELL_NC] = InlineArray[Real, MAXWELL_NC](fill=Real(0.0))
+        var f: Array[Real, MAXWELL_NC] = Array[Real, MAXWELL_NC](fill=Real(0.0))
         f[IDX_EX] = Real(0.0)
         f[IDX_EY] = c2 * q[IDX_BZ]
         f[IDX_EZ] = -c2 * q[IDX_BY]
         f[IDX_BX] = Real(0.0)
         f[IDX_BY] = -q[IDX_EZ]
         f[IDX_BZ] = q[IDX_EY]
-        return f
+        return f^
 
     @staticmethod
     def internal_flux_y_static(
-        q: InlineArray[Real, MAXWELL_NC], c: Real,
-    ) -> InlineArray[Real, MAXWELL_NC]:
+        q: Array[Real, MAXWELL_NC], c: Real,
+    ) -> Array[Real, MAXWELL_NC]:
         var c2 = c * c
-        var f: InlineArray[Real, MAXWELL_NC] = InlineArray[Real, MAXWELL_NC](fill=Real(0.0))
+        var f: Array[Real, MAXWELL_NC] = Array[Real, MAXWELL_NC](fill=Real(0.0))
         f[IDX_EX] = -c2 * q[IDX_BZ]
         f[IDX_EY] = Real(0.0)
         f[IDX_EZ] = c2 * q[IDX_BX]
         f[IDX_BX] = q[IDX_EZ]
         f[IDX_BY] = Real(0.0)
         f[IDX_BZ] = -q[IDX_EX]
-        return f
+        return f^
 
     @staticmethod
     def internal_flux_z_static(
-        q: InlineArray[Real, MAXWELL_NC], c: Real,
-    ) -> InlineArray[Real, MAXWELL_NC]:
+        q: Array[Real, MAXWELL_NC], c: Real,
+    ) -> Array[Real, MAXWELL_NC]:
         var c2 = c * c
-        var f: InlineArray[Real, MAXWELL_NC] = InlineArray[Real, MAXWELL_NC](fill=Real(0.0))
+        var f: Array[Real, MAXWELL_NC] = Array[Real, MAXWELL_NC](fill=Real(0.0))
         f[IDX_EX] = c2 * q[IDX_BY]
         f[IDX_EY] = -c2 * q[IDX_BX]
         f[IDX_EZ] = Real(0.0)
         f[IDX_BX] = -q[IDX_EY]
         f[IDX_BY] = q[IDX_EX]
         f[IDX_BZ] = Real(0.0)
-        return f
+        return f^
 
     # ------------------------------------------------------------------
     # Central + LF numerical flux on a 3-component unit normal.
@@ -96,20 +96,20 @@ struct Maxwell(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def numerical_flux_static(
-        q_l: InlineArray[Real, MAXWELL_NC],
-        q_r: InlineArray[Real, MAXWELL_NC],
+        q_l: Array[Real, MAXWELL_NC],
+        q_r: Array[Real, MAXWELL_NC],
         nx: Real, ny: Real, nz: Real,
         c: Real,
-    ) -> InlineArray[Real, MAXWELL_NC]:
+    ) -> Array[Real, MAXWELL_NC]:
         var fx_l = Self.internal_flux_x_static(q_l, c)
         var fy_l = Self.internal_flux_y_static(q_l, c)
         var fz_l = Self.internal_flux_z_static(q_l, c)
         var fx_r = Self.internal_flux_x_static(q_r, c)
         var fy_r = Self.internal_flux_y_static(q_r, c)
         var fz_r = Self.internal_flux_z_static(q_r, c)
-        var f: InlineArray[Real, MAXWELL_NC] = InlineArray[Real, MAXWELL_NC](fill=Real(0.0))
+        var f: Array[Real, MAXWELL_NC] = Array[Real, MAXWELL_NC](fill=Real(0.0))
         comptime for k in range(MAXWELL_NC):
             var f_n_l = nx * fx_l[k] + ny * fy_l[k] + nz * fz_l[k]
             var f_n_r = nx * fx_r[k] + ny * fy_r[k] + nz * fz_r[k]
             f[k] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c * (q_r[k] - q_l[k])
-        return f
+        return f^

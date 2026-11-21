@@ -12,7 +12,7 @@
 #   * Rusanov / local Lax-Friedrichs (default).
 #   * Miyoshi-Kusano HLLD (5-state approximate Riemann solver).
 
-from std.collections import InlineArray
+from std.collections import Array
 
 from warpxm.core.math_compat import fabs, fmax, sqrt
 from warpxm.core.types import Real
@@ -31,18 +31,18 @@ comptime IDX_BZ: Int = 7
 
 
 @always_inline
-def _rho_floored(q: InlineArray[Real, MHD_NC], rho_min: Real) -> Real:
+def _rho_floored(q: Array[Real, MHD_NC], rho_min: Real) -> Real:
     return fmax(q[IDX_RHO], rho_min)
 
 
 @always_inline
-def _bsq(q: InlineArray[Real, MHD_NC]) -> Real:
+def _bsq(q: Array[Real, MHD_NC]) -> Real:
     return q[IDX_BX] * q[IDX_BX] + q[IDX_BY] * q[IDX_BY] + q[IDX_BZ] * q[IDX_BZ]
 
 
 @always_inline
 def _gas_pressure_floored(
-    q: InlineArray[Real, MHD_NC], gamma: Real, rho_min: Real, press_min: Real,
+    q: Array[Real, MHD_NC], gamma: Real, rho_min: Real, press_min: Real,
 ) -> Real:
     var rho = _rho_floored(q, rho_min)
     var msq = (q[IDX_MX] * q[IDX_MX]
@@ -84,9 +84,9 @@ struct IMHD(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def internal_flux_x_static(
-        q: InlineArray[Real, MHD_NC],
+        q: Array[Real, MHD_NC],
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, MHD_NC]:
+    ) -> Array[Real, MHD_NC]:
         var rho = _rho_floored(q, rho_min)
         var p = _gas_pressure_floored(q, gamma, rho_min, press_min)
         var ux = q[IDX_MX] / rho
@@ -99,7 +99,7 @@ struct IMHD(ImplicitlyCopyable, Movable):
         var udotB = ux * Bx + uy * By + uz * Bz
         var p_tot = p + Real(0.5) * bsq
 
-        var f: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+        var f: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
         f[IDX_RHO] = q[IDX_MX]
         f[IDX_MX] = q[IDX_MX] * ux + p_tot - Bx * Bx
         f[IDX_MY] = q[IDX_MX] * uy - Bx * By
@@ -108,13 +108,13 @@ struct IMHD(ImplicitlyCopyable, Movable):
         f[IDX_BX] = Real(0.0)
         f[IDX_BY] = By * ux - Bx * uy
         f[IDX_BZ] = Bz * ux - Bx * uz
-        return f
+        return f^
 
     @staticmethod
     def internal_flux_y_static(
-        q: InlineArray[Real, MHD_NC],
+        q: Array[Real, MHD_NC],
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, MHD_NC]:
+    ) -> Array[Real, MHD_NC]:
         var rho = _rho_floored(q, rho_min)
         var p = _gas_pressure_floored(q, gamma, rho_min, press_min)
         var ux = q[IDX_MX] / rho
@@ -127,7 +127,7 @@ struct IMHD(ImplicitlyCopyable, Movable):
         var udotB = ux * Bx + uy * By + uz * Bz
         var p_tot = p + Real(0.5) * bsq
 
-        var f: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+        var f: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
         f[IDX_RHO] = q[IDX_MY]
         f[IDX_MX] = q[IDX_MY] * ux - By * Bx
         f[IDX_MY] = q[IDX_MY] * uy + p_tot - By * By
@@ -136,13 +136,13 @@ struct IMHD(ImplicitlyCopyable, Movable):
         f[IDX_BX] = Bx * uy - By * ux
         f[IDX_BY] = Real(0.0)
         f[IDX_BZ] = Bz * uy - By * uz
-        return f
+        return f^
 
     @staticmethod
     def internal_flux_z_static(
-        q: InlineArray[Real, MHD_NC],
+        q: Array[Real, MHD_NC],
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, MHD_NC]:
+    ) -> Array[Real, MHD_NC]:
         var rho = _rho_floored(q, rho_min)
         var p = _gas_pressure_floored(q, gamma, rho_min, press_min)
         var ux = q[IDX_MX] / rho
@@ -155,7 +155,7 @@ struct IMHD(ImplicitlyCopyable, Movable):
         var udotB = ux * Bx + uy * By + uz * Bz
         var p_tot = p + Real(0.5) * bsq
 
-        var f: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+        var f: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
         f[IDX_RHO] = q[IDX_MZ]
         f[IDX_MX] = q[IDX_MZ] * ux - Bz * Bx
         f[IDX_MY] = q[IDX_MZ] * uy - Bz * By
@@ -164,7 +164,7 @@ struct IMHD(ImplicitlyCopyable, Movable):
         f[IDX_BX] = Bx * uz - Bz * ux
         f[IDX_BY] = By * uz - Bz * uy
         f[IDX_BZ] = Real(0.0)
-        return f
+        return f^
 
     # ------------------------------------------------------------------
     # Rusanov numerical flux on a 3-component unit normal.
@@ -173,11 +173,11 @@ struct IMHD(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def numerical_flux_static(
-        q_l: InlineArray[Real, MHD_NC],
-        q_r: InlineArray[Real, MHD_NC],
+        q_l: Array[Real, MHD_NC],
+        q_r: Array[Real, MHD_NC],
         nx: Real, ny: Real, nz: Real,
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, MHD_NC]:
+    ) -> Array[Real, MHD_NC]:
         var rho_l = _rho_floored(q_l, rho_min)
         var rho_r = _rho_floored(q_r, rho_min)
         var p_l = _gas_pressure_floored(q_l, gamma, rho_min, press_min)
@@ -201,12 +201,12 @@ struct IMHD(ImplicitlyCopyable, Movable):
         var fy_r = Self.internal_flux_y_static(q_r, gamma, rho_min, press_min)
         var fz_r = Self.internal_flux_z_static(q_r, gamma, rho_min, press_min)
 
-        var f: InlineArray[Real, MHD_NC] = InlineArray[Real, MHD_NC](fill=Real(0.0))
+        var f: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
             var f_n_l = nx * fx_l[c] + ny * fy_l[c] + nz * fz_l[c]
             var f_n_r = nx * fx_r[c] + ny * fy_r[c] + nz * fz_r[c]
             f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
-        return f
+        return f^
 
     # ------------------------------------------------------------------
     # HLLD numerical flux (Miyoshi-Kusano 2005) on an axis-aligned face.
@@ -221,11 +221,11 @@ struct IMHD(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def numerical_flux_hlld_static(
-        q_l: InlineArray[Real, MHD_NC],
-        q_r: InlineArray[Real, MHD_NC],
+        q_l: Array[Real, MHD_NC],
+        q_r: Array[Real, MHD_NC],
         nx: Real, ny: Real, nz: Real,
         gamma: Real, rho_min: Real, press_min: Real,
-    ) -> InlineArray[Real, MHD_NC]:
+    ) -> Array[Real, MHD_NC]:
         if fabs(nx) > Real(0.5):
             return _hlld_core_3d(
                 q_l, q_r,
@@ -247,12 +247,12 @@ struct IMHD(ImplicitlyCopyable, Movable):
 
 
 def _hlld_core_3d(
-    q_l: InlineArray[Real, MHD_NC],
-    q_r: InlineArray[Real, MHD_NC],
+    q_l: Array[Real, MHD_NC],
+    q_r: Array[Real, MHD_NC],
     M_N: Int, M_T1: Int, M_T2: Int,
     B_N: Int, B_T1: Int, B_T2: Int,
     gamma: Real, rho_min: Real, press_min: Real,
-) -> InlineArray[Real, MHD_NC]:
+) -> Array[Real, MHD_NC]:
     """Miyoshi-Kusano HLLD in the (n, t₁, t₂) frame. Index parameters
     pick which conserved-variable component is the normal momentum, the
     two transverse momenta, the normal B, and the two transverse Bs.
@@ -288,7 +288,7 @@ def _hlld_core_3d(
 
     var udotB_l = u_n_l * B_n + u_t1_l * B_t1_l + u_t2_l * B_t2_l
     var udotB_r = u_n_r * B_n + u_t1_r * B_t1_r + u_t2_r * B_t2_r
-    var F_L = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var F_L = Array[Real, MHD_NC](fill=Real(0.0))
     F_L[IDX_RHO] = rho_l * u_n_l
     F_L[M_N]  = rho_l * u_n_l * u_n_l + p_T_l - B_n * B_n
     F_L[M_T1] = rho_l * u_n_l * u_t1_l - B_n * B_t1_l
@@ -297,7 +297,7 @@ def _hlld_core_3d(
     F_L[B_N]  = Real(0.0)
     F_L[B_T1] = B_t1_l * u_n_l - B_n * u_t1_l
     F_L[B_T2] = B_t2_l * u_n_l - B_n * u_t2_l
-    var F_R = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var F_R = Array[Real, MHD_NC](fill=Real(0.0))
     F_R[IDX_RHO] = rho_r * u_n_r
     F_R[M_N]  = rho_r * u_n_r * u_n_r + p_T_r - B_n * B_n
     F_R[M_T1] = rho_r * u_n_r * u_t1_r - B_n * B_t1_r
@@ -308,11 +308,11 @@ def _hlld_core_3d(
     F_R[B_T2] = B_t2_r * u_n_r - B_n * u_t2_r
 
     if S_L >= Real(0.0):
-        return F_L
+        return F_L^
     if S_R <= Real(0.0):
-        return F_R
+        return F_R^
 
-    var U_L = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var U_L = Array[Real, MHD_NC](fill=Real(0.0))
     U_L[IDX_RHO] = rho_l
     U_L[M_N]  = q_l[M_N]
     U_L[M_T1] = q_l[M_T1]
@@ -321,7 +321,7 @@ def _hlld_core_3d(
     U_L[B_N]  = B_n
     U_L[B_T1] = B_t1_l
     U_L[B_T2] = B_t2_l
-    var U_R = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var U_R = Array[Real, MHD_NC](fill=Real(0.0))
     U_R[IDX_RHO] = rho_r
     U_R[M_N]  = q_r[M_N]
     U_R[M_T1] = q_r[M_T1]
@@ -388,7 +388,7 @@ def _hlld_core_3d(
     var E_R_s = (sR_uR * q_r[IDX_E] - p_T_r * u_n_r + p_T_star * S_M
                  + B_n * (udotB_r - udotB_R_s)) / (S_R - S_M)
 
-    var U_L_s = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var U_L_s = Array[Real, MHD_NC](fill=Real(0.0))
     U_L_s[IDX_RHO] = rho_L_s
     U_L_s[M_N]  = rho_L_s * S_M
     U_L_s[M_T1] = rho_L_s * u_t1_L_s
@@ -397,7 +397,7 @@ def _hlld_core_3d(
     U_L_s[B_N]  = B_n
     U_L_s[B_T1] = B_t1_L_s
     U_L_s[B_T2] = B_t2_L_s
-    var U_R_s = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var U_R_s = Array[Real, MHD_NC](fill=Real(0.0))
     U_R_s[IDX_RHO] = rho_R_s
     U_R_s[M_N]  = rho_R_s * S_M
     U_R_s[M_T1] = rho_R_s * u_t1_R_s
@@ -407,16 +407,16 @@ def _hlld_core_3d(
     U_R_s[B_T1] = B_t1_R_s
     U_R_s[B_T2] = B_t2_R_s
 
-    var F_L_s = InlineArray[Real, MHD_NC](fill=Real(0.0))
-    var F_R_s = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var F_L_s = Array[Real, MHD_NC](fill=Real(0.0))
+    var F_R_s = Array[Real, MHD_NC](fill=Real(0.0))
     comptime for c in range(MHD_NC):
         F_L_s[c] = F_L[c] + S_L * (U_L_s[c] - U_L[c])
         F_R_s[c] = F_R[c] + S_R * (U_R_s[c] - U_R[c])
 
     if S_L_s >= Real(0.0):
-        return F_L_s
+        return F_L_s^
     if S_R_s <= Real(0.0):
-        return F_R_s
+        return F_R_s^
 
     var sqrt_rL = sqrt(rho_L_s)
     var sqrt_rR = sqrt(rho_R_s)
@@ -434,7 +434,7 @@ def _hlld_core_3d(
     var E_L_ss = E_L_s - sqrt_rL * sign_Bn * (udotB_L_s - udotB_ss)
     var E_R_ss = E_R_s + sqrt_rR * sign_Bn * (udotB_R_s - udotB_ss)
 
-    var U_L_ss = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var U_L_ss = Array[Real, MHD_NC](fill=Real(0.0))
     U_L_ss[IDX_RHO] = rho_L_s
     U_L_ss[M_N]  = rho_L_s * S_M
     U_L_ss[M_T1] = rho_L_s * u_t1_ss
@@ -443,7 +443,7 @@ def _hlld_core_3d(
     U_L_ss[B_N]  = B_n
     U_L_ss[B_T1] = B_t1_ss
     U_L_ss[B_T2] = B_t2_ss
-    var U_R_ss = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var U_R_ss = Array[Real, MHD_NC](fill=Real(0.0))
     U_R_ss[IDX_RHO] = rho_R_s
     U_R_ss[M_N]  = rho_R_s * S_M
     U_R_ss[M_T1] = rho_R_s * u_t1_ss
@@ -453,11 +453,11 @@ def _hlld_core_3d(
     U_R_ss[B_T1] = B_t1_ss
     U_R_ss[B_T2] = B_t2_ss
 
-    var F_chosen = InlineArray[Real, MHD_NC](fill=Real(0.0))
+    var F_chosen = Array[Real, MHD_NC](fill=Real(0.0))
     if S_M >= Real(0.0):
         comptime for c in range(MHD_NC):
             F_chosen[c] = F_L_s[c] + S_L_s * (U_L_ss[c] - U_L_s[c])
     else:
         comptime for c in range(MHD_NC):
             F_chosen[c] = F_R_s[c] + S_R_s * (U_R_ss[c] - U_R_s[c])
-    return F_chosen
+    return F_chosen^

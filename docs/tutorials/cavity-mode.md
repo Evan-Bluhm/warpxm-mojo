@@ -70,15 +70,13 @@ var app = Maxwell(c_light=1.0, cfl_max=0.5)
 var spatial = DGMaxwellSolver2D[P](app)
 var stepper = SSPRK3_2D[P, MAXWELL_NC](ctx, mesh.num_elements)
 
-@parameter
 def compute_rhs(
     mut q_in: DGState2D[P, MAXWELL_NC],
     mut q_out: DGState2D[P, MAXWELL_NC],
-) raises:
+) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-@parameter
-def no_adjust(mut q_: DGState2D[P, MAXWELL_NC]) raises:
+def no_adjust(mut q_: DGState2D[P, MAXWELL_NC]) raises {imm}:
     pass
 ```
 

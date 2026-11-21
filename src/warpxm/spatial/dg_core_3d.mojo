@@ -15,10 +15,10 @@
 # `thread_idx.z = eb_in_block · P1 + kn`. Shared memory grows by
 # `ELEMS_PER_BLOCK`× but stays well under the 100 KB/SM limit.
 
-from std.collections import InlineArray
-from std.gpu import block_idx, thread_idx
-from std.gpu.sync import barrier
-from std.gpu.memory import AddressSpace
+from std.collections import Array
+from max.gpu import block_idx, thread_idx
+from max.gpu.sync import barrier
+from max.gpu.memory import AddressSpace
 from layout import TileTensor, TensorLayout, row_major, stack_allocation
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -44,31 +44,34 @@ def _load_node_3d[
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     elem: Int,
     local_node: Int,
-) -> InlineArray[Real, NC]:
+) -> Array[Real, NC]:
     comptime assert q.flat_rank == 1
     comptime num_nodes_per_elem = (P + 1) ** 3
     var base = (elem * num_nodes_per_elem + local_node) * NC
-    var out: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var out: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
     comptime for c in range(NC):
         out[c] = rebind[Scalar[WXM_DTYPE]](q[base + c])
-    return out
+    return out^
 
 
 @always_inline
 def _dg_3d_compute_rhs_core[
-    P: Int, NC: Int,
-    flux_x_fn: def(InlineArray[Real, NC]) capturing [_] -> InlineArray[Real, NC],
-    flux_y_fn: def(InlineArray[Real, NC]) capturing [_] -> InlineArray[Real, NC],
-    flux_z_fn: def(InlineArray[Real, NC]) capturing [_] -> InlineArray[Real, NC],
-    num_flux_fn: def(
-        InlineArray[Real, NC], InlineArray[Real, NC], Real, Real, Real,
-    ) capturing [_] -> InlineArray[Real, NC],
-    apply_bc_fn: def(
-        InlineArray[Real, NC], Int, Int,
-    ) capturing [_] -> InlineArray[Real, NC],
-    QLayout: TensorLayout, RhsLayout: TensorLayout,
-    FaceLayout: TensorLayout, EFLayout: TensorLayout,
-    ELEMS_PER_BLOCK: Int = 1,
+    P: Int,
+    NC: Int,
+    QLayout: TensorLayout,
+    RhsLayout: TensorLayout,
+    FaceLayout: TensorLayout,
+    EFLayout: TensorLayout,
+    ELEMS_PER_BLOCK: Int,
+    FluxX: def(Array[Real, NC]) -> Array[Real, NC],
+    FluxY: def(Array[Real, NC]) -> Array[Real, NC],
+    FluxZ: def(Array[Real, NC]) -> Array[Real, NC],
+    NumFlux: def(
+        Array[Real, NC], Array[Real, NC], Real, Real, Real,
+    ) -> Array[Real, NC],
+    ApplyBc: def(
+        Array[Real, NC], Int, Int,
+    ) -> Array[Real, NC],
 ](
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
@@ -78,6 +81,11 @@ def _dg_3d_compute_rhs_core[
     face_bc: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     jacobian_x: Real, jacobian_y: Real, jacobian_z: Real,
     num_elements: Int,
+    flux_x_fn: FluxX,
+    flux_y_fn: FluxY,
+    flux_z_fn: FluxZ,
+    num_flux_fn: NumFlux,
+    apply_bc_fn: ApplyBc,
 ):
     """Generic per-node DG residual for a 3D NC-component conservation
     law. Volume term via tensor-product GLL differentiation, surface
@@ -141,7 +149,7 @@ def _dg_3d_compute_rhs_core[
     var inv_jac_x: Scalar[WXM_DTYPE] = Real(1.0) / jacobian_x
     var inv_jac_y: Scalar[WXM_DTYPE] = Real(1.0) / jacobian_y
     var inv_jac_z: Scalar[WXM_DTYPE] = Real(1.0) / jacobian_z
-    var accum: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var accum: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
     comptime for kx in range(P1):
         var d_in_kx: Scalar[WXM_DTYPE] = d_flat[in_ * P1 + kx] * inv_jac_x
@@ -170,7 +178,7 @@ def _dg_3d_compute_rhs_core[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_LEFT_3D]))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
+        var q_nbr: Array[Real, NC]
         if neg_e == Int(GHOST_NEG_3D):
             q_nbr = apply_bc_fn(q_n, bc_kind, 0)
         else:
@@ -182,7 +190,7 @@ def _dg_3d_compute_rhs_core[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_RIGHT_3D]))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
+        var q_nbr: Array[Real, NC]
         if pos_e == Int(GHOST_POS_3D):
             q_nbr = apply_bc_fn(q_n, bc_kind, 0)
         else:
@@ -194,7 +202,7 @@ def _dg_3d_compute_rhs_core[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_BOTTOM_3D]))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
+        var q_nbr: Array[Real, NC]
         if neg_e == Int(GHOST_NEG_3D):
             q_nbr = apply_bc_fn(q_n, bc_kind, 1)
         else:
@@ -206,7 +214,7 @@ def _dg_3d_compute_rhs_core[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_TOP_3D]))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
+        var q_nbr: Array[Real, NC]
         if pos_e == Int(GHOST_POS_3D):
             q_nbr = apply_bc_fn(q_n, bc_kind, 1)
         else:
@@ -218,7 +226,7 @@ def _dg_3d_compute_rhs_core[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_DOWN_3D]))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
+        var q_nbr: Array[Real, NC]
         if neg_e == Int(GHOST_NEG_3D):
             q_nbr = apply_bc_fn(q_n, bc_kind, 2)
         else:
@@ -230,7 +238,7 @@ def _dg_3d_compute_rhs_core[
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_UP_3D]))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[f_id]))
-        var q_nbr: InlineArray[Real, NC]
+        var q_nbr: Array[Real, NC]
         if pos_e == Int(GHOST_POS_3D):
             q_nbr = apply_bc_fn(q_n, bc_kind, 2)
         else:

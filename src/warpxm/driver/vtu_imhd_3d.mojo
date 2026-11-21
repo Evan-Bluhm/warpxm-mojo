@@ -6,7 +6,7 @@
 #
 # Works for both `MHD_NC = 8` (plain ideal MHD) and `MHD_NC = 9` (GLM).
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.apps.imhd import (
     MHD_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,

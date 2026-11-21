@@ -21,10 +21,10 @@
 # `VlasovBGKSource1D1V.apply()` which holds the scratch buffers and
 # the `VlasovMoments1D1V` helper.
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.host import DeviceContext
+from max.gpu import block_idx, thread_idx
+from max.gpu.host import DeviceContext
 from std.math import exp
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.vlasovmaxwell import VLASOV_NC
 from warpxm.core.math_compat import sqrt
@@ -54,15 +54,17 @@ def _bgk_source_kernel_1d1v[
     j: TileTensor[WXM_DTYPE, JLayout, MutAnyOrigin],
     e_kin: TileTensor[WXM_DTYPE, ELayout, MutAnyOrigin],
     node_v: TileTensor[WXM_DTYPE, NodeVLayout, MutAnyOrigin],
-    num_v: Int,
+    num_v_i64: Int64,
     inv_tau: Real,
-    num_phase_elements: Int,
+    num_phase_elements_i64: Int64,
 ):
     """Per-phase-node BGK source. Adds `-(f - f_M) / τ` to `rhs` at
     every phase node.
 
     Thread layout: `block_idx.x = phase_e`,
     `(thread_idx.x, thread_idx.y) = (ix, iv)`."""
+    var num_v = Int(num_v_i64)
+    var num_phase_elements = Int(num_phase_elements_i64)
     comptime P1x = P_x + 1
     comptime P1v = P_v + 1
     comptime nodes_per_phase = P1x * P1v
@@ -134,7 +136,7 @@ struct VlasovBGKSource1D1V[P_x: Int, P_v: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mut mesh: PhaseMesh1D1V[Self.P_x, Self.P_v],
+        mesh: PhaseMesh1D1V[Self.P_x, Self.P_v],
         mut q: PhaseState1D1V[Self.P_x, Self.P_v, VLASOV_NC],
         mut rhs: PhaseState1D1V[Self.P_x, Self.P_v, VLASOV_NC],
         tau: Real,
@@ -149,9 +151,9 @@ struct VlasovBGKSource1D1V[P_x: Int, P_v: Int]:
 
         comptime P1x = Self.P_x + 1
         comptime P1v = Self.P_v + 1
-        var q_layout = row_major(Idx(q.buf_len))
-        var rho_layout = row_major(Idx(self.rho.buf_len))
-        var node_v_layout = row_major(Idx(mesh.num_v * P1v))
+        var q_layout = row_major(Int(q.buf_len))
+        var rho_layout = row_major(Int(self.rho.buf_len))
+        var node_v_layout = row_major(Int(mesh.num_v * P1v))
 
         var q_view = TileTensor(q.buf, q_layout)
         var rhs_view = TileTensor(rhs.buf, q_layout)
@@ -168,7 +170,7 @@ struct VlasovBGKSource1D1V[P_x: Int, P_v: Int]:
         ]
         ctx.enqueue_function[kernel](
             q_view, rhs_view, rho_view, j_view, e_view, node_v_view,
-            mesh.num_v, Real(1.0) / tau, mesh.num_phase_elements,
+            Int64(mesh.num_v), Real(1.0) / tau, Int64(mesh.num_phase_elements),
             grid_dim=mesh.num_phase_elements,
             block_dim=(P1x, P1v),
         )

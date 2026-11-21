@@ -17,10 +17,10 @@
 # uniform_oscillator_1d1v`); the issue is Mojo-codegen-flaky rather
 # than fundamental — EB=4 is the conservative ceiling for now.
 
-from std.collections import InlineArray
-from std.gpu import block_idx, thread_idx
-from std.gpu.sync import barrier
-from std.gpu.memory import AddressSpace
+from std.collections import Array
+from max.gpu import block_idx, thread_idx
+from max.gpu.sync import barrier
+from max.gpu.memory import AddressSpace
 from layout import TileTensor, TensorLayout, row_major, stack_allocation
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -40,29 +40,27 @@ def _load_node_1d[
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     elem: Int,
     node: Int,
-) -> InlineArray[Real, NC]:
+) -> Array[Real, NC]:
     comptime assert q.flat_rank == 1
     comptime num_nodes_per_elem = P + 1
     var base = (elem * num_nodes_per_elem + node) * NC
-    var out: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var out: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
     comptime for c in range(NC):
         out[c] = rebind[Scalar[WXM_DTYPE]](q[base + c])
-    return out
+    return out^
 
 
 @always_inline
 def _dg_1d_compute_rhs_core[
     P: Int, NC: Int,
-    flux_x_fn: def(InlineArray[Real, NC]) capturing [_] -> InlineArray[Real, NC],
-    num_flux_fn: def(
-        InlineArray[Real, NC], InlineArray[Real, NC], Real, Real, Real,
-    ) capturing [_] -> InlineArray[Real, NC],
-    apply_bc_fn: def(
-        InlineArray[Real, NC], Int,
-    ) capturing [_] -> InlineArray[Real, NC],
     QLayout: TensorLayout, RhsLayout: TensorLayout,
     ElemFaceLayout: TensorLayout,
-    ELEMS_PER_BLOCK: Int = 1,
+    ELEMS_PER_BLOCK: Int,
+    FluxX: def(Array[Real, NC]) -> Array[Real, NC],
+    NumFlux: def(
+        Array[Real, NC], Array[Real, NC], Real, Real, Real,
+    ) -> Array[Real, NC],
+    ApplyBC: def(Array[Real, NC], Int) -> Array[Real, NC],
 ](
     q: TileTensor[WXM_DTYPE, QLayout, MutAnyOrigin],
     rhs: TileTensor[WXM_DTYPE, RhsLayout, MutAnyOrigin],
@@ -73,6 +71,9 @@ def _dg_1d_compute_rhs_core[
     face_bc: TileTensor[INDEX_DTYPE, ElemFaceLayout, MutAnyOrigin],
     jacobian: Real,
     num_elements: Int,
+    flux_x_fn: FluxX,
+    num_flux_fn: NumFlux,
+    apply_bc_fn: ApplyBC,
 ):
     """Generic per-node DG residual for a 1D NC-component conservation
     law. Volume term via GLL differentiation; surface term via the
@@ -113,7 +114,7 @@ def _dg_1d_compute_rhs_core[
 
     # --- Volume term: (D @ f)_i ----------------------------------------
     var d_flat = NodalBasis1D[P].diff_matrix_flat()
-    var dfdxi: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var dfdxi: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
     comptime for j in range(num_nodes_per_elem):
         var d_ij: Scalar[WXM_DTYPE] = d_flat[i * num_nodes_per_elem + j]
         comptime for c in range(NC):
@@ -122,13 +123,13 @@ def _dg_1d_compute_rhs_core[
 
     # --- Surface term: left and right faces ----------------------------
     var weights = NodalBasis1D[P].weights()
-    var surface: InlineArray[Real, NC] = InlineArray[Real, NC](fill=Real(0.0))
+    var surface: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
     if i == 0:
         var fL = Int(rebind[Scalar[INDEX_DTYPE]](elem_left_face[e]))
         var le = Int(rebind[Scalar[INDEX_DTYPE]](face_left[fL]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fL]))
-        var q_neg: InlineArray[Real, NC]
+        var q_neg: Array[Real, NC]
         if le == Int(GHOST_LEFT):
             q_neg = apply_bc_fn(q_i, bc_kind)
         else:
@@ -142,7 +143,7 @@ def _dg_1d_compute_rhs_core[
         var fR = Int(rebind[Scalar[INDEX_DTYPE]](elem_right_face[e]))
         var re = Int(rebind[Scalar[INDEX_DTYPE]](face_right[fR]))
         var bc_kind = Int(rebind[Scalar[INDEX_DTYPE]](face_bc[fR]))
-        var q_pos: InlineArray[Real, NC]
+        var q_pos: Array[Real, NC]
         if re == Int(GHOST_RIGHT):
             q_pos = apply_bc_fn(q_i, bc_kind)
         else:

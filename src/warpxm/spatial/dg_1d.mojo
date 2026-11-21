@@ -2,10 +2,10 @@
 # shared `_dg_1d_compute_rhs_core` template. NC-parameterised over the
 # tracer count.
 
-from std.collections import InlineArray
-from std.gpu.host import DeviceContext
+from std.collections import Array
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.advection import Advection
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
@@ -18,10 +18,10 @@ from warpxm.variable.state_1d import DGState1D
 
 @always_inline
 def _apply_bc_scalar[NC: Int](
-    q_interior: InlineArray[Real, NC], bc_kind: Int,
-) -> InlineArray[Real, NC]:
+    q_interior: Array[Real, NC], bc_kind: Int,
+) -> Array[Real, NC]:
     """Ghost-state for a passive scalar — copyout regardless of BC kind."""
-    return q_interior
+    return q_interior.copy()
 
 
 def _advection_rhs_kernel[
@@ -39,35 +39,33 @@ def _advection_rhs_kernel[
     face_bc: TileTensor[INDEX_DTYPE, ElemFaceLayout, MutAnyOrigin],
     velocity: Real,
     jacobian: Real,
-    num_elements: Int,
+    num_elements_i64: Int64,
 ):
-    @parameter
-    def flux_x(qn: InlineArray[Real, NC]) -> InlineArray[Real, NC]:
+    var num_elements = Int(num_elements_i64)
+    def flux_x(qn: Array[Real, NC]) {imm} -> Array[Real, NC]:
         return Advection[NC].internal_flux_x_static(qn, velocity)
 
-    @parameter
     def num_flux(
-        q_l: InlineArray[Real, NC], q_r: InlineArray[Real, NC],
+        q_l: Array[Real, NC], q_r: Array[Real, NC],
         nx: Real, ny: Real, nz: Real,
-    ) -> InlineArray[Real, NC]:
+    ) {imm} -> Array[Real, NC]:
         return Advection[NC].numerical_flux_static(
             q_l, q_r, nx, ny, nz, velocity, Real(0.0), Real(0.0),
         )
 
-    @parameter
     def apply_bc(
-        q_interior: InlineArray[Real, NC], bc_kind: Int,
-    ) -> InlineArray[Real, NC]:
+        q_interior: Array[Real, NC], bc_kind: Int,
+    ) {} -> Array[Real, NC]:
         return _apply_bc_scalar[NC](q_interior, bc_kind)
 
     _dg_1d_compute_rhs_core[
-        P, NC, flux_x, num_flux, apply_bc,
-        QLayout, RhsLayout, ElemFaceLayout,
+        P, NC, QLayout, RhsLayout, ElemFaceLayout,
         DG_CORE_1D_ELEMS_PER_BLOCK,
     ](
         q, rhs, elem_left_face, elem_right_face,
         face_left, face_right, face_bc,
         jacobian, num_elements,
+        flux_x, num_flux, apply_bc,
     )
 
 
@@ -82,15 +80,15 @@ struct DGSpatialSolver1D[P: Int, NC: Int]:
     def compute_rhs(
         self,
         var ctx: DeviceContext,
-        mut mesh: BlockMesh1D[Self.P],
+        mesh: BlockMesh1D[Self.P],
         mut q: DGState1D[Self.P, Self.NC],
         mut rhs: DGState1D[Self.P, Self.NC],
     ) raises:
         comptime num_nodes_per_elem = Self.P + 1
 
-        var q_layout = row_major(Idx(q.buf_len))
-        var face_layout = row_major(Idx(mesh.num_faces))
-        var elem_face_layout = row_major(Idx(mesh.num_elements))
+        var q_layout = row_major(Int(q.buf_len))
+        var face_layout = row_major(Int(mesh.num_faces))
+        var elem_face_layout = row_major(Int(mesh.num_elements))
 
         var q_view = TileTensor(q.buf, q_layout)
         var rhs_view = TileTensor(rhs.buf, q_layout)
@@ -107,7 +105,7 @@ struct DGSpatialSolver1D[P: Int, NC: Int]:
         comptime EB = DG_CORE_1D_ELEMS_PER_BLOCK
         ctx.enqueue_function[kernel](
             q_view, rhs_view, elf_view, erf_view, fl_view, fr_view, fbc_view,
-            self.app.velocity_x, mesh.jacobian, mesh.num_elements,
+            self.app.velocity_x, mesh.jacobian, Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(num_nodes_per_elem, EB),
         )

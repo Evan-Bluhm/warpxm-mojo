@@ -30,10 +30,10 @@
 # `_dp45_error_kernel` (which writes the y_5 - y_4 difference); the
 # adaptive controller is in `step_adaptive`.
 
-from std.gpu import barrier, global_idx, thread_idx
-from std.gpu.host import DeviceBuffer, DeviceContext
-from std.gpu.memory import AddressSpace
-from layout import TileTensor, TensorLayout, Idx, row_major, stack_allocation
+from max.gpu import barrier, global_idx, thread_idx
+from max.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.memory import AddressSpace
+from layout import TileTensor, TensorLayout, row_major, stack_allocation
 from std.math import ceildiv
 
 from warpxm.core.types import Real, WXM_DTYPE
@@ -53,8 +53,9 @@ def _combine1[L: TensorLayout](
     y0: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     k1: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     y_out: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
-    c1: Real, dt: Real, size: Int,
+    c1: Real, dt: Real, size_i64: Int64,
 ):
+    var size = Int(size_i64)
     comptime assert y0.flat_rank == 1
     var t = global_idx.x
     if t < size:
@@ -68,8 +69,9 @@ def _combine2[L: TensorLayout](
     k1: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     k2: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     y_out: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
-    c1: Real, c2: Real, dt: Real, size: Int,
+    c1: Real, c2: Real, dt: Real, size_i64: Int64,
 ):
+    var size = Int(size_i64)
     comptime assert y0.flat_rank == 1
     var t = global_idx.x
     if t < size:
@@ -85,8 +87,9 @@ def _combine3[L: TensorLayout](
     k2: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     k3: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     y_out: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
-    c1: Real, c2: Real, c3: Real, dt: Real, size: Int,
+    c1: Real, c2: Real, c3: Real, dt: Real, size_i64: Int64,
 ):
+    var size = Int(size_i64)
     comptime assert y0.flat_rank == 1
     var t = global_idx.x
     if t < size:
@@ -104,8 +107,9 @@ def _combine4[L: TensorLayout](
     k3: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     k4: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     y_out: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
-    c1: Real, c2: Real, c3: Real, c4: Real, dt: Real, size: Int,
+    c1: Real, c2: Real, c3: Real, c4: Real, dt: Real, size_i64: Int64,
 ):
+    var size = Int(size_i64)
     comptime assert y0.flat_rank == 1
     var t = global_idx.x
     if t < size:
@@ -125,10 +129,11 @@ def _dp45_error_kernel[L: TensorLayout](
     k6: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     k7: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     err: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
-    dt: Real, size: Int,
+    dt: Real, size_i64: Int64,
 ):
     """Write `err[i] = dt * (e1*k1 + e3*k3 + e4*k4 + e5*k5 + e6*k6 + e7*k7)`,
     the y_5 - y_4 difference. e_i = b5_i - b4_i (e2 = 0)."""
+    var size = Int(size_i64)
     comptime assert k1.flat_rank == 1
     var t = global_idx.x
     if t < size:
@@ -148,11 +153,12 @@ def _dp45_sum_sq_kernel[
     u_save: TileTensor[WXM_DTYPE, EL, MutAnyOrigin],
     u_new: TileTensor[WXM_DTYPE, EL, MutAnyOrigin],
     out_sum_sq: TileTensor[WXM_DTYPE, OL, MutAnyOrigin],
-    atol: Real, rtol: Real, size: Int,
+    atol: Real, rtol: Real, size_i64: Int64,
 ):
     """Single-block reduction: writes Σ_i (err_i / sc_i)^2 to out_sum_sq[0],
     where sc_i = atol + rtol · max(|u_save_i|, |u_new_i|). Launch with
     grid_dim=1, block_dim=_DP45_REDUCE_BLOCK."""
+    var size = Int(size_i64)
     comptime assert err.flat_rank == 1
     comptime assert out_sum_sq.flat_rank == 1
     var sums = stack_allocation[
@@ -201,8 +207,9 @@ def _combine5[L: TensorLayout](
     k5: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     y_out: TileTensor[WXM_DTYPE, L, MutAnyOrigin],
     c1: Real, c2: Real, c3: Real, c4: Real, c5: Real,
-    dt: Real, size: Int,
+    dt: Real, size_i64: Int64,
 ):
+    var size = Int(size_i64)
     comptime assert y0.flat_rank == 1
     var t = global_idx.x
     if t < size:
@@ -250,20 +257,21 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
         self.sum_sq_buf = ctx.enqueue_create_buffer[Real.dtype](1)
 
     def step[
-        compute_rhs_fn: def(
+        ComputeRhs: def(
             mut DGState1D[Self.P, Self.NC],
             mut DGState1D[Self.P, Self.NC],
-        ) raises capturing [_] -> None,
+        ) raises -> None,
     ](
         mut self,
         var ctx: DeviceContext,
         mut u: DGState1D[Self.P, Self.NC],
         dt: Real,
+        compute_rhs_fn: ComputeRhs,
     ) raises:
         var size = u.buf_len
         comptime BLOCK = 256
         var grid = ceildiv(size, BLOCK)
-        var lay = row_major(Idx(size))
+        var lay = row_major(Int(size))
         comptime k_c1 = _combine1[type_of(lay)]
         comptime k_c2 = _combine2[type_of(lay)]
         comptime k_c3 = _combine3[type_of(lay)]
@@ -280,7 +288,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             TileTensor(self.u_save.buf, lay),
             TileTensor(self.k1.buf, lay),
             TileTensor(self.y_stage.buf, lay),
-            Real(1.0) / Real(5.0), dt, size,
+            Real(1.0) / Real(5.0), dt, Int64(size),
             grid_dim=grid, block_dim=BLOCK,
         )
         compute_rhs_fn(self.y_stage, self.k2)
@@ -293,7 +301,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             TileTensor(self.y_stage.buf, lay),
             Real(3.0) / Real(40.0),
             Real(9.0) / Real(40.0),
-            dt, size, grid_dim=grid, block_dim=BLOCK,
+            dt, Int64(size), grid_dim=grid, block_dim=BLOCK,
         )
         compute_rhs_fn(self.y_stage, self.k3)
 
@@ -307,7 +315,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             Real(44.0) / Real(45.0),
             -Real(56.0) / Real(15.0),
             Real(32.0) / Real(9.0),
-            dt, size, grid_dim=grid, block_dim=BLOCK,
+            dt, Int64(size), grid_dim=grid, block_dim=BLOCK,
         )
         compute_rhs_fn(self.y_stage, self.k4)
 
@@ -323,7 +331,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             -Real(25360.0) / Real(2187.0),
             Real(64448.0) / Real(6561.0),
             -Real(212.0) / Real(729.0),
-            dt, size, grid_dim=grid, block_dim=BLOCK,
+            dt, Int64(size), grid_dim=grid, block_dim=BLOCK,
         )
         compute_rhs_fn(self.y_stage, self.k5)
 
@@ -341,7 +349,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             Real(46732.0) / Real(5247.0),
             Real(49.0) / Real(176.0),
             -Real(5103.0) / Real(18656.0),
-            dt, size, grid_dim=grid, block_dim=BLOCK,
+            dt, Int64(size), grid_dim=grid, block_dim=BLOCK,
         )
         compute_rhs_fn(self.y_stage, self.k6)
 
@@ -359,19 +367,20 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             Real(125.0) / Real(192.0),
             -Real(2187.0) / Real(6784.0),
             Real(11.0) / Real(84.0),
-            dt, size, grid_dim=grid, block_dim=BLOCK,
+            dt, Int64(size), grid_dim=grid, block_dim=BLOCK,
         )
 
     def step_adaptive[
-        compute_rhs_fn: def(
+        ComputeRhs: def(
             mut DGState1D[Self.P, Self.NC],
             mut DGState1D[Self.P, Self.NC],
-        ) raises capturing [_] -> None,
+        ) raises -> None,
     ](
         mut self,
         var ctx: DeviceContext,
         mut u: DGState1D[Self.P, Self.NC],
         dt_init: Real,
+        compute_rhs_fn: ComputeRhs,
         atol: Real = Real(1.0e-6),
         rtol: Real = Real(1.0e-3),
         max_attempts: Int = 10,
@@ -387,7 +396,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
         comptime BLOCK = 256
         var size = u.buf_len
         var grid = ceildiv(size, BLOCK)
-        var lay = row_major(Idx(size))
+        var lay = row_major(Int(size))
         var lay1 = row_major[1]()
         comptime k_err = _dp45_error_kernel[type_of(lay)]
         comptime k_sum = _dp45_sum_sq_kernel[type_of(lay), type_of(lay1)]
@@ -402,7 +411,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
             # the previous loop iteration. self.step writes a fresh u^{n+1}
             # using u_save (snapshot) as the starting point.
             ctx.enqueue_copy(dst_buf=u.buf, src_buf=self.u_save.buf)
-            self.step[compute_rhs_fn](ctx, u, dt)
+            self.step(ctx, u, dt, compute_rhs_fn)
 
             # k7 = f(y_5)
             compute_rhs_fn(u, self.k7)
@@ -414,7 +423,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
                 TileTensor(self.k6.buf, lay),
                 TileTensor(self.k7.buf, lay),
                 TileTensor(self.err_buf.buf, lay),
-                dt, size, grid_dim=grid, block_dim=BLOCK,
+                dt, Int64(size), grid_dim=grid, block_dim=BLOCK,
             )
 
             # GPU-side reduction: one block tree-reduces Σ (err/sc)^2 into
@@ -425,7 +434,7 @@ struct DormandPrince45_1D[P: Int, NC: Int]:
                 TileTensor(self.u_save.buf, lay),
                 TileTensor(u.buf, lay),
                 TileTensor(self.sum_sq_buf, lay1),
-                atol, rtol, size,
+                atol, rtol, Int64(size),
                 grid_dim=1, block_dim=_DP45_REDUCE_BLOCK,
             )
             var sum_sq: Real

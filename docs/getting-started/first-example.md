@@ -103,28 +103,26 @@ var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
 ### 4. Time-step loop
 
 ```mojo
-@parameter
 def compute_rhs(
     mut q_in: DGState1D[P, 1],
     mut q_out: DGState1D[P, 1],
-) raises:
+) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-@parameter
-def no_adjust(mut q_: DGState1D[P, 1]) raises:
+def no_adjust(mut q_: DGState1D[P, 1]) raises {imm}:
     pass
 
 var t: Real = 0.0
 while t < T_FINAL - Real(0.5) * DT:
     var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-    stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+    stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
     t += dt_use
 ```
 
 Boilerplate — closures capture `spatial`/`mesh`/`ctx`; the time loop
-calls `step[compute_rhs, no_adjust](ctx, q, dt)`. For adaptive RK45
+calls `step(ctx, q, dt, compute_rhs, no_adjust)`. For adaptive RK45
 swap in `DormandPrince45_1D[P, NC]` and call
-`stepper.step_adaptive[compute_rhs](...)` (see
+`stepper.step_adaptive(..., compute_rhs)` (see
 [Dormand-Prince](../numerical-methods/dormand-prince.md)).
 
 ## Try changing something

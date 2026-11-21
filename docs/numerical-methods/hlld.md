@@ -48,15 +48,13 @@ $s = 0$ falls in the wave fan.
 var spatial = DGImhdSolver2D[P, USE_HLLD=True](app)
 var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)
 
-@parameter
-def compute_rhs(mut q_in, mut q_out) raises:
+def compute_rhs(mut q_in, mut q_out) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-@parameter
-def adjust(mut q_) raises:
+def adjust(mut q_) raises {mut limiter, imm}:
     limiter.apply(ctx, mesh, q_)
 
-stepper.step[compute_rhs, adjust](ctx, q, dt)
+stepper.step(ctx, q, dt, compute_rhs, adjust)
 ```
 
 `USE_HLLD: Bool` is a `comptime` parameter on the DG solver only. At

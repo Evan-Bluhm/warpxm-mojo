@@ -25,7 +25,7 @@
 # `BC_COPYOUT` (or another caller-supplied BC) on the boundary faces when
 # non-periodic.
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_VLASOV_OUTFLOW

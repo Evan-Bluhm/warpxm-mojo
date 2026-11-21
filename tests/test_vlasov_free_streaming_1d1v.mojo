@@ -15,7 +15,7 @@
 
 from std.math import sin, exp
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.vlasovmaxwell import VlasovMaxwell, VLASOV_NC, VLASOV_AUX_NC
@@ -91,15 +91,13 @@ def main() raises:
     # Zero Maxwell aux ⇒ a_v = 0 ⇒ pure free streaming.
     var aux = DGState1D[P_X, VLASOV_AUX_NC](ctx, NX)
 
-    @parameter
     def compute_rhs(
         mut q_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
         mut q_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-    ) raises:
+    ) raises {mut aux, imm}:
         spatial.compute_rhs(ctx, mesh, q_in, aux, q_out)
 
-    @parameter
-    def no_adjust(mut q_: PhaseState1D1V[P_X, P_V, VLASOV_NC]) raises:
+    def no_adjust(mut q_: PhaseState1D1V[P_X, P_V, VLASOV_NC]) raises {imm}:
         pass
 
     # --- time loop ---
@@ -107,8 +105,9 @@ def main() raises:
     var nsteps: Int = 0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, no_adjust](
+        stepper.step(
             ctx, q, dt_use,
+            compute_rhs, no_adjust,
         )
         t += dt_use
         nsteps += 1

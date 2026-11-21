@@ -12,10 +12,10 @@
 # For 1D1V only `E_x` receives a contribution (the v-axis is parallel
 # to x; transverse currents are absent).
 
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.maxwell import MAXWELL_NC, IDX_EX
 from warpxm.core.types import Real, WXM_DTYPE
@@ -30,8 +30,9 @@ def _vlasov_current_source_kernel_1d[
     rhs_maxwell: TileTensor[WXM_DTYPE, RhsMLayout, MutAnyOrigin],
     alpha: Real,
     inv_eps0: Real,
-    num_total_nodes: Int,
+    num_total_nodes_i64: Int64,
 ):
+    var num_total_nodes = Int(num_total_nodes_i64)
     comptime assert j.flat_rank == 1
     comptime assert rhs_maxwell.flat_rank == 1
 
@@ -60,8 +61,8 @@ def apply_vlasov_current_source_1d[P: Int](
     var num_total_nodes = j.total_nodes
     comptime BLOCK = 256
     var grid = ceildiv(num_total_nodes, BLOCK)
-    var jl = row_major(Idx(j.buf_len))
-    var ml = row_major(Idx(rhs_maxwell.buf_len))
+    var jl = row_major(Int(j.buf_len))
+    var ml = row_major(Int(rhs_maxwell.buf_len))
 
     comptime kernel = _vlasov_current_source_kernel_1d[
         P, type_of(jl), type_of(ml),
@@ -69,6 +70,6 @@ def apply_vlasov_current_source_1d[P: Int](
     ctx.enqueue_function[kernel](
         TileTensor(j.buf, jl),
         TileTensor(rhs_maxwell.buf, ml),
-        alpha, Real(1.0) / eps0, num_total_nodes,
+        alpha, Real(1.0) / eps0, Int64(num_total_nodes),
         grid_dim=grid, block_dim=BLOCK,
     )

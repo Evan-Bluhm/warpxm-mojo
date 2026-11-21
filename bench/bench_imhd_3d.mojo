@@ -3,7 +3,7 @@
 
 from std.math import exp
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.time import perf_counter_ns
 
 from warpxm.adjusters.moe_rossmanith import MoeRossmanith3D
@@ -91,24 +91,22 @@ def main() raises:
     var stepper = SSPRK3_3D[P, MHD_NC](ctx, mesh.num_elements)
     var limiter = MoeRossmanith3D[P, MHD_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState3D[P, MHD_NC],
         mut q_out: DGState3D[P, MHD_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def adjust(mut q_: DGState3D[P, MHD_NC]) raises:
+    def adjust(mut q_: DGState3D[P, MHD_NC]) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
     for _ in range(WARMUP):
-        stepper.step[compute_rhs, adjust](ctx, q, DT)
+        stepper.step(ctx, q, DT, compute_rhs, adjust)
     ctx.synchronize()
 
     var t0 = perf_counter_ns()
     for _ in range(N_STEPS):
-        stepper.step[compute_rhs, adjust](ctx, q, DT)
+        stepper.step(ctx, q, DT, compute_rhs, adjust)
     ctx.synchronize()
     var t1 = perf_counter_ns()
 

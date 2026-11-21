@@ -25,7 +25,7 @@
 
 from std.math import cos, log2, sin
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.imhd import (
@@ -116,21 +116,19 @@ def _one_run[P: Int](
     )
     var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState2D[P, MHD_NC],
         mut q_out: DGState2D[P, MHD_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState2D[P, MHD_NC]) raises:
+    def no_adjust(mut q_: DGState2D[P, MHD_NC]) raises {imm}:
         pass
 
     var t: Real = 0.0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt_use)
+        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
         t += dt_use
     ctx.synchronize()
 

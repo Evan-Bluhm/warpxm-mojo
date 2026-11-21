@@ -14,10 +14,10 @@
 # charge-to-mass ratio; the existing apply function is per-species so two
 # back-to-back calls accumulate the contributions correctly.
 
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
-from layout import TileTensor, TensorLayout, Idx, row_major
+from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import EULER_NC, IDX_MX, IDX_MY, IDX_MZ
 from warpxm.apps.maxwell import MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ
@@ -33,8 +33,9 @@ def _current_source_kernel_2d[
     rhs_maxwell: TileTensor[WXM_DTYPE, RhsMLayout, MutAnyOrigin],
     alpha: Real,
     inv_eps0: Real,
-    num_total_nodes: Int,
+    num_total_nodes_i64: Int64,
 ):
+    var num_total_nodes = Int(num_total_nodes_i64)
     comptime assert q_fluid.flat_rank == 1
     comptime assert rhs_maxwell.flat_rank == 1
 
@@ -73,13 +74,13 @@ def apply_current_source_2d[P: Int](
     var num_total_nodes = q_fluid.total_nodes
     comptime BLOCK = 256
     var grid = ceildiv(num_total_nodes, BLOCK)
-    var fl = row_major(Idx(q_fluid.buf_len))
-    var ml = row_major(Idx(rhs_maxwell.buf_len))
+    var fl = row_major(Int(q_fluid.buf_len))
+    var ml = row_major(Int(rhs_maxwell.buf_len))
 
     comptime kernel = _current_source_kernel_2d[P, type_of(fl), type_of(ml)]
     ctx.enqueue_function[kernel](
         TileTensor(q_fluid.buf, fl),
         TileTensor(rhs_maxwell.buf, ml),
-        alpha, Real(1.0) / eps0, num_total_nodes,
+        alpha, Real(1.0) / eps0, Int64(num_total_nodes),
         grid_dim=grid, block_dim=BLOCK,
     )

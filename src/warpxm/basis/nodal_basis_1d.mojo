@@ -29,16 +29,16 @@
 # - Face 0 = left (ξ = -1, node index 0); face 1 = right (ξ = +1, node index P).
 # - Differentiation matrix is row-major: D[i, j] = D_flat[i * (P+1) + j].
 
-from std.collections import InlineArray
+from std.collections import Array
 from warpxm.core.types import Real
 
 
 # ---------------------------------------------------------------------------
 # P = 1 (2 nodes, linear basis).
 # ---------------------------------------------------------------------------
-comptime _NODES_P1: InlineArray[Real, 2] = [-1.0, 1.0]
-comptime _WEIGHTS_P1: InlineArray[Real, 2] = [1.0, 1.0]
-comptime _D_P1_FLAT: InlineArray[Real, 4] = [
+comptime _NODES_P1: Array[Real, 2] = [-1.0, 1.0]
+comptime _WEIGHTS_P1: Array[Real, 2] = [1.0, 1.0]
+comptime _D_P1_FLAT: Array[Real, 4] = [
     -0.5,  0.5,
     -0.5,  0.5,
 ]
@@ -46,9 +46,9 @@ comptime _D_P1_FLAT: InlineArray[Real, 4] = [
 # ---------------------------------------------------------------------------
 # P = 2 (3 nodes, quadratic basis).
 # ---------------------------------------------------------------------------
-comptime _NODES_P2: InlineArray[Real, 3] = [-1.0, 0.0, 1.0]
-comptime _WEIGHTS_P2: InlineArray[Real, 3] = [1.0 / 3.0, 4.0 / 3.0, 1.0 / 3.0]
-comptime _D_P2_FLAT: InlineArray[Real, 9] = [
+comptime _NODES_P2: Array[Real, 3] = [-1.0, 0.0, 1.0]
+comptime _WEIGHTS_P2: Array[Real, 3] = [1.0 / 3.0, 4.0 / 3.0, 1.0 / 3.0]
+comptime _D_P2_FLAT: Array[Real, 9] = [
     -1.5,  2.0, -0.5,
     -0.5,  0.0,  0.5,
      0.5, -2.0,  1.5,
@@ -61,13 +61,13 @@ comptime _D_P2_FLAT: InlineArray[Real, 9] = [
 # Differentiation matrix has nontrivial entries 5·(√5 ± 1)/4, (√5 ± 1)/4,
 # and ±√5/2. Cross-checked against numpy.
 # ---------------------------------------------------------------------------
-comptime _NODES_P3: InlineArray[Real, 4] = [
+comptime _NODES_P3: Array[Real, 4] = [
     -1.0, -0.4472135954999579, 0.4472135954999579, 1.0
 ]
-comptime _WEIGHTS_P3: InlineArray[Real, 4] = [
+comptime _WEIGHTS_P3: Array[Real, 4] = [
     1.0 / 6.0, 5.0 / 6.0, 5.0 / 6.0, 1.0 / 6.0
 ]
-comptime _D_P3_FLAT: InlineArray[Real, 16] = [
+comptime _D_P3_FLAT: Array[Real, 16] = [
     -3.0,                4.045084971874736, -1.545084971874737,  0.5,
     -0.8090169943749473, 0.0,                1.118033988749895, -0.30901699437494745,
      0.30901699437494745, -1.118033988749895, 0.0,                0.8090169943749473,
@@ -80,13 +80,13 @@ comptime _D_P3_FLAT: InlineArray[Real, 16] = [
 # Interior GLL nodes are 0, ±√(3/7). Weights are (1/10, 49/90, 32/45, 49/90,
 # 1/10).
 # ---------------------------------------------------------------------------
-comptime _NODES_P4: InlineArray[Real, 5] = [
+comptime _NODES_P4: Array[Real, 5] = [
     -1.0, -0.6546536707079771, 0.0, 0.6546536707079771, 1.0
 ]
-comptime _WEIGHTS_P4: InlineArray[Real, 5] = [
+comptime _WEIGHTS_P4: Array[Real, 5] = [
     0.1, 49.0 / 90.0, 32.0 / 45.0, 49.0 / 90.0, 0.1
 ]
-comptime _D_P4_FLAT: InlineArray[Real, 25] = [
+comptime _D_P4_FLAT: Array[Real, 25] = [
     -5.0,                 6.756502488724241,  -2.666666666666668,   1.4101641779424272, -0.5,
     -1.2409902530309822,  0.0,                 1.7457431218879393, -0.7637626158259734,  0.2590097469690171,
      0.375,              -1.3365845776954532,  0.0,                 1.3365845776954532, -0.375,
@@ -98,6 +98,26 @@ comptime _D_P4_FLAT: InlineArray[Real, 25] = [
 # ---------------------------------------------------------------------------
 # Public 1D basis struct.
 # ---------------------------------------------------------------------------
+
+@always_inline
+def _to_runtime[
+    M: Int, table: Array[Real, M], N: Int,
+]() -> Array[Real, N]:
+    """Build a runtime `Array[Real, N]` from a length-`M` comptime table,
+    one scalar at a time (`M` must equal `N`; they are spelled separately
+    because `N` is usually a symbolic `P + 1`).
+
+    Each entry is materialised as an immediate scalar, because a comptime
+    `Array` is not `ImplicitlyCopyable` and cannot be materialised whole
+    without an explicit `materialize[...]()`.
+    """
+    comptime assert M == N, "basis table length does not match P"
+    var out = Array[Real, N](fill=Real(0.0))
+    comptime for i in range(N):
+        comptime entry: Real = table[i]
+        out[i] = entry
+    return out^
+
 
 @fieldwise_init
 struct NodalBasis1D[P: Int](Copyable, Movable):
@@ -111,51 +131,66 @@ struct NodalBasis1D[P: Int](Copyable, Movable):
     comptime num_nodes: Int = Self.P + 1
     """Number of GLL nodes per 1D element (P + 1)."""
 
+    # NOTE: the three table accessors below are `@inline(.never)` on purpose.
+    # Mojo 1.2.0 miscompiles (at -O1 and above) host code where an `Array`
+    # returned by an *inlined* function is read in a loop after a
+    # `ctx.enqueue_copy(...)` earlier in the same function: the table reads
+    # back as uninitialised memory. PhaseMesh1D1V / 1D2V hit exactly that
+    # (seven Vlasov tests failed with wrong velocity-node coordinates).
+    # Drop the decorator once the compiler bug is fixed and
+    # `tests/test_vlasov_1d1v_scaffolding.mojo` still passes without it.
+
     @staticmethod
-    def nodes() -> InlineArray[Real, Self.num_nodes]:
+    @inline(.never)
+    def nodes() -> Array[Real, Self.num_nodes]:
         """Reference-element GLL node locations in [-1, 1]."""
         comptime assert Self.P >= 1 and Self.P <= 4, (
             "NodalBasis1D: only P in 1..4 is implemented so far"
         )
-        comptime if Self.P == 1:
-            return rebind[InlineArray[Real, Self.num_nodes]](_NODES_P1)
-        elif Self.P == 2:
-            return rebind[InlineArray[Real, Self.num_nodes]](_NODES_P2)
-        elif Self.P == 3:
-            return rebind[InlineArray[Real, Self.num_nodes]](_NODES_P3)
-        else:
-            return rebind[InlineArray[Real, Self.num_nodes]](_NODES_P4)
+        comptime match Self.P:
+            case 1:
+                return _to_runtime[2, _NODES_P1, Self.num_nodes]()
+            case 2:
+                return _to_runtime[3, _NODES_P2, Self.num_nodes]()
+            case 3:
+                return _to_runtime[4, _NODES_P3, Self.num_nodes]()
+            case _:
+                return _to_runtime[5, _NODES_P4, Self.num_nodes]()
 
     @staticmethod
-    def weights() -> InlineArray[Real, Self.num_nodes]:
+    @inline(.never)
+    def weights() -> Array[Real, Self.num_nodes]:
         """GLL quadrature weights (sum to 2 on [-1, 1])."""
         comptime assert Self.P >= 1 and Self.P <= 4, (
             "NodalBasis1D: only P in 1..4 is implemented so far"
         )
-        comptime if Self.P == 1:
-            return rebind[InlineArray[Real, Self.num_nodes]](_WEIGHTS_P1)
-        elif Self.P == 2:
-            return rebind[InlineArray[Real, Self.num_nodes]](_WEIGHTS_P2)
-        elif Self.P == 3:
-            return rebind[InlineArray[Real, Self.num_nodes]](_WEIGHTS_P3)
-        else:
-            return rebind[InlineArray[Real, Self.num_nodes]](_WEIGHTS_P4)
+        comptime match Self.P:
+            case 1:
+                return _to_runtime[2, _WEIGHTS_P1, Self.num_nodes]()
+            case 2:
+                return _to_runtime[3, _WEIGHTS_P2, Self.num_nodes]()
+            case 3:
+                return _to_runtime[4, _WEIGHTS_P3, Self.num_nodes]()
+            case _:
+                return _to_runtime[5, _WEIGHTS_P4, Self.num_nodes]()
 
     @staticmethod
-    def diff_matrix_flat() -> InlineArray[Real, Self.num_nodes * Self.num_nodes]:
+    @inline(.never)
+    def diff_matrix_flat() -> Array[Real, Self.num_nodes * Self.num_nodes]:
         """Row-major flattened differentiation matrix D[i,j] = l_j'(ξ_i)."""
         comptime assert Self.P >= 1 and Self.P <= 4, (
             "NodalBasis1D: only P in 1..4 is implemented so far"
         )
         comptime DD = Self.num_nodes * Self.num_nodes
-        comptime if Self.P == 1:
-            return rebind[InlineArray[Real, DD]](_D_P1_FLAT)
-        elif Self.P == 2:
-            return rebind[InlineArray[Real, DD]](_D_P2_FLAT)
-        elif Self.P == 3:
-            return rebind[InlineArray[Real, DD]](_D_P3_FLAT)
-        else:
-            return rebind[InlineArray[Real, DD]](_D_P4_FLAT)
+        comptime match Self.P:
+            case 1:
+                return _to_runtime[4, _D_P1_FLAT, DD]()
+            case 2:
+                return _to_runtime[9, _D_P2_FLAT, DD]()
+            case 3:
+                return _to_runtime[16, _D_P3_FLAT, DD]()
+            case _:
+                return _to_runtime[25, _D_P4_FLAT, DD]()
 
     @staticmethod
     def left_face_node() -> Int:

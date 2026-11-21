@@ -8,7 +8,7 @@
 # (MixedGLM). The 9-component path writes an extra ψ field; otherwise
 # the per-frame data are identical.
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from warpxm.apps.imhd import (
     MHD_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,

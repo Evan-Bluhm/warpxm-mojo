@@ -38,7 +38,6 @@ from warpxm.spatial.maxwell_current_source_2d import apply_current_source_2d
 
 var stepper = SSPRK3_Plasma_2D[P](ctx, mesh.num_elements)
 
-@parameter
 def compute_joint_rhs(
     mut q1_in: DGState2D[P, EULER_NC],
     mut q2_in: DGState2D[P, EULER_NC],
@@ -46,7 +45,7 @@ def compute_joint_rhs(
     mut q1_out: DGState2D[P, EULER_NC],
     mut q2_out: DGState2D[P, EULER_NC],
     mut qm_out: DGState2D[P, MAXWELL_NC],
-) raises:
+) raises {imm}:
     fluid_spatial.compute_rhs(ctx, mesh, q1_in, q1_out)
     fluid_spatial.compute_rhs(ctx, mesh, q2_in, q2_out)
     maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
@@ -55,7 +54,7 @@ def compute_joint_rhs(
     apply_current_source_2d[P](ctx, q1_in, qm_out, ALPHA_1, EPS0)
     apply_current_source_2d[P](ctx, q2_in, qm_out, ALPHA_2, EPS0)
 
-stepper.step[compute_joint_rhs](ctx, q_s1, q_s2, q_maxwell, dt)
+stepper.step(ctx, q_s1, q_s2, q_maxwell, dt, compute_joint_rhs)
 ```
 
 The plasma stepper takes a single comptime `compute_joint_rhs_fn`

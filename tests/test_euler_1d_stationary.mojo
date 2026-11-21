@@ -5,7 +5,7 @@
 # Numerical-flux jumps are zero across every face. RHS must be exactly zero.
 
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.euler import Euler
@@ -69,20 +69,18 @@ def main() raises:
     # Also evolve a few steps and confirm drift is exactly zero.
     var stepper = SSPRK3_1D[P, EULER_NC](ctx, mesh.num_elements)
 
-    @parameter
     def compute_rhs(
         mut q_in: DGState1D[P, EULER_NC],
         mut q_out: DGState1D[P, EULER_NC],
-    ) raises:
+    ) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    @parameter
-    def no_adjust(mut q_: DGState1D[P, EULER_NC]) raises:
+    def no_adjust(mut q_: DGState1D[P, EULER_NC]) raises {imm}:
         pass
 
     var dt: Real = 1.0e-3
     for _ in range(50):
-        stepper.step[compute_rhs, no_adjust](ctx, q, dt)
+        stepper.step(ctx, q, dt, compute_rhs, no_adjust)
     ctx.synchronize()
 
     var max_dev: Real = 0.0

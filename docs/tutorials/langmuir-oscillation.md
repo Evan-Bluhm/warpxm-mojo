@@ -70,19 +70,18 @@ The `SSPRK3_TwoFluid_2D` stepper takes a single comptime
 each:
 
 ```mojo
-@parameter
 def compute_joint_rhs(
     mut qf_in: DGState2D[P, EULER_NC],
     mut qm_in: DGState2D[P, MAXWELL_NC],
     mut qf_out: DGState2D[P, EULER_NC],
     mut qm_out: DGState2D[P, MAXWELL_NC],
-) raises:
+) raises {imm}:
     fluid_spatial.compute_rhs(ctx, mesh, qf_in, qf_out)
     maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
     apply_lorentz_source_2d[P](ctx, qf_in, qm_in, qf_out, ALPHA)
     apply_current_source_2d[P](ctx, qf_in, qm_out, ALPHA, EPS0)
 
-stepper.step[compute_joint_rhs](ctx, q_fluid, q_maxwell, dt_use)
+stepper.step(ctx, q_fluid, q_maxwell, dt_use, compute_joint_rhs)
 ```
 
 Inside the closure the driver picks **what** sources to apply and

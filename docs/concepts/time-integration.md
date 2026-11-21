@@ -3,7 +3,7 @@
 warpxm-mojo ships two explicit Runge-Kutta integrators. The library
 exposes one **generic stepper per dimension** — the spatial-RHS
 evaluation, source terms, slope limiter, positivity preserver, and any
-other adjusters are composed at the call site via `@parameter def`
+other adjusters are composed at the call site via nested `def`
 closures. That's upstream WARPXM's `spatial_solver + variable_adjuster`
 pattern, expressed in Mojo's compile-time function-parameter system.
 
@@ -19,16 +19,14 @@ from warpxm.temporal.ssprk3_2d import SSPRK3_2D
 
 var stepper = SSPRK3_2D[P, NC](ctx, mesh.num_elements)
 
-@parameter
-def compute_rhs(mut q_in, mut q_out) raises:
+def compute_rhs(mut q_in, mut q_out) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-@parameter
-def adjust(mut q_) raises:
+def adjust(mut q_) raises {mut limiter, mut positivity, imm}:
     limiter.apply(ctx, mesh, q_)
     positivity.apply(ctx, mesh, q_)
 
-stepper.step[compute_rhs, adjust](ctx, q, dt)
+stepper.step(ctx, q, dt, compute_rhs, adjust)
 ```
 
 Three steppers cover every dimension:
@@ -56,16 +54,15 @@ in smooth regions.
 from warpxm.temporal.dormand_prince_2d import DormandPrince45_2D
 var stepper = DormandPrince45_2D[P, NC](ctx, mesh.num_elements)
 
-@parameter
-def compute_rhs(mut q_in, mut q_out) raises:
+def compute_rhs(mut q_in, mut q_out) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
 # Fixed-step:
-stepper.step[compute_rhs](ctx, q, dt)
+stepper.step(ctx, q, dt, compute_rhs)
 
 # Adaptive:
-var ret = stepper.step_adaptive[compute_rhs](
-    ctx, q, dt_try, atol=1e-8, rtol=1e-6,
+var ret = stepper.step_adaptive(
+    ctx, q, dt_try, compute_rhs, atol=1e-8, rtol=1e-6,
 )
 var dt_used = ret[0]
 var dt_next = ret[1]
@@ -87,8 +84,7 @@ specialised stepper variant.
 Fold them into `compute_rhs` after the main spatial RHS call:
 
 ```mojo
-@parameter
-def compute_rhs(mut q_in, mut q_out) raises:
+def compute_rhs(mut q_in, mut q_out) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
     apply_gravity_source_2d[P](ctx, q_in, q_out, gx, gy)
     apply_glm_damping_2d[P](ctx, q_in, q_out, c_h, c_p_sq)
@@ -103,8 +99,7 @@ in upstream.
 Apply between RK stages via `adjust`:
 
 ```mojo
-@parameter
-def adjust(mut q_) raises:
+def adjust(mut q_) raises {mut limiter, mut positivity, imm}:
     limiter.apply(ctx, mesh, q_)
     positivity.apply(ctx, mesh, q_)
 ```
@@ -121,8 +116,7 @@ and [Zhang-Shu positivity preserver](../numerical-methods/positivity.md).
 Smooth problems (advection, Maxwell, smooth Euler) supply a no-op:
 
 ```mojo
-@parameter
-def no_adjust(mut q_) raises:
+def no_adjust(mut q_) raises {imm}:
     pass
 ```
 
