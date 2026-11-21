@@ -1,6 +1,6 @@
 ---
 name: mojo-syntax
-description: Help to write Mojo code using current syntax and conventions. Always use this skill when writing any Mojo code, including when other Mojo-specific skills (e.g., mojo-gpu-fundamentals) also apply. Use when writing Mojo code, translating projects to Mojo, or otherwise generating Mojo. Use this skill to overcome misconceptions with how Mojo is written.
+description: Help to write Mojo code using current syntax and conventions. Always use this skill when writing any Mojo code, including when other Mojo-specific skills (e.g., mojo-gpu-fundamentals) also apply. Use when writing or reviewing Mojo code, translating projects to Mojo, or otherwise generating Mojo. Use this skill to overcome misconceptions with how Mojo is written.
 ---
 
 <!-- EDITORIAL GUIDELINES FOR THIS SKILL FILE
@@ -26,58 +26,94 @@ compile.**
 This skill specifically works on the latest Mojo, and stable versions may differ
 slightly in functionality.
 
+Compiling isn't the bar for review. Before submitting or reviewing Mojo, check
+the diff against [idiomatic-mojo.md](references/idiomatic-mojo.md): the style
+rules code reviewers flag most often (open-coded helpers, redundant casts,
+over-specified parameters, `IndexList` instead of tuples, missing `comptime`,
+unneeded `rebind`, mutable origins on inputs, single-vendor gates on generic
+kernels).
+
 ## Removed syntax — DO NOT generate these
 
-| Removed                                          | Replacement                                                          |
-|--------------------------------------------------|----------------------------------------------------------------------|
-| `alias X = ...`                                  | `comptime X = ...`                                                   |
-| `@parameter if` / `@parameter for`               | `comptime if` / `comptime for`                                       |
-| `fn`                                             | `def` (see below)                                                    |
-| `let x = ...`                                    | `var x = ...` (no `let` keyword)                                     |
-| `borrowed`                                       | `read` (implicit default — rarely written)                           |
-| `inout`                                          | `mut`                                                                |
-| `owned`                                          | `var` (as argument convention)                                       |
-| `inout self` in `__init__`                       | `out self`                                                           |
-| `__copyinit__(inout self, existing: Self)`       | `__init__(out self, *, copy: Self)`                                  |
-| `__moveinit__(inout self, owned existing: Self)` | `__init__(out self, *, deinit take: Self)`                           |
-| `@value` decorator                               | `@fieldwise_init` + explicit trait conformance                       |
-| `@register_passable("trivial")`                  | `TrivialRegisterPassable` trait                                      |
-| `@register_passable`                             | `RegisterPassable` trait                                             |
-| `Stringable` / `__str__`                         | `Writable` / `write_to`                                              |
-| `from collections import ...`                    | `from std.collections import ...`                                    |
-| `from memory import ...`                         | `from std.memory import ...`                                         |
-| `from sys import ...`                            | `from std.sys import ...`                                            |
-| `from os import ...`                             | `from std.os import ...`                                             |
-| `from pathlib import ...`                        | `from std.pathlib import ...`                                        |
-| `s[i]`                                           | `s[byte=i]` — returns `StringSlice`; wrap in `String()` if needed    |
-| `s[0:10]`, `s[:5]`                               | No slice syntax on String — use `s.codepoint_slices()` or Python FFI |
-| `constrained(cond, msg)`                         | `comptime assert cond, msg`                                          |
-| `DynamicVector[T]`                               | `List[T]`                                                            |
-| `InlinedFixedVector[T, N]`                       | `InlineArray[T, N]`                                                  |
-| `Tensor[T]`                                      | Not in stdlib (use SIMD, List, UnsafePointer)                        |
-| `@parameter fn` (nested)                         | Still used for nested compile-time closures                          |
+| Removed                                          | Replacement                                                                      |
+|--------------------------------------------------|----------------------------------------------------------------------------------|
+| `alias X = ...`                                  | `comptime X = ...`                                                               |
+| `@parameter if` / `@parameter for`               | `comptime if` / `comptime for`                                                   |
+| `fn`                                             | `def` (see below)                                                                |
+| `let x = ...`                                    | `var x = ...` (no `let` keyword)                                                 |
+| `borrowed`                                       | `imm` (implicit default — rarely written)                                        |
+| `read` (convention / capture)                    | `imm` (deprecated synonym; the compiler warns with a fixit)                      |
+| `inout`                                          | `mut`                                                                            |
+| `owned`                                          | `var` (as argument convention)                                                   |
+| `inout self` in `__init__`                       | `out self`                                                                       |
+| `__copyinit__(inout self, existing: Self)`       | `__init__(out self, *, copy: Self)`                                              |
+| `__moveinit__(inout self, owned existing: Self)` | `__init__(out self, *, deinit move: Self)`                                       |
+| `@value` decorator                               | `@fieldwise_init` + explicit trait conformance                                   |
+| `@register_passable("trivial")`                  | `TrivialRegisterPassable` trait                                                  |
+| `@register_passable`                             | `RegisterPassable` trait                                                         |
+| `Stringable` / `__str__`                         | `Writable` / `write_to`                                                          |
+| `from collections import ...`                    | `from std.collections import ...`                                                |
+| `from memory import ...`                         | `from std.memory import ...`                                                     |
+| `from sys import ...`                            | `from std.sys import ...`                                                        |
+| `from os import ...`                             | `from std.os import ...`                                                         |
+| `from pathlib import ...`                        | `from std.pathlib import ...`                                                    |
+| `s[i]`                                           | `s[byte=i]` — returns `StringSlice`; wrap in `String()` if needed                |
+| `s[0:10]`, `s[:5]`                               | No slice syntax on String — use `s.codepoint_slices()` or Python FFI             |
+| `constrained(cond, msg)`                         | `comptime assert cond, msg`                                                      |
+| `DynamicVector[T]`                               | `List[T]`                                                                        |
+| `InlinedFixedVector[T, N]`                       | `Array[T, N]`                                                                    |
+| `Tensor[T]`                                      | Not in stdlib (use SIMD, List, Pointer)                                          |
+| `MutUnsafePointer` / `ImmUnsafePointer`          | `MutPointer` / `ImmPointer`                                                      |
+| `OptionalUnsafePointer`                          | `OptionalPointer`                                                                |
+| `escaping` closures                              | Unified closures (`def(...) -> T`, captures in `{}`); `capturing[_]` still valid |
+| `__del__(deinit self)`                           | `__deinit__(deinit self)`                                                        |
+
+## `var` is required for every new declaration
+
+Declaring a variable with bare assignment (`x = 5` with no prior `var`) is
+**not valid** — it is a compile error. This applies only to introducing a new
+variable; reassigning an already-declared variable (`x = 6`) needs no `var`.
+
+This means a variable assigned only inside conditional branches must be
+predeclared with a type before the branch:
+
+```mojo
+# WRONG — no prior `var`, so this doesn't declare `x`
+if cond:
+    x = 1
+else:
+    x = 2
+
+# CORRECT — declare with a type first, then assign in each branch
+var x: Int
+if cond:
+    x = 1
+else:
+    x = 2
+```
 
 ## `def` is the only function keyword
 
-`fn` is deprecated and being removed. `def` does **not** imply `raises`.
-**Always** add `raises` explicitly when needed — omitting it is a warning today,
-error soon:
+`fn` was **removed** and is now a hard parse error — no valid use of `fn`
+remains. Your training predates this, so you will reach for `fn` by reflex; that
+reflex is always wrong. Write **every** function, method, and nested function as
+`def`, without exception.
+
+## Mojo functions that raise must be marked as such
+
+Mojo functions do **not** imply `raises`. Add `raises` to any function that can
+raise, directly or by calling a raising function. Omitting it is a **compile
+error**, not a warning.
 
 ```mojo
-def compute(x: Int) -> Int:              # non-raising (compiler enforced)
-    return x * 2
-
-def load(path: String) raises -> String: # explicitly raising
+def load(path: String) raises -> String:  # raises goes before the `->`
     return open(path).read()
 
-def main() raises:                       # main usually raises → def raises
+def main() raises:                         # main usually raises
     ...
 ```
 
-Note: existing stdlib code still uses `fn` during migration. New code should
-always use `def`.
-
-## `comptime` replaces `alias` and `@parameter`
+## `comptime` replaces `alias` and `@parameter if`/`for`
 
 ```mojo
 comptime N = 1024                            # compile-time constant
@@ -103,7 +139,8 @@ struct MyStruct:
 
 ## Argument conventions
 
-Default is `read` (immutable borrow, never written explicitly). The others:
+Default is `imm` (immutable borrow, rarely written explicitly; `read` is a
+deprecated synonym — the compiler warns and suggests `imm`). The others:
 
 ```mojo
 def __init__(out self, var value: String):   # out = uninitialized output; var = owned
@@ -112,6 +149,13 @@ def consume(deinit self):                     # deinit = consuming/destroying
 def view(ref self) -> ref[self] Self.T:       # ref = reference with origin
 def view2[origin: Origin, //](ref[origin] self) -> ...:           # ref[origin] = explicit origin
 ```
+
+`var` and `ref` are hard keywords and **cannot be used as identifiers** at all
+(`var ref = ...` → `"unexpected token in expression"`). The convention words
+`imm`, `read`, `mut`, `out`, `deinit` are soft keywords: fine as local variable
+or `[...]` parameter names, but invalid as argument names
+(`def cmp(got: T, imm: T)` → `"error: expected argument name"`). Rename
+(`expected`, `reference`, etc.).
 
 ## Lifecycle methods
 
@@ -124,13 +168,13 @@ def __init__(out self, x: Int):
 def __init__(out self, *, copy: Self):
     self.data = copy.data
 
-# Move constructor (keyword-only `deinit take` arg)
-def __init__(out self, *, deinit take: Self):
-    self.data = take.data^
+# Move constructor (keyword-only `deinit move` arg)
+def __init__(out self, *, deinit move: Self):
+    self.data = move.data^
 
 # Destructor
-def __del__(deinit self):
-    self.ptr.free()
+def __deinit__(deinit self):
+    dealloc(self.allocation^)
 ```
 
 To copy: `var b = a.copy()` (provided by `Copyable` trait).
@@ -188,8 +232,10 @@ everywhere inside the struct: field types, method signatures, method bodies, and
 
 ### Explicit copy / transfer
 
-Types not conforming to `ImplicitlyCopyable` (e.g., `Dict`, `List`) require
-explicit `.copy()` or ownership transfer `^`:
+Types not conforming to `ImplicitlyCopyable` (e.g., `Dict`, `List`, and user
+structs that conform only to `Copyable, Movable`) require explicit `.copy()` or
+ownership transfer `^` — `return my_struct` errors until you transfer with `^`
+or add `ImplicitlyCopyable` conformance:
 
 ```mojo
 # WRONG — implicit copy of non-ImplicitlyCopyable type
@@ -211,13 +257,21 @@ import std.random
 
 Prelude auto-imports (no import needed): `Int`, `String`, `Bool`, `List`,
 `Dict`, `Optional`, `SIMD`, `Float32`, `Float64`, `UInt8`, `Pointer`,
-`UnsafePointer`, `Span`, `Error`, `DType`, `Writable`, `Writer`, `Copyable`,
-`Movable`, `Equatable`, `Hashable`, `rebind`, `print`, `range`, `len`, and more.
+`OptionalPointer`, `alloc`, `Span`, `Error`, `DType`, `Writable`, `Writer`,
+`Copyable`, `Movable`, `Equatable`, `Hashable`, `rebind`, `print`, `range`,
+`len`, and more. `Layout` and `dealloc` are **not** in the prelude — import them
+from `std.memory`.
 
 `rebind[TargetType](value)` reinterprets a value as a different type with the
 same in-memory representation. Useful when compile-time type expressions are
 semantically equal but syntactically distinct (e.g., TileTensor element types
 — see GPU skill).
+
+`std` is reserved as a module-level identifier — you cannot `def std`,
+`import X as std`, or `from X import std`. Struct methods named `std` are fine.
+
+Inside a multi-module package, `pkg.X.Y(...)` from a submodule needs explicit
+`import pkg`; `import pkg.X as X` binds only `X`, not `pkg`.
 
 ## `Writable` / `Writer` (replaces `Stringable`)
 
@@ -235,7 +289,7 @@ struct MyType(Writable):
 - `Some[Writer]` — builtin existential type (not `Writer` directly)
 - Both methods have **default implementations** via reflection if all fields are
   `Writable` — simple structs need not implement them
-- Convert to `String` with `String.write(value)`, not `str(value)`
+- Convert to `String` with `String(value)`, not `str(value)`
 
 ## Iterator protocol
 
@@ -258,26 +312,77 @@ For-in: `for item in col:` (immutable) / `for ref item in col:` (mutable).
 
 ## Memory and pointer types
 
-| Type                            | Use                                                                    |
-|---------------------------------|------------------------------------------------------------------------|
-| `Pointer[T, mut=M, origin=O]`   | Safe, non-nullable. Deref with `p[]`.                                  |
-| `alloc[T](n)` / `UnsafePointer` | Free function `alloc[T](count)` → `UnsafePointer`. `.free()` required. |
-| `Span(list)`                    | Non-owning contiguous view.                                            |
-| `OwnedPointer[T]`               | Unique ownership (like Rust `Box`).                                    |
-| `ArcPointer[T]`                 | Reference-counted shared ownership.                                    |
+| Type                          | Use                                                      |
+|-------------------------------|----------------------------------------------------------|
+| `Pointer[T, mut=M, origin=O]` | Safe, non-nullable. Deref with `p[]`.                    |
+| `OptionalPointer[T, origin]`  | Nullable pointer — `Optional[Pointer[...]]`.             |
+| `Allocation[T]`               | Owning handle returned by `alloc`. Explicitly destroyed. |
+| `Span(list)`                  | Non-owning contiguous view.                              |
+| `OwnedPointer[T]`             | Unique ownership (like Rust `Box`).                      |
+| `ArcPointer[T]`               | Reference-counted shared ownership.                      |
 
-`UnsafePointer` has an `origin` parameter that must be specified for struct
-fields. Use `MutExternalOrigin` for owned heap data (this is what stdlib
-`ArcPointer` uses):
+`UnsafePointer` is a deprecated alias of `Pointer` — it still compiles and
+warns. The other legacy aliases were **removed** and are hard errors (see the
+table at the top). Most of the pointer API is being renamed alongside
+`UnsafePointer`; those old spellings still compile but warn:
+
+| Deprecated                | Replacement                             |
+|---------------------------|-----------------------------------------|
+| `UnsafePointer[T, O]`     | `Pointer[T, O]`                         |
+| `alloc[T](n)`             | `alloc(Layout[T](count=n))`             |
+| `p.free()`                | `dealloc(allocation^)`                  |
+| `p[i]`                    | `p[unsafe_offset=i]`                    |
+| `p + i`                   | `p.unsafe_offset(i)`                    |
+| `p += i`                  | `p = p.unsafe_offset(i)`                |
+| `p.load()` / `p.store(v)` | `p.unsafe_load()` / `p.unsafe_store(v)` |
+| `p.init_pointee_move(v)`  | `p.unsafe_write(v)`                     |
+| `p.init_pointee_copy(v)`  | `p.unsafe_write(copy=v)`                |
+
+`alloc(Layout[T](count=n))` returns an `Allocation[T]`, a linear type the
+compiler forces you to dispose of on every path — pass it to `dealloc`, or call
+`unsafe_leak()` to take ownership of the bare pointer:
 
 ```mojo
-# Struct field — specify origin explicitly
-var _ptr: UnsafePointer[Self.T, MutExternalOrigin]
+from std.memory import Layout, dealloc
 
-# Allocate with alloc[]
-fn __init__(out self, size: Int):
-    self._ptr = alloc[Self.T](size)
+var allocation = alloc(Layout[Int32](count=4))
+var ptr = allocation.unsafe_ptr()
+ptr.unsafe_write(Int32(1))
+ptr.unsafe_offset(1).unsafe_write(Int32(2))
+dealloc(allocation^)
 ```
+
+A struct that owns heap storage should hold the `Allocation`, not a leaked
+pointer. The compiler then enforces disposal on every path, and `dealloc`
+gets the `Layout` it needs:
+
+```mojo
+from std.memory import Layout, Allocation, alloc, dealloc
+
+struct Buffer[T: AnyType]:
+    var _alloc: Allocation[Self.T]
+
+    def __init__(out self, size: Int):
+        self._alloc = alloc(Layout[Self.T](count=size))
+
+    def __deinit__(deinit self):
+        dealloc(self._alloc^)
+```
+
+Get at the storage with `self._alloc.unsafe_ptr()`, whose origin is tied to the
+allocation. Don't substitute `Pointer.unsafe_free()`: it bypasses the `Layout`,
+and for zero-sized `T` it frees the dangling sentinel that `alloc` returns.
+
+A container that already tracks its own capacity may instead store a
+`ThinAllocation` and supply the `Layout` again at `dealloc` time. That is
+what `List` does; it is an optimization, not the default shape.
+
+When a struct field does hold a raw `Pointer`, its `origin` parameter must be
+specified; use `MutUntrackedOrigin` for owned heap data.
+
+`Pointer` is **non-null by design** — `Bool(p)` is unavailable, not merely
+deprecated. For nullable storage, use `OptionalPointer[T, origin]` (same layout;
+`None` is the null niche).
 
 ## Origin system (not "lifetime")
 
@@ -287,9 +392,9 @@ Mojo tracks reference provenance with **origins**, not "lifetimes":
 struct Span[mut: Bool, //, T: AnyType, origin: Origin[mut=mut]]: ...
 ```
 
-Key types: `Origin`, `MutOrigin`, `ImmutOrigin`, `MutAnyOrigin`,
-`ImmutAnyOrigin`, `MutExternalOrigin`, `ImmutExternalOrigin`,
-`StaticConstantOrigin`. Use `origin_of(value)` to get a value's origin.
+Key types: `Origin`, `MutOrigin`, `ImmOrigin`, `MutAnyOrigin`,
+`ImmutAnyOrigin`, `MutUntrackedOrigin`, `ImmUntrackedOrigin`,
+`ImmStaticOrigin`. Use `origin_of(value)` to get a value's origin.
 
 ## Testing
 
@@ -304,6 +409,9 @@ def test_my_feature() raises:
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
 ```
+
+The `mojo test` CLI subcommand was removed — run test files with `mojo run`
+against a `TestSuite.discover_tests` runner like the one above.
 
 ## Dict iteration
 
@@ -331,18 +439,63 @@ var nums: List[Float32] = [1.0, 2.0, 3.0]         # explicit element type
 var scores = {"alice": 95, "bob": 87}              # Dict[String, Int]
 ```
 
+`List[T]` rejects negative indices at compile time — use `lst[len(lst) - 1]`,
+not `lst[-1]`. (Library types may still support it.)
+
+## Variant access
+
+`Variant[A, B]` is `ImplicitlyCopyable` only if *all* arms are. With a
+non-copyable arm, indexing the variant copies it — use the typed-arm subscript:
+
+```mojo
+# WRONG — `values[i]` implicitly copies the Variant
+var x = values[i].unwrap[T]()    # ERROR: cannot implicitly copy
+
+# CORRECT — `values[i][T]` returns a ref to the inner value
+var x = values[i][T].copy()          # or `^` to transfer
+```
+
 ## Common decorators
 
-| Decorator                                      | Purpose                               |
-|------------------------------------------------|---------------------------------------|
-| `@fieldwise_init`                              | Generate fieldwise constructor        |
-| `@implicit`                                    | Allow implicit conversion             |
-| `@always_inline` / `@always_inline("nodebug")` | Force inline                          |
-| `@no_inline`                                   | Prevent inline                        |
-| `@staticmethod`                                | Static method                         |
-| `@deprecated("msg")`                           | Deprecation warning                   |
-| `@doc_hidden`                                  | Hide from docs                        |
-| `@explicit_destroy`                            | Linear type (no implicit destruction) |
+| Decorator                                        | Purpose                                 |
+|--------------------------------------------------|-----------------------------------------|
+| `@fieldwise_init`                                | Generate fieldwise constructor          |
+| `@implicit`                                      | Allow implicit conversion               |
+| `@inline(.always)` / `@inline(.nodebug)`         | Force inline                            |
+| `@inline(.never)`                                | Prevent inline                          |
+| `@staticmethod`                                  | Static method                           |
+| `@deprecated("msg")`                             | Deprecation warning                     |
+| `@doc_hidden`                                    | Hide from docs                          |
+| `@explicit_destroy`                              | Linear type (no implicit destruction)   |
+
+## Contextual member references — prefer `.member`
+
+Where the expected type is already known, write `.member` instead of
+`Type.member`; the compiler rewrites it to `Type.member`. Idiomatic
+throughout the codebase for `DType` and `AddressSpace`:
+
+```mojo
+var v = SIMD[.float32, 4](1.0, 2.0, 3.0, 4.0)     # not SIMD[DType.float32, 4]
+comptime if dtype == .bfloat16: ...                # `__eq__` arg supplies context
+v.cast[.float32]()
+ctx.enqueue_create_buffer[.int32](num_rows)
+unsafe_stack_allocation[1, Int32, address_space=.SHARED]()
+
+def f[dtype: DType = .float32](x: TileTensor[.bfloat16, L, MutAnyOrigin]): ...
+```
+
+Works for any type's `comptime` aliases and static methods, including chains
+(`.red.opacity(0.5)`) and typed collection literals (`List[Color] = [.red]`).
+The context comes from a declared `var`/`ref` type, a call-argument type, a
+`return` destination, or a typed collection literal's element type. With none
+of those, qualify the name:
+
+| No contextual type            | Must write                                             |
+|-------------------------------|--------------------------------------------------------|
+| Unannotated binding           | `comptime t = DType.float32` (or annotate `t: DType`)  |
+| Overloaded callee             | `size_of[DType.float32]()` — overloads aren't searched |
+| Bare tuple literal            | `dtype in (DType.bfloat16, DType.float16)`             |
+| Type position                 | `.Foo` where a *type* is expected is an error          |
 
 ## Numeric conversions — must be explicit
 
@@ -359,19 +512,19 @@ context:
 ```mojo
 var a: Float32 = 0.5              # literal becomes Float32
 var b = Float32(x) * 0.003921    # literal adapts — no wrapping needed
-var v = SIMD[DType.float32, 4](1.0, 2.0, 3.0, 4.0)  # literals adapt
+var v = SIMD[.float32, 4](1.0, 2.0, 3.0, 4.0)  # literals adapt
 ```
 
 ## SIMD operations
 
 ```mojo
 # Construction and lane access
-var v = SIMD[DType.float32, 4](1.0, 2.0, 3.0, 4.0)
-v[0]                              # read lane → Scalar[DType.float32]
+var v = SIMD[.float32, 4](1.0, 2.0, 3.0, 4.0)
+v[0]                              # read lane → Scalar[.float32]
 v[0] = 5.0                        # write lane
 
 # Type cast
-v.cast[DType.uint32]()            # element-wise → SIMD[DType.uint32, 4]
+v.cast[.uint32]()                 # element-wise → SIMD[.uint32, 4]
 
 # Clamp (method)
 v.clamp(0.0, 1.0)                 # element-wise clamp to [lower, upper]
@@ -382,7 +535,8 @@ min(a, b)                          # element-wise min (same-type SIMD args)
 max(a, b)                          # element-wise max
 
 # Element-wise ternary via bool SIMD
-var mask = (v > 0.0)              # SIMD[DType.bool, 4]
+var mask = v.gt(0.0)              # SIMD[.bool, 4] — `v > 0.0` is
+                                  # Scalar-only and fails to compile
 mask.select(true_case, false_case) # picks per-lane
 
 # Reductions
@@ -399,7 +553,12 @@ is universal. Prelude types (`Int`, `String`, `List`, etc.) are
 auto-imported and need no import statement.
 
 `len(s)` returns **byte length**, not codepoint count. Mojo strings are UTF-8.
-Byte indexing requires keyword syntax: `s[byte=idx]` (not `s[idx]`).
+Byte indexing requires keyword syntax: `s[byte=idx]` (not `s[idx]`). `len(s)` is
+deprecated on `String` — use `s.byte_length()` or `s.count_codepoints()`.
+
+`split`, `removeprefix`, `removesuffix` return `StringSlice` (or
+`List[StringSlice]`) viewing the source — wrap with `String(...)` to
+materialize an owned `String`.
 
 ### String indexing (common error)
 
@@ -428,7 +587,7 @@ len(s)                  # 5 (bytes)
 s.byte_length()         # 5 (same as len)
 s.count_codepoints()    # 5 (codepoint count — differs for non-ASCII)
 
-# Iteration — by codepoint slices (not bytes)
+# Iteration — `for c in s:` is deprecated; use codepoint_slices()
 for cp_slice in s.codepoint_slices():
     print(cp_slice)
 
@@ -463,33 +622,44 @@ except err:                               # err is Int
     print("error code:", err)
 ```
 
-No `match` statement. No `async`/`await` — use `Coroutine`/`Task` from
-`std.runtime`.
+`match` / `comptime match` / `if case` / `while case` are stabilized — see
+[idiomatic-mojo.md §10](references/idiomatic-mojo.md) for the pattern forms
+and when to prefer them over `elif` chains. Async is spelled `__async def`
+and `__await` (bare `async`/`await` still parse but warn that async is
+unstable); support is unfinished and its types are private — do not write
+async Mojo yet.
 
 ## Function types and closures
 
-No lambda syntax. Closures use `capturing[origins]`:
+No lambda. Closures use bare `def` with a capture list in `{}` after the arg
+list. `escaping` is removed; `capturing[_]` is still valid on parametric
+closure-type params:
 
 ```mojo
-# Function type with capture
-comptime MyFunc = fn(Int) capturing[_] -> None
+comptime MyFn = def(Int) -> None                  # unified value type
+def runner[f: def(Int) capturing[_] -> None](): ...  # parametric form
 
-# Parametric function type (for vectorize etc.)
-comptime SIMDFunc = fn[width: Int](Int) capturing[_] -> None
+def closure(i: Int) {mut count, imm ptr, var x}:  # captures: mut/imm/var
+    count += ptr[i] + x^                          # `^` at use site, not in `{}`
 
-# vectorize pattern
-from std.algorithm import vectorize
-vectorize[simd_width](size, my_closure)
+vectorize[simd_width](size, closure)              # runtime-arg overload
 ```
+
+`imm` is default. `var x` is owned — transfer with `x^` at the use site.
+Prefer unified closures with a capture list. Do not use `@__parameter` /
+`@parameter` on nested closures in new or migrated code — the legacy form is
+slated for removal. Pass closures as runtime arguments (`f(my_closure)`)
+where possible; if an API requires a comptime `capturing[_]` function, use
+`def … capturing` without `@__parameter`, or migrate that API.
 
 ## Type hierarchy
 
 ```text
 AnyType
-  ImplicitlyDestructible          — auto __del__; most types
-  Movable                         — __init__(out self, *, deinit take: Self)
+  Deinitable                      — auto __deinit__; most types
+  Movable                         — __init__(out self, *, deinit move: Self)
     Copyable                      — __init__(out self, *, copy: Self)
-      ImplicitlyCopyable(Copyable, ImplicitlyDestructible)
+      ImplicitlyCopyable(Copyable, take)
     RegisterPassable(Movable)
-      TrivialRegisterPassable(ImplicitlyCopyable, ImplicitlyDestructible, Movable, RegisterPassable)
+      TrivialRegisterPassable(ImplicitlyCopyable, take, Movable, RegisterPassable)
 ```

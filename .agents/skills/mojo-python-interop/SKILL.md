@@ -148,10 +148,18 @@ var count = Int(py=data.get("count", PythonObject(0)))
 Mojo can build Python extension modules (`.so` files) via `PythonModuleBuilder`.
 The pattern:
 
-1. Define an `@export def PyInit_<module_name>() -> PythonObject`
+1. Define an `@export def PyInit_<module_name>() abi("C") -> PythonObject`
 2. Use `PythonModuleBuilder` to register functions, types, and methods
 3. Compile with `mojo build --emit shared-lib`
 4. Import from Python (or use `import mojo.importer` for auto-compilation)
+
+Calling convention: only `PyInit_<module>` needs `@export`, and it must be
+`abi("C")` because the CPython runtime calls it directly across the C boundary
+(so it can't `raises` — catch errors and `abort` instead). Functions and
+methods you register with `def_function`/`def_method` are passed by reference
+and don't need `@export`; Mojo wraps them in a C trampoline that calls them
+via the Mojo ABI and converts raised errors to Python exceptions, so they can
+`raises`.
 
 ### Exporting functions
 
@@ -161,7 +169,7 @@ from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 
 @export
-def PyInit_my_module() -> PythonObject:
+def PyInit_my_module() abi("C") -> PythonObject:
     try:
         var m = PythonModuleBuilder("my_module")
         m.def_function[add]("add")
@@ -210,7 +218,7 @@ struct Counter(Defaultable, Movable, Writable):
         return PythonObject(self_ptr[].count)
 
 @export
-def PyInit_counter_module() -> PythonObject:
+def PyInit_counter_module() abi("C") -> PythonObject:
     try:
         var m = PythonModuleBuilder("counter_module")
         _ = (
@@ -236,12 +244,12 @@ Both are registered with `.def_method[Type.method]("name")`.
 ### Kwargs support
 
 ```mojo
-from std.collections import OwnedKwargsDict
+from std.collections import StringDict
 
 # In a method:
 @staticmethod
 def config(
-    py_self: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
+    py_self: PythonObject, kwargs: StringDict[PythonObject]
 ) raises -> PythonObject:
     for entry in kwargs.items():
         print(entry.key, "=", entry.value)
@@ -254,8 +262,8 @@ Use `mojo.importer` — it auto-compiles `.mojo` files and caches results in
 `__mojocache__/`:
 
 ```python
-import mojo.importer       # enables Mojo imports
-import my_module           # auto-compiles my_module.mojo
+import mojo.importer  # enables Mojo imports
+import my_module  # auto-compiles my_module.mojo
 
 print(my_module.add(1, 2))
 ```

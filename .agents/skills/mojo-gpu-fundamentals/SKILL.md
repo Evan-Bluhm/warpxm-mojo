@@ -25,15 +25,15 @@ Mojo GPU programming has **no CUDA syntax**. No `__global__`, `__device__`,
 | CUDA / What you'd guess                 | Mojo GPU                                                                             |
 |-----------------------------------------|--------------------------------------------------------------------------------------|
 | `__global__ void kernel(...)`           | Plain `def kernel(...)` — no decorator                                               |
-| `kernel<<<grid, block>>>(args)`         | `ctx.enqueue_function[kernel, kernel](args, grid_dim=..., block_dim=...)`            |
+| `kernel<<<grid, block>>>(args)`         | `ctx.enqueue_function[kernel](args, grid_dim=..., block_dim=...)`                    |
 | `cudaMalloc(&ptr, size)`                | `ctx.enqueue_create_buffer[dtype](count)`                                            |
 | `cudaMemcpy(dst, src, ...)`             | `ctx.enqueue_copy(dst_buf, src_buf)` or `ctx.enqueue_copy(dst_buf=..., src_buf=...)` |
 | `cudaDeviceSynchronize()`               | `ctx.synchronize()`                                                                  |
-| `__syncthreads()`                       | `barrier()` from `std.gpu` or `std.gpu.sync`                                         |
+| `__syncthreads()`                       | `barrier()` from `max.gpu` or `max.gpu.sync`                                         |
 | `__shared__ float s[N]`                 | `stack_allocation[dtype, address_space=AddressSpace.SHARED](layout)`                 |
 | `threadIdx.x`                           | `thread_idx.x`                                                                       |
 | `blockIdx.x * blockDim.x + threadIdx.x` | `global_idx.x` (convenience, returns `Int`)                                          |
-| `__shfl_down_sync(mask, val, d)`        | `warp.sum(val)`, `warp.reduce[...]()`                                                |
+| `__shfl_down_sync(mask, val, d)`        | `warp.shuffle_down(val, d)` / `warp.sum` / `warp.max` / `warp.min` / `warp.reduce`   |
 | `atomicAdd(&ptr, val)`                  | `Atomic.fetch_add(ptr, val)`                                                         |
 | Raw `float*` kernel args                | `TileTensor[dtype, LayoutType, MutAnyOrigin]`                                        |
 | `cudaFree(ptr)`                         | Automatic — buffers freed when out of scope                                          |
@@ -42,15 +42,15 @@ Mojo GPU programming has **no CUDA syntax**. No `__global__`, `__device__`,
 
 ```mojo
 # Core GPU — pick what you need
-from std.gpu import global_idx                                    # simple indexing
-from std.gpu import block_dim, block_idx, thread_idx              # manual indexing
-from std.gpu import barrier, lane_id, WARP_SIZE                   # sync & warp info
-from std.gpu.sync import barrier                                  # also valid
-from std.gpu.primitives import warp                               # warp.sum, warp.reduce
-from std.gpu.memory import AddressSpace                           # for shared memory
-from std.gpu.memory import async_copy_wait_all                    # async copy sync
-from std.gpu.host import DeviceContext, DeviceBuffer              # host-side API
-from std.atomic import Atomic                                  # atomics
+from max.gpu import global_idx                                    # simple indexing
+from max.gpu import block_dim, block_idx, thread_idx              # manual indexing
+from max.gpu import lane_id, WARP_SIZE                            # warp info
+from max.gpu.sync import barrier                                  # block-level sync
+from max.gpu.primitives import warp                               # sum/max/min/broadcast/shuffle_*/reduce
+from max.gpu.memory import AddressSpace                           # for shared memory
+from max.gpu.memory import async_copy_wait_all                    # async copy sync
+from max.gpu.host import DeviceContext, DeviceBuffer              # host-side API
+from std.atomic import Atomic                                     # atomics
 
 # Layout system — NOT in std, separate package
 from layout import TileTensor, TensorLayout, Idx, row_major, stack_allocation
@@ -60,8 +60,11 @@ from layout import TileTensor, TensorLayout, Idx, row_major, stack_allocation
 
 Kernels are **plain functions** — no decorator, no special return type.
 Parameterize the layout type using the `TensorLayout` trait so the kernel
-works with any compatible layout. Use `comptime assert` on `flat_rank` to
-constrain the rank — the compiler needs this to allow direct indexing:
+works with any compatible layout. **`comptime assert tensor.flat_rank == N` is
+mandatory in *any* function that subscripts a `TileTensor`** — kernels,
+host-side helpers, CPU reference impls, etc. Without it, `tensor[r, c]` fails
+with `"invalid call to '__getitem__': lacking evidence to prove correctness"`.
+The assert unlocks N-D indexing:
 
 ```mojo
 def my_kernel[
@@ -121,11 +124,20 @@ tensor.dim[0]()                 # query dimension size (compile-time index)
 var K = Int(tensor.dim[1]())    # wrap with Int() for use in arithmetic
 ```
 
+Derived tensors (`.tile(...)`, `.vectorize(...)`, `.distribute(...)`) produce a
+**new layout** whose rank is not inherited from the parent's assert. Re-assert
+on the derived value before indexing it:
+
+```mojo
+var vec = tensor.vectorize[1, 4]()
+comptime assert vec.flat_rank == 2          # required for vec[r, i]
+```
+
 ### Tiling (extract sub-tiles from a tensor)
 
 ```mojo
 # Inside kernel — extract a block_size x block_size tile
-var tile = tensor.tile[block_size, block_size](Int(block_idx.y), Int(block_idx.x))
+var tile = tensor.tile[block_size, block_size](block_idx.y, block_idx.x)
 tile[thread_idx.y, thread_idx.x]   # access within tile
 ```
 
@@ -215,11 +227,8 @@ ctx.synchronize()
 
 ## Kernel launch
 
-**Critical**: `enqueue_function` takes the kernel function **twice** as
-compile-time parameters:
-
 ```mojo
-ctx.enqueue_function[my_kernel, my_kernel](
+ctx.enqueue_function[my_kernel](
     input_tensor,
     output_tensor,
     size,                    # scalar args passed directly
@@ -228,19 +237,28 @@ ctx.enqueue_function[my_kernel, my_kernel](
 )
 
 # 2D grid/block — use tuples:
-ctx.enqueue_function[kernel_2d, kernel_2d](
+ctx.enqueue_function[kernel_2d](
     args...,
     grid_dim=(col_blocks, row_blocks),
     block_dim=(BLOCK_SIZE, BLOCK_SIZE),
 )
 ```
 
-For parameterized kernels, bind parameters first:
+**If the kernel takes any comptime parameters, you MUST bind them first** —
+passing the parameterized name directly to `enqueue_function` produces a wall
+of "no matching method" / "DevicePassable" template errors:
 
 ```mojo
-comptime kernel = sum_kernel[SIZE, BATCH_SIZE]
-ctx.enqueue_function[kernel, kernel](out_buf, in_buf, grid_dim=N, block_dim=TPB)
+# WRONG — vector_add has a `LT: TensorLayout` parameter
+ctx.enqueue_function[vector_add](a, b, c, N, grid_dim=G, block_dim=B)
+
+# CORRECT — bind parameters, then launch the bound symbol
+comptime kernel = vector_add[type_of(layout)]
+ctx.enqueue_function[kernel](a, b, c, N, grid_dim=G, block_dim=B)
 ```
+
+Monomorphic kernels (signature uses `type_of(layout)` directly, no
+`[LT: TensorLayout]` etc.) can be passed by name with no binding step.
 
 ## Shared memory
 
@@ -249,7 +267,7 @@ Allocate shared memory inside a kernel using `stack_allocation` from the
 
 ```mojo
 from layout import stack_allocation   # TileTensor-based shared alloc
-from std.gpu.memory import AddressSpace
+from max.gpu.memory import AddressSpace
 
 var tile_shared = stack_allocation[DType.float32,
     address_space=AddressSpace.SHARED](row_major[TILE_M, TILE_K]())
@@ -274,17 +292,17 @@ var sums = stack_allocation[
 
 ```mojo
 # Simple — automatic global offset
-from std.gpu import global_idx
+from max.gpu import global_idx
 var tid = global_idx.x           # 1D
 var row = global_idx.y           # 2D row
 var col = global_idx.x           # 2D col
 
 # Manual — when you need block/thread separately
-from std.gpu import block_idx, block_dim, thread_idx
+from max.gpu import block_idx, block_dim, thread_idx
 var tid = block_idx.x * block_dim.x + thread_idx.x
 
 # Warp info
-from std.gpu import lane_id, WARP_SIZE
+from max.gpu import lane_id, WARP_SIZE
 var my_lane = lane_id()          # 0..WARP_SIZE-1
 ```
 
@@ -293,14 +311,26 @@ All return `Int` — no casting needed for bounds checks.
 ## Synchronization and warp operations
 
 ```mojo
-from std.gpu import barrier
-from std.gpu.primitives import warp
+from max.gpu.sync import barrier
+from max.gpu.primitives import warp
 from std.atomic import Atomic
 
 barrier()                                    # block-level sync
-var warp_sum = warp.sum(my_value)           # warp-wide sum reduction
-var result = warp.reduce[warp.shuffle_down, reduce_fn](val)  # custom warp reduce
-_ = Atomic.fetch_add(output_ptr, value)     # atomic add
+_ = Atomic.fetch_add(output_ptr, value)      # atomic add
+
+# Reductions — result broadcast to every lane
+warp.sum(val)         warp.max(val)         warp.min(val)
+warp.broadcast(val)                          # lane-0 value → all lanes
+warp.reduce[warp.shuffle_down](val, reduce_fn)  # custom reduction (broadcasts)
+
+# Shuffles — per-lane shift/swap, NOT broadcast
+warp.shuffle_down(val, offset)               # offset: UInt32
+warp.shuffle_xor(val, offset)                # offset: UInt32, XOR'd with lane id (butterfly)
+warp.shuffle_xor(mask, val, offset)          # explicit membership mask (rarely needed)
+
+# `offset` is `UInt32` — plain `Int` is a type-mismatch error:
+var off: UInt32 = 16
+var v = warp.shuffle_xor(val, off)
 ```
 
 ## GPU availability check
@@ -316,10 +346,11 @@ def main() raises:
         # ... GPU code
 ```
 
-Or as a compile-time assert:
+Or as a compile-time assert — which must sit inside a function body:
 
 ```mojo
-comptime assert has_accelerator(), "Requires a GPU"
+def main() raises:
+    comptime assert has_accelerator(), "Requires a GPU"
 ```
 
 ## Architecture detection — `is_` vs `has_`
@@ -379,8 +410,8 @@ comptime layout = row_major[SIZE]()
 ```mojo
 from std.math import ceildiv
 from std.sys import has_accelerator
-from std.gpu import global_idx
-from std.gpu.host import DeviceContext
+from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 from layout import TileTensor, row_major
 
 comptime dtype = DType.float32
@@ -411,7 +442,7 @@ def main() raises:
     var b = TileTensor(b_buf, layout)
     var c = TileTensor(c_buf, layout)
 
-    ctx.enqueue_function[add_kernel, add_kernel](
+    ctx.enqueue_function[add_kernel](
         a, b, c, N,
         grid_dim=ceildiv(N, BLOCK),
         block_dim=BLOCK,
@@ -427,10 +458,10 @@ def main() raises:
 ```mojo
 from std.math import ceildiv
 from std.sys import has_accelerator
-from std.gpu.sync import barrier
-from std.gpu.host import DeviceContext
-from std.gpu import thread_idx, block_idx
-from std.gpu.memory import AddressSpace
+from max.gpu.sync import barrier
+from max.gpu.host import DeviceContext
+from max.gpu import thread_idx, block_idx
+from max.gpu.memory import AddressSpace
 from layout import TileTensor, TensorLayout, row_major, stack_allocation
 
 comptime dtype = DType.float32
@@ -483,7 +514,7 @@ def main() raises:
     var ctx = DeviceContext()
     # ... allocate buffers, init data, then:
     comptime kernel = matmul_kernel[type_of(a_layout), type_of(b_layout), type_of(c_layout)]
-    ctx.enqueue_function[kernel, kernel](
+    ctx.enqueue_function[kernel](
         A, B, C,
         grid_dim=(ceildiv(N, TILE), ceildiv(M, TILE)),
         block_dim=(TILE, TILE),
@@ -493,8 +524,8 @@ def main() raises:
 ## SIMD loads in kernels
 
 ```mojo
-# Vectorized load from raw pointer
-var val = ptr.load[width=8](idx)          # SIMD[dtype, 8]
+# Vectorized load from raw pointer — `.load()` is deprecated
+var val = ptr.unsafe_load[width=8](idx)   # SIMD[dtype, 8]
 var sum = val.reduce_add()                 # scalar reduction
 
 # TileTensor vectorized access
@@ -503,28 +534,38 @@ var vec_tensor = tensor.vectorize[1, 4]()  # group elements into SIMD[4]
 
 ## Reduction pattern
 
+Pointer indexing is `ptr[unsafe_offset=i]` — bare `ptr[i]` is deprecated. Use
+`MutPointer`, not the deprecated `UnsafePointer`.
+
 ```mojo
+from std.bit import log2_floor
+
+comptime TPB = 512          # `comptime for` needs a static bound, so the
+                            # block size must be comptime, not `block_dim.x`
+
 def block_reduce(
-    output: UnsafePointer[Int32, MutAnyOrigin],
-    input: UnsafePointer[Int32, MutAnyOrigin],
+    output: MutPointer[Int32, MutAnyOrigin],
+    input: MutPointer[Int32, MutAnyOrigin],
 ):
-    var sums = stack_allocation[512, Scalar[DType.int32],
+    var sums = stack_allocation[TPB, Scalar[DType.int32],
         address_space=AddressSpace.SHARED]()
     var tid = thread_idx.x
-    sums[tid] = input[block_idx.x * block_dim.x + tid]
+    sums[unsafe_offset=tid] = input[
+        unsafe_offset=block_idx.x * block_dim.x + tid
+    ]
     barrier()
 
     # Tree reduction in shared memory
-    var active = block_dim.x
-    comptime for _ in range(log2_steps):
+    var active = TPB
+    comptime for _ in range(log2_floor(TPB)):
         active >>= 1
         if tid < active:
-            sums[tid] += sums[tid + active]
+            sums[unsafe_offset=tid] += sums[unsafe_offset=tid + active]
         barrier()
 
     # Final warp reduction + atomic accumulate
     if tid < WARP_SIZE:
-        var v = warp.sum(sums[tid][0])
+        var v = warp.sum(sums[unsafe_offset=tid][0])
         if tid == 0:
             _ = Atomic.fetch_add(output, v)
 ```
@@ -540,15 +581,16 @@ var buf = DeviceBuffer[dtype](ctx, raw_ptr, count, owning=False)
 
 ```mojo
 from std.benchmark import Bench, BenchConfig, Bencher, BenchId, BenchMetric, ThroughputMeasure
+from max.benchmark import bencher_iter_custom   # GPU form: a free function
 
-@parameter
-@always_inline
-def bench_fn(mut b: Bencher) capturing raises:
-    @parameter
-    @always_inline
-    def launch(ctx: DeviceContext) raises:
-        ctx.enqueue_function[kernel, kernel](args, grid_dim=G, block_dim=B)
-    b.iter_custom[launch](ctx)
+@inline(.always)
+def bench_fn(mut b: Bencher) raises capturing[_]:
+    @inline(.always)
+    def launch(ctx: DeviceContext) raises {imm}:
+        ctx.enqueue_function[kernel](args, grid_dim=G, block_dim=B)
+    var ctx = DeviceContext()
+    # Value-taking form: pass the launch closure as an argument.
+    bencher_iter_custom(b, launch, ctx)         # NOT `b.iter_custom(...)`
 
 var bench = Bench(BenchConfig(max_iters=50000))
 bench.bench_function[bench_fn](
@@ -556,6 +598,11 @@ bench.bench_function[bench_fn](
     [ThroughputMeasure(BenchMetric.bytes, total_bytes)],
 )
 ```
+
+`Bencher.iter_custom` takes no `DeviceContext` — that form lives in
+`max.benchmark`. Prefer `bencher_iter_custom(b, launch, ctx)` with a unified
+closure and an explicit capture list (`{imm}`, `{var}`, or named captures).
+Do not use `@__parameter` / `@parameter` on these launch closures.
 
 ## Hardware details
 
