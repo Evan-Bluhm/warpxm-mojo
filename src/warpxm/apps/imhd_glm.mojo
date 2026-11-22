@@ -31,7 +31,7 @@ from warpxm.apps.imhd import (
     IMHD, MHD_NC,
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
     IDX_BX, IDX_BY, IDX_BZ,
-    _fast_speed,
+    _normal_flux_and_speed,
 )
 from warpxm.core.math_compat import fabs, fmax
 from warpxm.core.types import Real
@@ -126,37 +126,38 @@ struct ImhdGLM(ImplicitlyCopyable, Movable):
         nx: Real, ny: Real, nz: Real,
         gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
     ) -> Array[Real, MHD_GLM_NC]:
-        var rho_l = fmax(q_l[IDX_RHO], rho_min)
-        var rho_r = fmax(q_r[IDX_RHO], rho_min)
-        var bsq_l = q_l[IDX_BX] * q_l[IDX_BX] + q_l[IDX_BY] * q_l[IDX_BY] + q_l[IDX_BZ] * q_l[IDX_BZ]
-        var bsq_r = q_r[IDX_BX] * q_r[IDX_BX] + q_r[IDX_BY] * q_r[IDX_BY] + q_r[IDX_BZ] * q_r[IDX_BZ]
-        var msq_l = q_l[IDX_MX] * q_l[IDX_MX] + q_l[IDX_MY] * q_l[IDX_MY] + q_l[IDX_MZ] * q_l[IDX_MZ]
-        var msq_r = q_r[IDX_MX] * q_r[IDX_MX] + q_r[IDX_MY] * q_r[IDX_MY] + q_r[IDX_MZ] * q_r[IDX_MZ]
-        var p_l = fmax((gamma - Real(1.0)) * (q_l[IDX_E] - Real(0.5) * msq_l / rho_l - Real(0.5) * bsq_l), press_min)
-        var p_r = fmax((gamma - Real(1.0)) * (q_r[IDX_E] - Real(0.5) * msq_r / rho_r - Real(0.5) * bsq_r), press_min)
+        # The 8 MHD components come from the shared one-evaluation-per-side
+        # normal flux; the (B·n, ψ) coupling is added on top.
+        var q_l_mhd: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
+        var q_r_mhd: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
+        comptime for c in range(MHD_NC):
+            q_l_mhd[c] = q_l[c]
+            q_r_mhd[c] = q_r[c]
+        var fs_l = _normal_flux_and_speed(q_l_mhd, nx, ny, nz, gamma, rho_min, press_min)
+        var fs_r = _normal_flux_and_speed(q_r_mhd, nx, ny, nz, gamma, rho_min, press_min)
+        var c_max = fmax(fmax(fs_l[MHD_NC], fs_r[MHD_NC]), c_h)
 
-        var u_n_l = (q_l[IDX_MX] * nx + q_l[IDX_MY] * ny + q_l[IDX_MZ] * nz) / rho_l
-        var u_n_r = (q_r[IDX_MX] * nx + q_r[IDX_MY] * ny + q_r[IDX_MZ] * nz) / rho_r
         var B_n_l = q_l[IDX_BX] * nx + q_l[IDX_BY] * ny + q_l[IDX_BZ] * nz
         var B_n_r = q_r[IDX_BX] * nx + q_r[IDX_BY] * ny + q_r[IDX_BZ] * nz
-
-        var c_f_l = _fast_speed(rho_l, p_l, B_n_l, bsq_l, gamma)
-        var c_f_r = _fast_speed(rho_r, p_r, B_n_r, bsq_r, gamma)
-        var c_max_mhd = fmax(fabs(u_n_l) + c_f_l, fabs(u_n_r) + c_f_r)
-        var c_max = fmax(c_max_mhd, c_h)
-
-        var fx_l = Self.internal_flux_x_static(q_l, gamma, rho_min, press_min, c_h)
-        var fy_l = Self.internal_flux_y_static(q_l, gamma, rho_min, press_min, c_h)
-        var fz_l = Self.internal_flux_z_static(q_l, gamma, rho_min, press_min, c_h)
-        var fx_r = Self.internal_flux_x_static(q_r, gamma, rho_min, press_min, c_h)
-        var fy_r = Self.internal_flux_y_static(q_r, gamma, rho_min, press_min, c_h)
-        var fz_r = Self.internal_flux_z_static(q_r, gamma, rho_min, press_min, c_h)
+        var f_n_l: Array[Real, MHD_GLM_NC] = Array[Real, MHD_GLM_NC](fill=Real(0.0))
+        var f_n_r: Array[Real, MHD_GLM_NC] = Array[Real, MHD_GLM_NC](fill=Real(0.0))
+        comptime for c in range(MHD_NC):
+            f_n_l[c] = fs_l[c]
+            f_n_r[c] = fs_r[c]
+        # Internal flux has f_x[B_x] = ψ (replacing the MHD zero) and
+        # f_x[ψ] = c_h² B_x, so F·n[B_i] gains ψ n_i and F·n[ψ] = c_h² B·n.
+        f_n_l[IDX_BX] += q_l[IDX_PSI] * nx
+        f_n_l[IDX_BY] += q_l[IDX_PSI] * ny
+        f_n_l[IDX_BZ] += q_l[IDX_PSI] * nz
+        f_n_r[IDX_BX] += q_r[IDX_PSI] * nx
+        f_n_r[IDX_BY] += q_r[IDX_PSI] * ny
+        f_n_r[IDX_BZ] += q_r[IDX_PSI] * nz
+        f_n_l[IDX_PSI] = c_h * c_h * B_n_l
+        f_n_r[IDX_PSI] = c_h * c_h * B_n_r
 
         var f: Array[Real, MHD_GLM_NC] = Array[Real, MHD_GLM_NC](fill=Real(0.0))
         comptime for c in range(MHD_GLM_NC):
-            var f_n_l = nx * fx_l[c] + ny * fy_l[c] + nz * fz_l[c]
-            var f_n_r = nx * fx_r[c] + ny * fy_r[c] + nz * fz_r[c]
-            f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
+            f[c] = Real(0.5) * (f_n_l[c] + f_n_r[c]) - Real(0.5) * c_max * (q_r[c] - q_l[c])
         return f^
 
     # ------------------------------------------------------------------

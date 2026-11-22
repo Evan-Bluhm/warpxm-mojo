@@ -15,6 +15,7 @@
 # Validates:
 #   - 1D Maxwell BC handler for BC_PEC_WALL.
 #   - Walls reflect cleanly — no leakage of energy or spurious mode mixing.
+#   - BC_PMC_WALL via the dual problem (B_y = sin(kx) between PMC walls).
 
 from std.math import sin, cos
 from std.sys import has_accelerator
@@ -26,7 +27,7 @@ from warpxm.apps.maxwell import (
     IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import BC_PEC_WALL
+from warpxm.core.bc import BC_PEC_WALL, BC_PMC_WALL
 from warpxm.core.math_compat import fabs
 from warpxm.core.types import Real
 from warpxm.mesh.block_1d import BlockMesh1D
@@ -43,14 +44,17 @@ comptime PI: Real = 3.141592653589793
 comptime DT: Real = 5.0e-4
 
 
-def main() raises:
-    comptime assert has_accelerator(), "Requires GPU"
-
-    var ctx = DeviceContext()
+def _run_cavity(var ctx: DeviceContext, pmc: Bool) raises:
+    """One period of the half-wave cavity mode. `pmc=False`: PEC walls,
+    E_z = sin(kx). `pmc=True`: the dual problem — PMC walls (tangential B
+    vanishes) with B_y = sin(kx), and E_z as the partner field."""
+    var bc = BC_PMC_WALL if pmc else BC_PEC_WALL
+    var i_mode = IDX_BY if pmc else IDX_EZ
+    var i_partner = IDX_EZ if pmc else IDX_BY
     var mesh = BlockMesh1D[P](
         ctx, Real(0.0), L, NX,
         periodic=False,
-        bc_left=BC_PEC_WALL, bc_right=BC_PEC_WALL,
+        bc_left=bc, bc_right=bc,
     )
     var q = DGState1D[P, MAXWELL_NC](ctx, mesh.num_elements)
 
@@ -68,12 +72,9 @@ def main() raises:
             var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
             var s = sin(k_wave * x)
             var b = (e * nodes_per_elem + i) * MAXWELL_NC
-            host[b + IDX_EX] = Real(0.0)
-            host[b + IDX_EY] = Real(0.0)
-            host[b + IDX_EZ] = s
-            host[b + IDX_BX] = Real(0.0)
-            host[b + IDX_BY] = Real(0.0)
-            host[b + IDX_BZ] = Real(0.0)
+            for c in range(MAXWELL_NC):
+                host[b + c] = Real(0.0)
+            host[b + i_mode] = s
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
     var spatial = DGMaxwellSolver1D[P](Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5)))
@@ -107,19 +108,30 @@ def main() raises:
                 var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
                 var s = sin(k_wave * x)
                 var b = (e * nodes_per_elem + i) * MAXWELL_NC
-                var d_Ez = h[b + IDX_EZ] - s
+                var d_Ez = h[b + i_mode] - s
                 err_Ez += mesh.jacobian * weights[i] * d_Ez * d_Ez
-                if fabs(h[b + IDX_BY]) > max_By: max_By = fabs(h[b + IDX_BY])
-                for idx in [IDX_EX, IDX_EY, IDX_BX, IDX_BZ]:
-                    var v = h[b + idx]
-                    if fabs(v) > max_other: max_other = fabs(v)
+                if fabs(h[b + i_partner]) > max_By: max_By = fabs(h[b + i_partner])
+                for idx in range(MAXWELL_NC):
+                    if idx != i_mode and idx != i_partner:
+                        var v = h[b + idx]
+                        if fabs(v) > max_other: max_other = fabs(v)
     var l2_Ez = err_Ez ** Real(0.5)
-    print("1D Maxwell PEC cavity, t =", t, " (period 2L/c =", t_final, "):")
-    print("  L2 E_z vs IC               :", l2_Ez)
-    print("  max |B_y| (should be ~0)   :", max_By)
-    print("  max |E_x, E_y, B_x, B_z| (~0):", max_other)
-    assert_true(l2_Ez < Real(5.0e-3), "E_z standing-wave error too large")
-    assert_true(max_By < Real(5.0e-3), "B_y did not return to ~0 after one period")
+    print(
+        "1D Maxwell cavity,", "PMC walls, B_y mode" if pmc else "PEC walls, E_z mode",
+        " t =", t, " (period 2L/c =", t_final, "):",
+    )
+    print("  L2 mode error vs IC             :", l2_Ez)
+    print("  max |partner field| (should be ~0):", max_By)
+    print("  max |four unexcited components|   :", max_other)
+    assert_true(l2_Ez < Real(2.5e-5), "standing-wave error too large")
+    assert_true(max_By < Real(6.0e-5), "partner field did not return to ~0 after one period")
     assert_true(max_other < Real(1.0e-12),
                 "Unexcited components grew — 1D Maxwell BC handler buggy")
+
+
+def main() raises:
+    comptime assert has_accelerator(), "Requires GPU"
+    var ctx = DeviceContext()
+    _run_cavity(ctx, False)
+    _run_cavity(ctx, True)
     print("PASSED")

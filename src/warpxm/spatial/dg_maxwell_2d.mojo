@@ -74,8 +74,8 @@ def _maxwell_rhs_kernel_2d[
     elem_face_dir: TileTensor[INDEX_DTYPE, EFLayout, MutAnyOrigin],
     face_bc: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     c_light: Real,
-    jacobian_x: Real,
-    jacobian_y: Real,
+    inv_jacobian_x: Real,
+    inv_jacobian_y: Real,
     num_elements_i64: Int64,
 ):
     var num_elements = Int(num_elements_i64)
@@ -104,7 +104,7 @@ def _maxwell_rhs_kernel_2d[
         DG_CORE_2D_ELEMS_PER_BLOCK,
     ](
         q, rhs, face_neg_elem, face_pos_elem, elem_face_dir, face_bc,
-        jacobian_x, jacobian_y, num_elements,
+        inv_jacobian_x, inv_jacobian_y, num_elements,
         flux_x, flux_y, num_flux, apply_bc,
     )
 
@@ -146,7 +146,7 @@ struct DGMaxwellSolver2D[P: Int]:
         ctx.enqueue_function[kernel](
             q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             self.app.c_light,
-            mesh.jacobian_x, mesh.jacobian_y, Int64(mesh.num_elements),
+            Real(1.0) / mesh.jacobian_x, Real(1.0) / mesh.jacobian_y, Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(P1, P1, EB),
         )

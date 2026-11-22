@@ -39,7 +39,7 @@ from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import EULER_NC
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.math_compat import fabs, fmin, fmax
+from warpxm.core.math_compat import fabs, fmin, fmax, sqrt
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_1d import BlockMesh1D
 from warpxm.variable.state_1d import DGState1D
@@ -62,7 +62,7 @@ def _phi_func(y: Real) -> Real:
 @always_inline
 def _alpha_dx(alpha_coeff: Real, dx: Real) -> Real:
     # α(dx) = α_coeff · dx^{1.5}; we use `dx * sqrt(dx)` which lowers cleanly.
-    return alpha_coeff * dx * (dx ** Real(0.5))
+    return alpha_coeff * dx * sqrt(dx)
 
 
 # ---------------------------------------------------------------------------

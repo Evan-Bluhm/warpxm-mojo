@@ -88,8 +88,8 @@ def _dg_2d_compute_rhs_core[
     face_pos_elem: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     elem_face_dir: TileTensor[INDEX_DTYPE, EFLayout, MutAnyOrigin],
     face_bc: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
-    jacobian_x: Real,
-    jacobian_y: Real,
+    inv_jacobian_x: Real,
+    inv_jacobian_y: Real,
     num_elements: Int,
     flux_x_fn: FluxX,
     flux_y_fn: FluxY,
@@ -147,12 +147,11 @@ def _dg_2d_compute_rhs_core[
     barrier()
 
     # --- Volume term: ∇·f at this node from tensor-product differentiation --
-    var d_flat = NodalBasis1D[P].diff_matrix_flat()
     var dfdx: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
     var dgdy: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
     comptime for kn in range(P1):
-        var dx_in_kn: Scalar[WXM_DTYPE] = d_flat[in_ * P1 + kn]
+        var dx_in_kn: Scalar[WXM_DTYPE] = NodalBasis1D[P].diff_entry[kn](in_)
         var k_node = jn * P1 + kn
         comptime for c in range(NC):
             var fx_kn = rebind[Scalar[WXM_DTYPE]](
@@ -161,7 +160,7 @@ def _dg_2d_compute_rhs_core[
             dfdx[c] += dx_in_kn * fx_kn
 
     comptime for ln in range(P1):
-        var dy_jn_ln: Scalar[WXM_DTYPE] = d_flat[jn * P1 + ln]
+        var dy_jn_ln: Scalar[WXM_DTYPE] = NodalBasis1D[P].diff_entry[ln](jn)
         var l_node = ln * P1 + in_
         comptime for c in range(NC):
             var fy_ln = rebind[Scalar[WXM_DTYPE]](
@@ -178,9 +177,18 @@ def _dg_2d_compute_rhs_core[
     # over baseline from Task 1, we kept the bit-identical 3-array layout
     # here and applied the aggressive register cut only to the 3D core
     # (which dominates the 3D-bound speedup ceiling).
-    var weights = NodalBasis1D[P].weights()
-    var w_0: Scalar[WXM_DTYPE] = weights[0]
-    var w_P: Scalar[WXM_DTYPE] = weights[P]
+    # The launcher passes 1 / jacobian and the weights enter as comptime
+    # reciprocals, so the kernel only multiplies. A double division costs
+    # roughly ten FP64 instructions on the device; the per-component
+    # `/ jacobian` form issued about 4·NC of them per node.
+    var inv_jac_x: Scalar[WXM_DTYPE] = inv_jacobian_x
+    var inv_jac_y: Scalar[WXM_DTYPE] = inv_jacobian_y
+    comptime inv_w0: Real = Real(1.0) / NodalBasis1D[P].weights()[0]
+    comptime inv_wP: Real = Real(1.0) / NodalBasis1D[P].weights()[P]
+    var sx_0: Scalar[WXM_DTYPE] = inv_jac_x * inv_w0
+    var sx_P: Scalar[WXM_DTYPE] = inv_jac_x * inv_wP
+    var sy_0: Scalar[WXM_DTYPE] = inv_jac_y * inv_w0
+    var sy_P: Scalar[WXM_DTYPE] = inv_jac_y * inv_wP
 
     var surface: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
@@ -195,7 +203,7 @@ def _dg_2d_compute_rhs_core[
             q_neg = _load_node_2d[P, NC](q, neg_e, jn * P1 + P)
         var f_star = num_flux_fn(q_neg, q_n, Real(1.0), Real(0.0))
         comptime for c in range(NC):
-            surface[c] += (f_star[c] - fx_n[c]) / (jacobian_x * w_0)
+            surface[c] += (f_star[c] - fx_n[c]) * sx_0
 
     if in_ == P:
         var fR = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 4 + FACE_DIR_RIGHT]))
@@ -208,7 +216,7 @@ def _dg_2d_compute_rhs_core[
             q_pos = _load_node_2d[P, NC](q, pos_e, jn * P1 + 0)
         var f_star = num_flux_fn(q_n, q_pos, Real(1.0), Real(0.0))
         comptime for c in range(NC):
-            surface[c] += (fx_n[c] - f_star[c]) / (jacobian_x * w_P)
+            surface[c] += (fx_n[c] - f_star[c]) * sx_P
 
     if jn == 0:
         var fB = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 4 + FACE_DIR_BOTTOM]))
@@ -221,7 +229,7 @@ def _dg_2d_compute_rhs_core[
             q_neg = _load_node_2d[P, NC](q, neg_e, P * P1 + in_)
         var f_star = num_flux_fn(q_neg, q_n, Real(0.0), Real(1.0))
         comptime for c in range(NC):
-            surface[c] += (f_star[c] - fy_n[c]) / (jacobian_y * w_0)
+            surface[c] += (f_star[c] - fy_n[c]) * sy_0
 
     if jn == P:
         var fT = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 4 + FACE_DIR_TOP]))
@@ -234,12 +242,12 @@ def _dg_2d_compute_rhs_core[
             q_pos = _load_node_2d[P, NC](q, pos_e, 0 * P1 + in_)
         var f_star = num_flux_fn(q_n, q_pos, Real(0.0), Real(1.0))
         comptime for c in range(NC):
-            surface[c] += (fy_n[c] - f_star[c]) / (jacobian_y * w_P)
+            surface[c] += (fy_n[c] - f_star[c]) * sy_P
 
     # --- Write back ---------------------------------------------------------
     var base = (e * nodes_per_elem + local_n) * NC
     comptime for c in range(NC):
         var v: Scalar[WXM_DTYPE] = (
-            -dfdx[c] / jacobian_x - dgdy[c] / jacobian_y + surface[c]
+            -dfdx[c] * inv_jac_x - dgdy[c] * inv_jac_y + surface[c]
         )
         rhs[base + c] = rebind[rhs.ElementType](v)

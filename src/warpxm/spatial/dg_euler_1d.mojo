@@ -43,7 +43,7 @@ def _euler_rhs_kernel_1d[
     gamma: Real,
     rho_min: Real,
     press_min: Real,
-    jacobian: Real,
+    inv_jacobian: Real,
     num_elements_i64: Int64,
 ):
     var num_elements = Int(num_elements_i64)
@@ -70,7 +70,7 @@ def _euler_rhs_kernel_1d[
     ](
         q, rhs, elem_left_face, elem_right_face,
         face_left, face_right, face_bc,
-        jacobian, num_elements,
+        inv_jacobian, num_elements,
         flux_x, num_flux, apply_bc,
     )
 
@@ -112,7 +112,7 @@ struct DGEulerSolver1D[P: Int]:
         ctx.enqueue_function[kernel](
             q_view, rhs_view, elf_view, erf_view, fl_view, fr_view, fbc_view,
             self.app.gas_gamma, self.app.min_density, self.app.min_pressure,
-            mesh.jacobian, Int64(mesh.num_elements),
+            Real(1.0) / mesh.jacobian, Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(num_nodes_per_elem, EB),
         )

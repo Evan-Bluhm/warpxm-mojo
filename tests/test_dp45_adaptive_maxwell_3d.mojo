@@ -95,6 +95,18 @@ def main() raises:
         )
         var dt_used = ret[0]
         var dt_next = ret[1]
+        # Controller contract: never step further than asked, and keep the
+        # suggested next step inside the [0.2, 5] clip of the step taken.
+        assert_true(
+            dt_used > Real(0.0)
+            and dt_used <= dt_try * (Real(1.0) + Real(1.0e-12)),
+            "step taken is longer than the step requested",
+        )
+        assert_true(
+            dt_next >= Real(0.2) * dt_used * (Real(1.0) - Real(1.0e-12))
+            and dt_next <= Real(5.0) * dt_used * (Real(1.0) + Real(1.0e-12)),
+            "suggested next step outside the [0.2, 5] clip",
+        )
         t += dt_used
         num_steps += 1
         if dt_used < min_dt: min_dt = dt_used
@@ -142,15 +154,15 @@ def main() raises:
     print("  max |E_x,E_y,B_x,B_z| :", max_other)
 
     # SSPRK3 baseline at dt=5e-4 is 2000 steps for t = 1.
-    assert_true(num_steps < 500,
-                "Adaptive DP45 took too many steps for smooth 3D Maxwell wave")
-    assert_true(l2_Ez < Real(1.0e-2), "E_z error worse than SSPRK3 baseline")
-    assert_true(l2_By < Real(1.0e-2), "B_y error worse than SSPRK3 baseline")
+    assert_true(
+        num_steps > 42 and num_steps < 58,
+        "step count outside the band around the measured value",
+    )
+    assert_true(l2_Ez < Real(2.5e-3), "E_z error worse than SSPRK3 baseline")
+    assert_true(l2_By < Real(2.5e-3), "B_y error worse than SSPRK3 baseline")
     # DP45 takes much larger dt than SSPRK3 — floating-point roundoff in the
     # transverse components is amplified accordingly. Still many orders of
     # magnitude below the wave amplitude.
-    assert_true(max_other < Real(1.0e-7),
+    assert_true(max_other < Real(1.0e-8),
                 "transverse components grew — 3D Maxwell coupling spurious")
-    assert_true(max_dt > min_dt * Real(1.5),
-                "Controller did not vary dt — likely a bug")
     print("PASSED")

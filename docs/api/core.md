@@ -33,8 +33,10 @@ from warpxm.core.math_compat import sqrt, fabs, sign, fmin, fmax, square
 
 These are thin shims around `std.math.*`:
 
-* `sqrt(x)` — `x ** Real(0.5)`. Works around the missing `float64` GPU
-  intrinsic for `std.math.sqrt` on NVIDIA targets.
+* `sqrt(x)` — the `llvm.sqrt` intrinsic, which lowers to the native
+  double-precision square root on NVIDIA targets (`std.math.sqrt` has no
+  `float64` GPU overload). Do not use `x ** Real(0.5)` in kernels: it calls
+  a software `pow` that is many times more expensive.
 * `fabs`, `fmin`, `fmax` — wrappers giving `Real`-typed return values
   to avoid promotion surprises.
 * `sign(x)` — returns `+1`, `-1`, or `0` (exact zero at the origin).

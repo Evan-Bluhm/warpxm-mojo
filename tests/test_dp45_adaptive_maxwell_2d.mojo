@@ -98,6 +98,18 @@ def main() raises:
         )
         var dt_used = ret[0]
         var dt_next = ret[1]
+        # Controller contract: never step further than asked, and keep the
+        # suggested next step inside the [0.2, 5] clip of the step taken.
+        assert_true(
+            dt_used > Real(0.0)
+            and dt_used <= dt_try * (Real(1.0) + Real(1.0e-12)),
+            "step taken is longer than the step requested",
+        )
+        assert_true(
+            dt_next >= Real(0.2) * dt_used * (Real(1.0) - Real(1.0e-12))
+            and dt_next <= Real(5.0) * dt_used * (Real(1.0) + Real(1.0e-12)),
+            "suggested next step outside the [0.2, 5] clip",
+        )
         t += dt_used
         num_steps += 1
         if dt_used < min_dt: min_dt = dt_used
@@ -145,11 +157,11 @@ def main() raises:
 
     # SSPRK3 baseline at dt = 5e-4 is ~1414 steps for t = 1/√2; adaptive
     # DP45 should be a sizeable fraction of that.
-    assert_true(num_steps < 700,
-                "Adaptive DP45 took too many steps for smooth Maxwell wave")
-    assert_true(l2_ez < Real(5.0e-3), "E_z error worse than SSPRK3 baseline")
-    assert_true(l2_bx < Real(5.0e-3), "B_x error worse than SSPRK3 baseline")
-    assert_true(l2_by < Real(5.0e-3), "B_y error worse than SSPRK3 baseline")
-    assert_true(max_dt > min_dt * Real(1.5),
-                "Controller did not vary dt — likely a bug")
+    assert_true(
+        num_steps > 64 and num_steps < 88,
+        "step count outside the band around the measured value",
+    )
+    assert_true(l2_ez < Real(3.7e-4), "E_z error worse than SSPRK3 baseline")
+    assert_true(l2_bx < Real(2.8e-4), "B_x error worse than SSPRK3 baseline")
+    assert_true(l2_by < Real(2.8e-4), "B_y error worse than SSPRK3 baseline")
     print("PASSED")

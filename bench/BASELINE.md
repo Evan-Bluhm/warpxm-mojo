@@ -116,3 +116,60 @@ A few observations against the [DG-core-performance task plan]
   (`imhd_glm_2d = 152` vs `imhd_2d = 159`). The GLM source kernel +
   ψ component (NC=9 vs 8) costs ~5 % vs straight MHD. Useful sanity
   check that GLM isn't a regression vector.
+
+## Numbers — after the FP64 trim (2026-11-21, Mojo 1.2.0)
+
+Prompted by upstream WARPXM's kernel work (`143dcfde0`, `a8cce53c7`,
+`tasks/KERNEL_PERF.md` there), which found its kernels bound by per-thread
+local-memory traffic. Profiling ours with `ncu` showed a different
+picture: local memory was already under 1 % of instructions, and every DG
+right-hand-side kernel had the FP64 pipe 87–88 % busy. So the lever here
+is FP64 instruction count, and three things dominated it:
+
+1. `math_compat.sqrt` was `x ** 0.5`, a software `pow` — two per Euler
+   face evaluation, four per MHD one. Now the `llvm.sqrt` intrinsic.
+2. Divisions: the 2D core divided by the Jacobian once per component
+   (~73 double divisions per thread for MHD), and the fluxes divided by ρ
+   separately for each velocity component. Now one reciprocal per state,
+   `1 / jacobian` from the launcher, comptime reciprocal weights.
+3. The Rusanov flux built f_x, f_y, f_z for both sides and dotted them
+   with the normal; the two off-axis fluxes were multiplied by a literal
+   zero that IEEE arithmetic cannot fold. Now F·n is formed directly.
+
+Also removed the remaining local-memory traffic (`diff_entry` select
+instead of the non-inlined `diff_matrix_flat()` call); that made no
+measurable difference on this GPU.
+
+Same session, same GPU, best of two runs, before = commit `f4531fa`:
+
+| Bench         | NC | before steps/s | after steps/s | speedup |
+| ------------- | -: | -------------: | ------------: | ------: |
+| advection_2d  | 1  | 2596.8         | 6241.1        | 2.40×   |
+| advection_3d  | 1  |  580.1         |  974.3        | 1.68×   |
+| euler_2d      | 5  |  181.5         |  683.9        | 3.77×   |
+| euler_3d      | 5  |   38.5         |  109.7        | 2.85×   |
+| imhd_2d       | 8  |  121.6         |  364.8        | 3.00×   |
+| imhd_3d       | 8  |   23.5         |   59.1        | 2.51×   |
+| imhd_glm_2d   | 9  |  119.0         |  334.0        | 2.81×   |
+| imhd_glm_3d   | 9  |   23.0         |   53.0        | 2.30×   |
+
+Per-launch `ncu` counters for the RHS kernel (thread instructions):
+
+| Kernel   | time before → after | FP64 instr.      | double divisions |
+| -------- | ------------------- | ---------------- | ---------------- |
+| euler_2d | 1.62 → 0.40 ms      | 111.7M → 28.3M   | 7.36M → 0.34M    |
+| imhd_2d  | 3.08 → 0.76 ms      | 193.7M → 53.2M   | 10.78M → 0.34M   |
+| euler_3d | 8.61 → 2.44 ms      | 734.3M → 235.0M  | 39.81M → 2.65M   |
+| imhd_3d  | 14.41 → 4.70 ms     | 1126.9M → 439.1M | 38.47M → 2.65M   |
+
+The FP64 pipe is still ~87 % busy afterwards, so further gains on this
+class of GPU have to come from fewer FP64 instructions again (the face
+flux is evaluated once from each side of every face), not from memory
+layout. On GPUs with full-rate FP64 the balance will differ; re-profile
+there before drawing conclusions.
+
+The MHD positivity preserver was a separate bottleneck in limited runs:
+2.46 ms per call against 0.36 ms for the RHS in the 3D Orszag-Tang test,
+because it bisected 50 times for every node of any element that needed
+limiting. It now bisects only nodes that still violate the bound at the
+current θ: 0.19 ms per call, same result to round-off.

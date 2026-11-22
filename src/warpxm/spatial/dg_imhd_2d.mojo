@@ -9,7 +9,10 @@ from max.gpu.host import DeviceContext
 from std.math import ceildiv
 from layout import TileTensor, TensorLayout, row_major
 
-from warpxm.apps.imhd import IMHD, MHD_NC
+from warpxm.apps.imhd import (
+    IMHD, MHD_NC, IDX_MX, IDX_MY, IDX_BX, IDX_BY,
+)
+from warpxm.core.bc import BC_WALL_FREESLIP, BC_PEC_WALL
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.spatial.dg_core_2d import (
@@ -24,16 +27,30 @@ def _apply_bc_imhd(
     bc_kind: Int,
     face_axis: Int,
 ) -> Array[Real, MHD_NC]:
-    """Ghost-state synthesis for 2D ideal MHD. Currently a copyout
-    fallback for every `bc_kind` — the 2D MHD tests that pass
-    `BC_WALL_FREESLIP` (Brio-Wu y-walls, etc.) happen to have $v_y = 0$
-    along the relevant boundary by construction, so copyout and
-    free-slip give the same ghost state. The 3D analog
-    (`_apply_bc_imhd_3d`) does flip normal momentum on
-    `BC_WALL_FREESLIP` and normal momentum + normal B on
-    `BC_PEC_WALL`; we'd port the same dispatch here if a 2D test
-    needs genuine wall behaviour."""
-    return q_interior.copy()
+    """Ghost-state synthesis for 2D ideal MHD (same dispatch as the 3D
+    wrapper's `_apply_bc_imhd_3d`).
+
+    `face_axis` is 0 for faces with normal ±x̂, 1 for normal ±ŷ.
+
+    * `BC_WALL_FREESLIP` flips the normal momentum component only.
+    * `BC_PEC_WALL` (perfectly conducting wall) flips normal momentum
+      AND normal B — enforcing impenetrability and B_n = 0 on the wall.
+    * Anything else (copyout) → ghost = interior.
+    """
+    var q: Array[Real, MHD_NC] = q_interior.copy()
+    if bc_kind == BC_WALL_FREESLIP:
+        if face_axis == 0:
+            q[IDX_MX] = -q_interior[IDX_MX]
+        else:
+            q[IDX_MY] = -q_interior[IDX_MY]
+    elif bc_kind == BC_PEC_WALL:
+        if face_axis == 0:
+            q[IDX_MX] = -q_interior[IDX_MX]
+            q[IDX_BX] = -q_interior[IDX_BX]
+        else:
+            q[IDX_MY] = -q_interior[IDX_MY]
+            q[IDX_BY] = -q_interior[IDX_BY]
+    return q^
 
 
 def _imhd_rhs_kernel_2d[
@@ -50,8 +67,8 @@ def _imhd_rhs_kernel_2d[
     gamma: Real,
     rho_min: Real,
     press_min: Real,
-    jacobian_x: Real,
-    jacobian_y: Real,
+    inv_jacobian_x: Real,
+    inv_jacobian_y: Real,
     num_elements_i64: Int64,
 ):
     var num_elements = Int(num_elements_i64)
@@ -87,7 +104,7 @@ def _imhd_rhs_kernel_2d[
         DG_CORE_2D_ELEMS_PER_BLOCK,
     ](
         q, rhs, face_neg_elem, face_pos_elem, elem_face_dir, face_bc,
-        jacobian_x, jacobian_y, num_elements,
+        inv_jacobian_x, inv_jacobian_y, num_elements,
         flux_x, flux_y, num_flux, apply_bc,
     )
 
@@ -133,7 +150,7 @@ struct DGImhdSolver2D[P: Int, USE_HLLD: Bool = False]:
         ctx.enqueue_function[kernel](
             q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             self.app.gas_gamma, self.app.min_density, self.app.min_pressure,
-            mesh.jacobian_x, mesh.jacobian_y, Int64(mesh.num_elements),
+            Real(1.0) / mesh.jacobian_x, Real(1.0) / mesh.jacobian_y, Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(P1, P1, EB),
         )

@@ -44,8 +44,8 @@ def _advection_rhs_kernel_2d[
     face_bc: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     velocity_x: Real,
     velocity_y: Real,
-    jacobian_x: Real,
-    jacobian_y: Real,
+    inv_jacobian_x: Real,
+    inv_jacobian_y: Real,
     num_elements_i64: Int64,
 ):
     var num_elements = Int(num_elements_i64)
@@ -77,7 +77,7 @@ def _advection_rhs_kernel_2d[
         DG_CORE_2D_ELEMS_PER_BLOCK,
     ](
         q, rhs, face_neg_elem, face_pos_elem, elem_face_dir, face_bc,
-        jacobian_x, jacobian_y, num_elements,
+        inv_jacobian_x, inv_jacobian_y, num_elements,
         flux_x, flux_y, num_flux, apply_bc,
     )
 
@@ -119,7 +119,7 @@ struct DGSpatialSolver2D[P: Int, NC: Int]:
         ctx.enqueue_function[kernel](
             q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             self.app.velocity_x, self.app.velocity_y,
-            mesh.jacobian_x, mesh.jacobian_y, Int64(mesh.num_elements),
+            Real(1.0) / mesh.jacobian_x, Real(1.0) / mesh.jacobian_y, Int64(mesh.num_elements),
             grid_dim=ceildiv(mesh.num_elements, EB),
             block_dim=(P1, P1, EB),
         )

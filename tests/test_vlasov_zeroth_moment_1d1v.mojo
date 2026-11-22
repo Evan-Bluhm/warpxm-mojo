@@ -92,7 +92,6 @@ def main() raises:
     )
 
     # GLL quadrature with P_v=3 over NV=16 cells is highly accurate for
-    # a Gaussian — tolerance is set generously to also absorb the tail
-    # truncation residue.
-    assert_true(max_abs_err < Real(1.0e-6), "ρ quadrature too inaccurate")
+    # a Gaussian; measured error 6.9e-12.
+    assert_true(max_abs_err < Real(5.0e-11), "ρ quadrature too inaccurate")
     print("PASSED")

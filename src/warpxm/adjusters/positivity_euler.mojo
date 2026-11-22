@@ -155,16 +155,29 @@ def _positivity_kernel_euler[
                 - Real(0.5) * (mx_bar * mx_bar + my_bar * my_bar + mz_bar * mz_bar)
                 - c_e * rho_bar
             )
-            var disc = B * B - Real(4.0) * A * C
-            if disc < Scalar[WXM_DTYPE](0.0): disc = 0.0
-            var sq = sqrt(disc)
-            var two_a = Real(2.0) * A + Real(1.0e-30)
-            var root_a = (-B - sq) / two_a
-            var root_b = (-B + sq) / two_a
+            # g(θ) = A θ² + B θ + C is ρ·(ρe − c_e) along the segment from
+            # the mean (θ = 0) to the node (θ = 1); we want its smallest
+            # root in (0, 1). The textbook (−B ± √disc) / 2A cancels
+            # catastrophically when |A C| ≪ B², which is the usual case
+            # (small deviation about the mean), so use the stable pair
+            # q / A and C / q with q = −(B + sign(B) √disc) / 2.
             var t: Scalar[WXM_DTYPE] = 1.0
-            if root_a > Scalar[WXM_DTYPE](0.0) and root_a < t: t = root_a
-            if root_b > Scalar[WXM_DTYPE](0.0) and root_b < t: t = root_b
-            if t < Scalar[WXM_DTYPE](0.0): t = 0.0
+            if C <= Scalar[WXM_DTYPE](0.0):
+                # The mean itself is inadmissible: nothing better is
+                # available than collapsing the element onto it.
+                t = 0.0
+            else:
+                var disc = B * B - Real(4.0) * A * C
+                if disc < Scalar[WXM_DTYPE](0.0): disc = 0.0
+                var sq = sqrt(disc)
+                var qq = -Real(0.5) * (B - sq)
+                if B >= Scalar[WXM_DTYPE](0.0): qq = -Real(0.5) * (B + sq)
+                if A != Scalar[WXM_DTYPE](0.0):
+                    var root_a = qq / A
+                    if root_a > Scalar[WXM_DTYPE](0.0) and root_a < t: t = root_a
+                if qq != Scalar[WXM_DTYPE](0.0):
+                    var root_b = C / qq
+                    if root_b > Scalar[WXM_DTYPE](0.0) and root_b < t: t = root_b
             if t < theta_p: theta_p = t
 
     if theta_p < Scalar[WXM_DTYPE](1.0):

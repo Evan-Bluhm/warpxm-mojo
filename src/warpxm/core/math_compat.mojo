@@ -5,6 +5,8 @@
 # device targets; here every helper is unconditionally device-callable because
 # every kernel goes to the GPU.
 
+from std.sys import llvm_intrinsic
+
 from warpxm.core.types import Real
 
 @always_inline
@@ -29,10 +31,11 @@ def square(x: Real) -> Real:
 
 @always_inline
 def sqrt(x: Real) -> Real:
-    """Square root that works on host and on NVIDIA / AMD GPU device code.
+    """IEEE square root on host and device, via the `llvm.sqrt` intrinsic.
 
-    `std.math.sqrt` currently emits an approximate-sqrt intrinsic that's
-    unsupported for `DType.float64` on NVIDIA GPUs. Routing through `x ** 0.5`
-    falls back to the standard IEEE sqrt and lowers cleanly to both targets.
+    On NVIDIA GPUs this lowers to the native `sqrt.rn.f64` instruction.
+    Do not write `x ** 0.5` instead: that calls the general `pow` routine,
+    which is many times more expensive in a kernel (it was the largest
+    single cost in the MHD flux before this was changed).
     """
-    return x ** Real(0.5)
+    return llvm_intrinsic["llvm.sqrt", Real, has_side_effect=False](x)

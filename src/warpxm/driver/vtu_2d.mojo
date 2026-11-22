@@ -13,7 +13,7 @@
 
 from max.gpu.host import DeviceContext
 
-from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_E
+from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 from warpxm.core.types import Real
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.variable.state_2d import DGState2D
@@ -161,8 +161,11 @@ def dump_euler_2d_frame[P: Int](
             var rho = q_host[b + IDX_RHO]
             var u = q_host[b + IDX_MX] / rho
             var v = q_host[b + IDX_MY] / rho
+            # The 2D state still carries m_z; it contributes to the kinetic
+            # energy even though w is not written out.
+            var w = q_host[b + IDX_MZ] / rho
             var et = q_host[b + IDX_E]
-            var ke = Real(0.5) * rho * (u * u + v * v)
+            var ke = Real(0.5) * rho * (u * u + v * v + w * w)
             var pp = (gamma - Real(1.0)) * (et - ke)
             out.write("          ")
             out.write(String(pp))

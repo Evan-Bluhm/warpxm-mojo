@@ -17,6 +17,10 @@
 # returns to the IC; the test stops at T/2, where it is the IC with the
 # transverse perturbation negated.
 #
+# After the Rusanov sweep, P = 2 is repeated with the HLLD flux, and the
+# P = 2, N = 32 case is re-run propagating along y with both fluxes
+# (see `_check_y_axis`).
+#
 # Sweep: `P ∈ {1, 2, 3}` × `NX ∈ {32, 64}`, `NY = 2` fixed (thin slab
 # just for the 2D solver). CFL pinned to `dt = 5·10⁻⁴` across the
 # whole sweep.
@@ -55,15 +59,29 @@ comptime DT: Real = 5.0e-4
 comptime T_FINAL: Real = 0.5
 
 
-def _one_run[P: Int](
-    var ctx: DeviceContext, num_x: Int,
+def _one_run[P: Int, HLLD: Bool](
+    var ctx: DeviceContext, num: Int, axis: Int,
     drho_tol: Real, de_tol: Real,
 ) raises -> Real:
+    """One Alfvén-wave run propagating along `axis` (0 = x, 1 = y) with
+    `num` elements along it and a two-element slab across it.
+
+    The setup is the x-propagating wave under a cyclic relabelling of the
+    vector components, `(x, y, z) -> (a0, a1, a2)`, which keeps it an exact
+    solution and routes the non-trivial fluxes through the faces normal to
+    `axis`. Returns the combined L² error of the four perturbation
+    components.
+    """
+    var a0 = axis
+    var a1 = (axis + 1) % 3
+    var a2 = (axis + 2) % 3
+    var nx = num if axis == 0 else NY
+    var ny = num if axis == 1 else NY
     var mesh = BlockMesh2D[P](
         ctx,
-        Real(0.0), Real(1.0),
-        Real(0.0), Real(1.0 / 8.0),
-        nx=num_x, ny=NY, periodic_x=True, periodic_y=True,
+        Real(0.0), Real(1.0) if axis == 0 else Real(1.0 / 8.0),
+        Real(0.0), Real(1.0) if axis == 1 else Real(1.0 / 8.0),
+        nx=nx, ny=ny, periodic_x=True, periodic_y=True,
     )
     var q = DGState2D[P, MHD_NC](ctx, mesh.num_elements)
 
@@ -73,27 +91,31 @@ def _one_run[P: Int](
     var nodes_per_elem = P1 * P1
     var inv_sqrt_rho = Real(1.0) / sqrt(RHO0)
     var k_wave = TWO_PI
+    # Element size along the propagation axis (the domain is [0, 1] there).
+    var ds = Real(1.0) / Real(num)
 
     var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for j in range(NY):
-        for i in range(num_x):
-            var xl = mesh.x_min + Real(i) * mesh.dx
-            var e = j * num_x + i
+    for j in range(ny):
+        for i in range(nx):
+            var e = j * nx + i
+            var cell = i if axis == 0 else j
             for jn in range(P1):
                 for in_ in range(P1):
-                    var x = (
-                        xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
+                    var node = in_ if axis == 0 else jn
+                    var s = (
+                        Real(cell) * ds
+                        + (Real(1.0) + ref_nodes[node]) * Real(0.5) * ds
                     )
-                    var c_v = cos(k_wave * x)
-                    var s_v = sin(k_wave * x)
-                    var By_ic = DELTA * c_v
-                    var Bz_ic = DELTA * s_v
-                    var uy_ic = -DELTA * c_v * inv_sqrt_rho
-                    var uz_ic = -DELTA * s_v * inv_sqrt_rho
+                    var c_v = cos(k_wave * s)
+                    var s_v = sin(k_wave * s)
+                    var B1_ic = DELTA * c_v
+                    var B2_ic = DELTA * s_v
+                    var u1_ic = -DELTA * c_v * inv_sqrt_rho
+                    var u2_ic = -DELTA * s_v * inv_sqrt_rho
 
-                    var bsq = B0 * B0 + By_ic * By_ic + Bz_ic * Bz_ic
+                    var bsq = B0 * B0 + B1_ic * B1_ic + B2_ic * B2_ic
                     var msq = (
-                        RHO0 * RHO0 * (uy_ic * uy_ic + uz_ic * uz_ic)
+                        RHO0 * RHO0 * (u1_ic * u1_ic + u2_ic * u2_ic)
                     )
                     var E_total = (
                         P0 / (GAMMA - Real(1.0))
@@ -104,16 +126,16 @@ def _one_run[P: Int](
                     var n = jn * P1 + in_
                     var b = (e * nodes_per_elem + n) * MHD_NC
                     host[b + IDX_RHO] = RHO0
-                    host[b + IDX_MX] = Real(0.0)
-                    host[b + IDX_MY] = RHO0 * uy_ic
-                    host[b + IDX_MZ] = RHO0 * uz_ic
+                    host[b + IDX_MX + a0] = Real(0.0)
+                    host[b + IDX_MX + a1] = RHO0 * u1_ic
+                    host[b + IDX_MX + a2] = RHO0 * u2_ic
                     host[b + IDX_E] = E_total
-                    host[b + IDX_BX] = B0
-                    host[b + IDX_BY] = By_ic
-                    host[b + IDX_BZ] = Bz_ic
+                    host[b + IDX_BX + a0] = B0
+                    host[b + IDX_BX + a1] = B1_ic
+                    host[b + IDX_BX + a2] = B2_ic
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
-    var spatial = DGImhdSolver2D[P](
+    var spatial = DGImhdSolver2D[P, HLLD](
         IMHD(
             gas_gamma=GAMMA, min_density=Real(1e-12),
             min_pressure=Real(1e-12), cfl_max=Real(0.5),
@@ -137,8 +159,8 @@ def _one_run[P: Int](
         t += dt_use
     ctx.synchronize()
 
-    # Combined L² over the four perturbation components (B_y, B_z, u_y, u_z).
-    # After exactly one period, the exact solution equals the IC.
+    # Combined L² over the four perturbation components. At T/2 the exact
+    # solution is the IC with the transverse perturbation negated.
     var ja = mesh.jacobian_x * mesh.jacobian_y
     var acc: Real = 0.0
     var max_drho: Real = 0.0
@@ -150,30 +172,32 @@ def _one_run[P: Int](
         + Real(0.5) * RHO0 * DELTA * DELTA * inv_sqrt_rho * inv_sqrt_rho
     )
     with q.buf.map_to_host() as h:
-        for j in range(NY):
-            for i in range(num_x):
-                var xl = mesh.x_min + Real(i) * mesh.dx
-                var e = j * num_x + i
+        for j in range(ny):
+            for i in range(nx):
+                var e = j * nx + i
+                var cell = i if axis == 0 else j
                 for jn in range(P1):
                     for in_ in range(P1):
-                        var x = (
-                            xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
+                        var node = in_ if axis == 0 else jn
+                        var s = (
+                            Real(cell) * ds
+                            + (Real(1.0) + ref_nodes[node]) * Real(0.5) * ds
                         )
-                        var c_v = cos(k_wave * x)
-                        var s_v = sin(k_wave * x)
-                        var By_ex = -DELTA * c_v
-                        var Bz_ex = -DELTA * s_v
-                        var uy_ex = DELTA * c_v * inv_sqrt_rho
-                        var uz_ex = DELTA * s_v * inv_sqrt_rho
+                        var c_v = cos(k_wave * s)
+                        var s_v = sin(k_wave * s)
+                        var B1_ex = -DELTA * c_v
+                        var B2_ex = -DELTA * s_v
+                        var u1_ex = DELTA * c_v * inv_sqrt_rho
+                        var u2_ex = DELTA * s_v * inv_sqrt_rho
                         var n = jn * P1 + in_
                         var b = (e * nodes_per_elem + n) * MHD_NC
                         var rho = h[b + IDX_RHO]
-                        var uy = h[b + IDX_MY] / rho
-                        var uz = h[b + IDX_MZ] / rho
-                        var d_By = h[b + IDX_BY] - By_ex
-                        var d_Bz = h[b + IDX_BZ] - Bz_ex
-                        var d_uy = uy - uy_ex
-                        var d_uz = uz - uz_ex
+                        var u1 = h[b + IDX_MX + a1] / rho
+                        var u2 = h[b + IDX_MX + a2] / rho
+                        var d_B1 = h[b + IDX_BX + a1] - B1_ex
+                        var d_B2 = h[b + IDX_BX + a2] - B2_ex
+                        var d_u1 = u1 - u1_ex
+                        var d_u2 = u2 - u2_ex
                         var d_rho = rho - RHO0
                         var d_E = h[b + IDX_E] - E_exact
                         if d_rho > max_drho: max_drho = d_rho
@@ -182,27 +206,31 @@ def _one_run[P: Int](
                         if -d_E > max_dE: max_dE = -d_E
                         var jw = ja * weights[in_] * weights[jn]
                         acc += jw * (
-                            d_By * d_By + d_Bz * d_Bz
-                            + d_uy * d_uy + d_uz * d_uz
+                            d_B1 * d_B1 + d_B2 * d_B2
+                            + d_u1 * d_u1 + d_u2 * d_u2
                         )
-    print("  P =", P, " NX =", num_x, " max |Δρ| =", max_drho, " max |ΔE| =", max_dE)
+    print(
+        "  P =", P, " HLLD =", HLLD, " axis =", axis, " N =", num,
+        " max |Δρ| =", max_drho, " max |ΔE| =", max_dE,
+    )
     assert_true(max_drho < drho_tol, "density drifted (Alfvén wave is incompressible)")
     assert_true(max_dE < de_tol, "total energy drifted")
     return acc ** Real(0.5)
 
 
-def _check_rate[P: Int](
+def _check_rate[P: Int, HLLD: Bool](
     var ctx: DeviceContext, expected: Real, tol_lo: Real, tol_hi: Real,
     drho_tol: Real, de_tol: Real,
-) raises:
-    """Check the observed rate and bound both errors absolutely.
+) raises -> Real:
+    """Check the observed rate and bound both errors absolutely. Returns
+    the coarse-mesh error.
 
     `tol_lo` / `tol_hi` are about 3x the measured coarse / fine errors, so
     a defect that scales the error uniformly (and leaves the rate intact)
     still fails.
     """
-    var err_lo = _one_run[P](ctx, 32, drho_tol, de_tol)
-    var err_hi = _one_run[P](ctx, 64, drho_tol, de_tol)
+    var err_lo = _one_run[P, HLLD](ctx, 32, 0, drho_tol, de_tol)
+    var err_hi = _one_run[P, HLLD](ctx, 64, 0, drho_tol, de_tol)
     var rate = log2(err_lo / err_hi)
     assert_true(err_lo < tol_lo, "coarse-mesh L2 error above tolerance")
     assert_true(err_hi < tol_hi, "fine-mesh L2 error above tolerance")
@@ -216,15 +244,49 @@ def _check_rate[P: Int](
         rate > expected - Real(0.25),
         "2D MHD Alfvén-wave convergence rate below tolerance",
     )
+    return err_lo
+
+
+def _rel_diff(a: Real, b: Real) -> Real:
+    var d = a - b
+    if d < Real(0.0): d = -d
+    return d / b
+
+
+def _check_y_axis(var ctx: DeviceContext, rus_x: Real, hlld_x: Real) raises:
+    """The same wave along y (a cyclic relabelling of the components) must
+    reproduce the x-run error: it sends the non-trivial states through the
+    y-normal faces of the DG core and of both numerical fluxes. `rus_x` /
+    `hlld_x` are the P=2, N=32 errors of the x runs from the rate checks."""
+    var rus_y = _one_run[2, False](ctx, 32, 1, Real(4.5e-5), Real(1.2e-6))
+    var hlld_y = _one_run[2, True](ctx, 32, 1, Real(5.2e-5), Real(1.2e-6))
+    print("P=2 N=32  Rusanov x / y:", rus_x, rus_y, "  HLLD x / y:", hlld_x, hlld_y)
+    var sym_tol = Real(1.0e-9)
+    assert_true(
+        _rel_diff(rus_y, rus_x) < sym_tol,
+        "Rusanov error differs between propagation axes",
+    )
+    assert_true(
+        _rel_diff(hlld_y, hlld_x) < sym_tol,
+        "HLLD error differs between propagation axes",
+    )
+    assert_true(
+        hlld_x < rus_x,
+        "HLLD should be less dissipative than Rusanov on a smooth wave",
+    )
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
-    _check_rate[1](ctx, Real(2.0), Real(3.2e-3), Real(8.0e-4),
+    _ = _check_rate[1, False](ctx, Real(2.0), Real(3.2e-3), Real(8.0e-4),
         Real(1.0e-10), Real(1.0e-10))
-    _check_rate[2](ctx, Real(3.0), Real(2.5e-5), Real(3.2e-6),
+    var rus_x = _check_rate[2, False](ctx, Real(3.0), Real(2.5e-5), Real(3.2e-6),
         Real(4.5e-5), Real(1.2e-6))
-    _check_rate[3](ctx, Real(4.0), Real(2.0e-7), Real(1.2e-8),
+    _ = _check_rate[3, False](ctx, Real(4.0), Real(2.0e-7), Real(1.2e-8),
         Real(2.2e-6), Real(3.2e-8))
+    # HLLD (Miyoshi-Kusano) on the same smooth wave.
+    var hlld_x = _check_rate[2, True](ctx, Real(3.0), Real(2.2e-5), Real(2.7e-6),
+        Real(5.2e-5), Real(1.2e-6))
+    _check_y_axis(ctx, rus_x, hlld_x)
     print("PASSED")

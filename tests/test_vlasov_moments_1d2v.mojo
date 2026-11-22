@@ -158,12 +158,11 @@ def main() raises:
     )
 
     # Tolerances. ρ-axis truncation residue ≈ σ √π · erfc(V/σ) ≈ 1.4·10⁻⁹;
-    # combined into ρ ≈ 2·rho_axis·that ≈ 3.9·10⁻⁹. Use 1e-7 to absorb
-    # quadrature noise. E_kin truncation σ²V·exp(-V²/σ²) ≈ 2.3·10⁻⁸ on
-    # one axis multiplied by `rho_axis` ≈ 1.25 — call it 5e-8. Use 1e-6.
+    # combined into ρ ≈ 2·rho_axis·that ≈ 3.9·10⁻⁹ (measured 4.2e-10). E_kin truncation σ²V·exp(-V²/σ²) ≈ 2.3·10⁻⁸ on
+    # one axis multiplied by `rho_axis` ≈ 1.25 — call it 5e-8 (measured 2.6e-9).
     # J components should be at machine eps.
-    assert_true(max_rho_err < Real(1.0e-7), "ρ moment off")
-    assert_true(max_jx < Real(1.0e-12), "J_x not zero by symmetry")
-    assert_true(max_jy < Real(1.0e-12), "J_y not zero by symmetry")
-    assert_true(max_e_err < Real(1.0e-6), "E_kin moment off")
+    assert_true(max_rho_err < Real(4.0e-9), "ρ moment off")
+    assert_true(max_jx < Real(1.0e-15), "J_x not zero by symmetry")
+    assert_true(max_jy < Real(1.0e-15), "J_y not zero by symmetry")
+    assert_true(max_e_err < Real(2.5e-8), "E_kin moment off")
     print("PASSED")

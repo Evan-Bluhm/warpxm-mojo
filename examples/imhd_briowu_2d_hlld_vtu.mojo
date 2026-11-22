@@ -54,7 +54,7 @@ def main() raises:
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(0.1),
         nx=NX, ny=NY, periodic_x=False, periodic_y=False,
         bc_left=BC_COPYOUT, bc_right=BC_COPYOUT,
-        bc_bottom=BC_WALL_FREESLIP, bc_top=BC_WALL_FREESLIP,
+        bc_bottom=BC_COPYOUT, bc_top=BC_COPYOUT,  # v_y != 0 in Brio-Wu: y is an outflow, not a wall
     )
     var q = DGState2D[P, MHD_NC](ctx, mesh.num_elements)
 

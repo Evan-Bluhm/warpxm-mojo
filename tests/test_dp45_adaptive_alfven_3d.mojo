@@ -144,6 +144,18 @@ def main() raises:
         )
         var dt_used = ret[0]
         var dt_next = ret[1]
+        # Controller contract: never step further than asked, and keep the
+        # suggested next step inside the [0.2, 5] clip of the step taken.
+        assert_true(
+            dt_used > Real(0.0)
+            and dt_used <= dt_try * (Real(1.0) + Real(1.0e-12)),
+            "step taken is longer than the step requested",
+        )
+        assert_true(
+            dt_next >= Real(0.2) * dt_used * (Real(1.0) - Real(1.0e-12))
+            and dt_next <= Real(5.0) * dt_used * (Real(1.0) + Real(1.0e-12)),
+            "suggested next step outside the [0.2, 5] clip",
+        )
         t += dt_used
         num_steps += 1
         if dt_used < min_dt:
@@ -207,16 +219,13 @@ def main() raises:
 
     # SSPRK3 baseline at dt = 1e-3 is 1000 steps for t = 1.
     assert_true(
-        num_steps < 400,
-        "Adaptive DP45 took too many steps for smooth 3D Alfvén",
+        num_steps > 111 and num_steps < 151,
+        "step count outside the band around the measured value",
     )
-    assert_true(l2_By < Real(5.0e-3), "B_y error worse than SSPRK3 baseline")
-    assert_true(l2_Bz < Real(5.0e-3), "B_z error worse than SSPRK3 baseline")
+    assert_true(l2_By < Real(7.5e-5), "B_y error worse than SSPRK3 baseline")
+    assert_true(l2_Bz < Real(7.5e-5), "B_z error worse than SSPRK3 baseline")
     assert_true(
-        max_drho < Real(1.0e-2),
+        max_drho < Real(7.0e-4),
         "density drifted — wave should stay incompressible",
-    )
-    assert_true(
-        max_dt > min_dt * Real(1.5), "Controller did not vary dt — likely a bug"
     )
     print("PASSED")

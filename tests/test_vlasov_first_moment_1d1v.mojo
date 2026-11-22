@@ -129,7 +129,7 @@ def main() raises:
         "max |err| =", err_shift,
     )
     assert_true(
-        err_shift < Real(1.0e-7),
+        err_shift < Real(5.0e-9),  # measured 8.3e-10
         "shifted-Maxwellian J quadrature too inaccurate",
     )
 

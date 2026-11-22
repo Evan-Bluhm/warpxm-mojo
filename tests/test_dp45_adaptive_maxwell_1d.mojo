@@ -81,6 +81,18 @@ def main() raises:
         )
         var dt_used = ret[0]
         var dt_next = ret[1]
+        # Controller contract: never step further than asked, and keep the
+        # suggested next step inside the [0.2, 5] clip of the step taken.
+        assert_true(
+            dt_used > Real(0.0)
+            and dt_used <= dt_try * (Real(1.0) + Real(1.0e-12)),
+            "step taken is longer than the step requested",
+        )
+        assert_true(
+            dt_next >= Real(0.2) * dt_used * (Real(1.0) - Real(1.0e-12))
+            and dt_next <= Real(5.0) * dt_used * (Real(1.0) + Real(1.0e-12)),
+            "suggested next step outside the [0.2, 5] clip",
+        )
         t += dt_used
         num_steps += 1
         if dt_used < min_dt: min_dt = dt_used
@@ -120,10 +132,12 @@ def main() raises:
     print("  max |E_x,E_y,B_x,B_z| :", max_other)
 
     # Fixed-dt SSPRK3 baseline is ~2000 steps at dt=5e-4.
-    assert_true(num_steps < 300, "Adaptive DP45 took too many steps")
-    assert_true(l2_Ez < Real(1.0e-3), "E_z error worse than baseline")
-    assert_true(l2_By < Real(1.0e-3), "B_y error worse than baseline")
-    assert_true(max_other < Real(1.0e-7),
+    assert_true(
+        num_steps > 44 and num_steps < 60,
+        "step count outside the band around the measured value",
+    )
+    assert_true(l2_Ez < Real(3.1e-4), "E_z error worse than baseline")
+    assert_true(l2_By < Real(3.1e-4), "B_y error worse than baseline")
+    assert_true(max_other < Real(1.0e-12),
                 "Transverse components grew — coupling spurious")
-    assert_true(max_dt > min_dt * Real(1.5), "Controller did not vary dt")
     print("PASSED")

@@ -193,6 +193,24 @@ struct NodalBasis1D[P: Int](Copyable, Movable):
                 return _to_runtime[25, _D_P4_FLAT, DD]()
 
     @staticmethod
+    @always_inline
+    def diff_entry[col: Int](row: Int) -> Real:
+        """`D[row, col]` for a compile-time column and a run-time row.
+
+        For GPU kernels. `diff_matrix_flat()` is `@inline(.never)` (see the
+        note above), so inside a kernel it is a real call that returns the
+        table through per-thread local memory, and every entry is then a
+        local-memory load. This accessor is a select chain over immediate
+        constants instead: no call, no local memory.
+        """
+        var v: Real = 0.0
+        comptime for r in range(Self.num_nodes):
+            comptime d_rc: Real = Self.diff_matrix_flat()[r * Self.num_nodes + col]
+            if row == r:
+                v = d_rc
+        return v
+
+    @staticmethod
     def left_face_node() -> Int:
         """Index of the node coincident with ξ = -1 (the left face)."""
         return 0

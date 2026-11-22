@@ -231,12 +231,14 @@ def main() raises:
     # these parameters M gets ~ erfc ≈ 5e-11 → propagated 1e-9 over
     # the run; E_kin picks up a `v_max² ≈ 16` factor → ~1e-7. P is
     # protected by symmetry and stays at machine epsilon.
-    assert_true(adM / m0_initial < Real(1.0e-8), "BGK didn't conserve M")
+    # Measured: ΔM/M = 6.5e-10, ΔP = 4e-18, ΔE/E = 2.9e-8.
+    assert_true(adM / m0_initial < Real(5.0e-9), "BGK didn't conserve M")
     assert_true(adP < Real(1.0e-12), "BGK didn't conserve P")
-    assert_true(adE / e0_initial < Real(1.0e-6), "BGK didn't conserve E_kin")
+    assert_true(adE / e0_initial < Real(2.0e-7), "BGK didn't conserve E_kin")
     # (b) Convergence: at t = 10 · τ, deviation ≲ exp(-10) ≈ 4·10⁻⁵
-    # of initial. The initial L² (f₀ − f_M) is O(0.1); generous 1e-3
-    # absorbs any tail residue.
-    assert_true(l2 < Real(1.0e-3), "BGK relaxation didn't converge")
+    # of initial. The initial L² (f₀ − f_M) is O(0.1), so ≈ 5e-6 is
+    # expected; measured 7.5e-6. (A relaxation rate 20 % too slow
+    # would leave exp(-8)·0.1 ≈ 3.4e-5.)
+    assert_true(l2 < Real(2.0e-5), "BGK relaxation didn't converge")
 
     print("PASSED")

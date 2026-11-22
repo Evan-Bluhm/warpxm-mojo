@@ -11,13 +11,21 @@
 # With `α = q/m = -1`, `n = ∫ f dv = 1` (we use a *normalised*
 # Maxwellian so n=1), and `ε₀ = 1`, this is `u'' = -u`. Period `2π`.
 #
+# Exact solution for `E(0) = E0`, `u(0) = 0`:
+#
+#     E(t) = E0 · cos t,        J(t) = n·u(t) = -E0 · sin t.
+#
 # We integrate one full period with the coupled SSPRK3 stepper and
-# check that:
-#   * E_x returns to its initial value to a few · 10⁻³ — this
-#     verifies the two-way Vlasov ↔ Maxwell coupling closes the
-#     oscillation cycle.
-#   * E_x stays uniform in x to machine precision — no spurious
-#     spatial structure leaks in from the kernel.
+# compare `E_x` and the species current `J = ∫ v f dv` with that
+# solution at every quarter period (t = π/2, π, 3π/2, 2π). Checking
+# only the end of the period is not enough: with either half of the
+# coupling removed `E_x` simply stays at `E0` and "returns" trivially.
+# The quarter-period samples pin the frequency (E must vanish at π/2
+# and 3π/2), the amplitude and sign of the particle response (J = ∓E0
+# there), and the sign of the field response (E = -E0 at π).
+#
+# Also checked: `E_x` stays uniform in x to machine precision — no
+# spurious spatial structure leaks in from the kernel.
 #
 # This is the smallest non-trivial test of the coupled stepper. A
 # more ambitious Langmuir-oscillation test with a spatially varying
@@ -66,7 +74,9 @@ comptime C_LIGHT: Real = 1.0
 # residue is ~ 1e-9). Plasma frequency in these normalised units is
 # ω_p² = n · α² / ε₀ = 1, period = 2π.
 comptime T_FINAL: Real = 2.0 * PI
-comptime DT: Real = 0.02
+# 80 steps per quarter period, so the samples land exactly on kπ/2.
+comptime STEPS_PER_QUARTER: Int = 80
+comptime DT: Real = T_FINAL / Real(4 * STEPS_PER_QUARTER)
 comptime E0: Real = 0.01  # initial uniform field perturbation
 
 
@@ -151,46 +161,58 @@ def main() raises:
             ctx, j_current, qm_out, CHARGE_MASS_RATIO, EPS0,
         )
 
-    # --- time loop: one full plasma period ---
-    var t: Real = 0.0
-    var nsteps: Int = 0
-    while t < T_FINAL - Real(0.5) * DT:
-        var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q_phase, q_maxwell, dt_use, compute_joint_rhs)
-        t += dt_use
-        nsteps += 1
-    ctx.synchronize()
-
-    # --- checks ---
-    var max_abs_dev: Real = 0.0
+    # --- time loop: one full plasma period, sampled every quarter ---
+    # Exact (E/E0, J/E0) at t = π/2, π, 3π/2, 2π.
+    var e_exact = [Real(0.0), Real(-1.0), Real(0.0), Real(1.0)]
+    var j_exact = [Real(-1.0), Real(0.0), Real(1.0), Real(0.0)]
+    var max_e_err: Real = 0.0
+    var max_j_err: Real = 0.0
     var max_x_spread: Real = 0.0
-    with q_maxwell.buf.map_to_host() as h:
-        var e0_at_node0 = h[0 * MAXWELL_NC + IDX_EX]
-        for n in range(node_count):
-            var ex_val = h[n * MAXWELL_NC + IDX_EX]
-            var dev = ex_val - E0
-            var adev = dev if dev >= 0.0 else -dev
-            if adev > max_abs_dev:
-                max_abs_dev = adev
-            var spread = ex_val - e0_at_node0
-            var aspread = spread if spread >= 0.0 else -spread
-            if aspread > max_x_spread:
-                max_x_spread = aspread
+    var t: Real = 0.0
+    for quarter in range(4):
+        for _ in range(STEPS_PER_QUARTER):
+            stepper.step(ctx, q_phase, q_maxwell, DT, compute_joint_rhs)
+            t += DT
+        moments.first_moment(ctx, phase_mesh, q_phase, j_current)
+        ctx.synchronize()
+        var e_node0: Real
+        with q_maxwell.buf.map_to_host() as h:
+            e_node0 = h[IDX_EX]
+            for n in range(node_count):
+                var ex_val = h[n * MAXWELL_NC + IDX_EX]
+                var e_err = abs(ex_val - E0 * e_exact[quarter])
+                if e_err > max_e_err:
+                    max_e_err = e_err
+                var spread = abs(ex_val - e_node0)
+                if spread > max_x_spread:
+                    max_x_spread = spread
+        var j_node0: Real
+        with j_current.buf.map_to_host() as hj:
+            j_node0 = hj[0]
+            for n in range(node_count):
+                var j_err = abs(hj[n] - E0 * j_exact[quarter])
+                if j_err > max_j_err:
+                    max_j_err = j_err
+        print(
+            "  t =", t, " E_x/E0 =", e_node0 / E0, " J/E0 =", j_node0 / E0,
+        )
 
     print(
-        "Vlasov-Maxwell oscillator 1D1V: steps =", nsteps,
-        "t_final =", t,
-        "|E_x(T) - E0| =", max_abs_dev,
-        "x-spread =", max_x_spread,
+        "Vlasov-Maxwell oscillator 1D1V: max |E - E_exact| / E0 =",
+        max_e_err / E0,
+        " max |J - J_exact| / E0 =", max_j_err / E0,
+        " x-spread =", max_x_spread,
     )
 
-    # After one full period the field should return to E0 within
-    # SSPRK3 truncation × period: ~ (dt)^3 · T · ω_p^3 ~ (0.02)^3 · 2π
-    # ≈ 5e-5. Use a generous 5e-3 to also absorb DG spatial error
-    # and Vlasov truncation on the moments.
+    # Measured: 2.0e-6 (E) and 1.5e-6 (J) relative to E0 — the SSPRK3
+    # amplitude / phase error accumulated over one period.
     assert_true(
-        max_abs_dev < Real(5.0e-3),
-        "E_x didn't close one plasma-frequency cycle",
+        max_e_err < Real(1.0e-5) * E0,
+        "E_x does not follow E0·cos(ω_p t)",
+    )
+    assert_true(
+        max_j_err < Real(1.0e-5) * E0,
+        "species current does not follow -E0·sin(ω_p t)",
     )
     # E_x must stay uniform in x — the kernel correctly handles the
     # no-x-physics case. Machine precision.

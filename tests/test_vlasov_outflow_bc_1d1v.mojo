@@ -179,6 +179,7 @@ def main() raises:
     # `f(v_max) ≈ 0.135` is substantial and the wave at that face is
     # inflow-directed. Under the old copyout BC this same simulation
     # would have grown the mass by a few percent.
-    assert_true(rel_dM < Real(1.0e-10), "outflow BC didn't conserve mass")
+    # Measured 2.9e-15.
+    assert_true(rel_dM < Real(1.0e-13), "outflow BC didn't conserve mass")
 
     print("PASSED")

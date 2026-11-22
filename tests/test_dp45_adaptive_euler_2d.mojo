@@ -96,6 +96,18 @@ def main() raises:
         )
         var dt_used = ret[0]
         var dt_next = ret[1]
+        # Controller contract: never step further than asked, and keep the
+        # suggested next step inside the [0.2, 5] clip of the step taken.
+        assert_true(
+            dt_used > Real(0.0)
+            and dt_used <= dt_try * (Real(1.0) + Real(1.0e-12)),
+            "step taken is longer than the step requested",
+        )
+        assert_true(
+            dt_next >= Real(0.2) * dt_used * (Real(1.0) - Real(1.0e-12))
+            and dt_next <= Real(5.0) * dt_used * (Real(1.0) + Real(1.0e-12)),
+            "suggested next step outside the [0.2, 5] clip",
+        )
         t += dt_used
         num_steps += 1
         if dt_used < min_dt: min_dt = dt_used
@@ -130,10 +142,10 @@ def main() raises:
     print("  max dt used     :", max_dt)
     print("  ρ L2 error      :", l2)
 
-    assert_true(num_steps < 500,
-                "Adaptive DP45 took too many steps for smooth Euler entropy wave")
-    assert_true(l2 < Real(1.0e-5),
+    assert_true(
+        num_steps > 170 and num_steps < 230,
+        "step count outside the band around the measured value",
+    )
+    assert_true(l2 < Real(2.0e-6),
                 "Adaptive DP45 ρ error worse than expected")
-    assert_true(max_dt > min_dt * Real(1.5),
-                "Controller did not vary dt — likely a bug")
     print("PASSED")

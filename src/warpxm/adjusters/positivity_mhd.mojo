@@ -110,9 +110,21 @@ def _positivity_kernel_mhd[
                 )
 
     # --- Pressure step (bisection on cubic) --------------------------------
+    # f(θ) = _mhd_f(mean + θ (node − mean)) is ≥ 0 at θ = 0 (admissible
+    # mean) and the admissible set is convex, so along each node's segment
+    # f changes sign at most once. θ_p is the largest θ for which every
+    # node is admissible.
+    #
+    # Nodes are visited in turn with a running θ_p, and a node is bisected
+    # only if it still violates the bound at the current θ_p — typically
+    # one or two nodes of a bad element, not all of them. Both loops are
+    # run-time loops: the kernel's latency is the serial depth of the
+    # worst element, and bisecting every node (nodes × 50 evaluations of
+    # f, fully unrolled) made this kernel several times more expensive
+    # than the DG right-hand side.
     var theta_p: Scalar[WXM_DTYPE] = 1.0
 
-    comptime for n in range(nodes_per_elem):
+    for n in range(nodes_per_elem):
         var base = (e * nodes_per_elem + n) * NC
         var rho_n = rebind[Scalar[WXM_DTYPE]](q[base + IDX_RHO])
         var mx_n = rebind[Scalar[WXM_DTYPE]](q[base + IDX_MX])
@@ -122,32 +134,50 @@ def _positivity_kernel_mhd[
         var Bx_n = rebind[Scalar[WXM_DTYPE]](q[base + IDX_BX])
         var By_n = rebind[Scalar[WXM_DTYPE]](q[base + IDX_BY])
         var Bz_n = rebind[Scalar[WXM_DTYPE]](q[base + IDX_BZ])
-        var f_one = _mhd_f(rho_n, mx_n, my_n, mz_n, E_n, Bx_n, By_n, Bz_n, c_e)
-        if f_one < Scalar[WXM_DTYPE](0.0):
-            var d_rho = rho_n - bar[IDX_RHO]
-            var d_mx = mx_n - bar[IDX_MX]
-            var d_my = my_n - bar[IDX_MY]
-            var d_mz = mz_n - bar[IDX_MZ]
-            var d_E = E_n - bar[IDX_E]
-            var d_Bx = Bx_n - bar[IDX_BX]
-            var d_By = By_n - bar[IDX_BY]
-            var d_Bz = Bz_n - bar[IDX_BZ]
+        var d_rho = rho_n - bar[IDX_RHO]
+        var d_mx = mx_n - bar[IDX_MX]
+        var d_my = my_n - bar[IDX_MY]
+        var d_mz = mz_n - bar[IDX_MZ]
+        var d_E = E_n - bar[IDX_E]
+        var d_Bx = Bx_n - bar[IDX_BX]
+        var d_By = By_n - bar[IDX_BY]
+        var d_Bz = Bz_n - bar[IDX_BZ]
+
+        # f at the current θ_p. While nothing has been limited (θ_p = 1)
+        # use the stored node values themselves, not mean + 1·(node − mean),
+        # so an untouched element is judged on exactly what it holds.
+        var f_cur = _mhd_f(rho_n, mx_n, my_n, mz_n, E_n, Bx_n, By_n, Bz_n, c_e)
+        if theta_p < Scalar[WXM_DTYPE](1.0):
+            f_cur = _mhd_f(
+                bar[IDX_RHO] + theta_p * d_rho,
+                bar[IDX_MX] + theta_p * d_mx,
+                bar[IDX_MY] + theta_p * d_my,
+                bar[IDX_MZ] + theta_p * d_mz,
+                bar[IDX_E] + theta_p * d_E,
+                bar[IDX_BX] + theta_p * d_Bx,
+                bar[IDX_BY] + theta_p * d_By,
+                bar[IDX_BZ] + theta_p * d_Bz,
+                c_e,
+            )
+        if f_cur < Scalar[WXM_DTYPE](0.0):
             var lo: Scalar[WXM_DTYPE] = 0.0
-            var hi: Scalar[WXM_DTYPE] = 1.0
-            comptime for _bisect_it in range(50):
+            var hi: Scalar[WXM_DTYPE] = theta_p
+            for _bisect_it in range(50):
                 var mid = Real(0.5) * (lo + hi)
-                var r_m = bar[IDX_RHO] + mid * d_rho
-                var mx_m = bar[IDX_MX] + mid * d_mx
-                var my_m = bar[IDX_MY] + mid * d_my
-                var mz_m = bar[IDX_MZ] + mid * d_mz
-                var E_m = bar[IDX_E] + mid * d_E
-                var Bx_m = bar[IDX_BX] + mid * d_Bx
-                var By_m = bar[IDX_BY] + mid * d_By
-                var Bz_m = bar[IDX_BZ] + mid * d_Bz
-                var f_m = _mhd_f(r_m, mx_m, my_m, mz_m, E_m, Bx_m, By_m, Bz_m, c_e)
+                var f_m = _mhd_f(
+                    bar[IDX_RHO] + mid * d_rho,
+                    bar[IDX_MX] + mid * d_mx,
+                    bar[IDX_MY] + mid * d_my,
+                    bar[IDX_MZ] + mid * d_mz,
+                    bar[IDX_E] + mid * d_E,
+                    bar[IDX_BX] + mid * d_Bx,
+                    bar[IDX_BY] + mid * d_By,
+                    bar[IDX_BZ] + mid * d_Bz,
+                    c_e,
+                )
                 if f_m >= Scalar[WXM_DTYPE](0.0): lo = mid
                 else: hi = mid
-            if lo < theta_p: theta_p = lo
+            theta_p = lo
 
     if theta_p < Scalar[WXM_DTYPE](1.0):
         if theta_p < Scalar[WXM_DTYPE](0.0): theta_p = 0.0

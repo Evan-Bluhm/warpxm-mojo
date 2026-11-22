@@ -95,7 +95,7 @@ def main() raises:
     # tolerance also covers the erfc(4.24) ≈ 1.5e-9 tail truncation
     # residue.
     assert_true(
-        max_abs_err < Real(1.0e-7),
+        max_abs_err < Real(2.0e-10),  # measured 2.3e-11
         "second-moment quadrature too inaccurate",
     )
     print("PASSED")

@@ -23,6 +23,10 @@
 # This setup exercises every PEC wall axis (the x and y walls actively,
 # the z walls trivially) and confirms the 3D Maxwell kernel doesn't leak
 # energy into E_x / E_y / B_z modes through the PEC ghost-state synthesis.
+#
+# A second run covers `BC_PMC_WALL` with the dual problem (E -> cB,
+# cB -> -E): the same profile on B_z between PMC walls, where E_z, B_x and
+# B_y are the components that must stay zero.
 
 from std.math import cos, sin
 from std.sys import has_accelerator
@@ -34,7 +38,7 @@ from warpxm.apps.maxwell import (
     MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import BC_PEC_WALL
+from warpxm.core.bc import BC_PEC_WALL, BC_PMC_WALL
 from warpxm.core.math_compat import sqrt
 from warpxm.core.types import Real, PI
 from warpxm.mesh.block_3d import BlockMesh3D
@@ -50,17 +54,22 @@ comptime NZ: Int = 4
 comptime C_LIGHT: Real = 1.0
 
 
-def main() raises:
-    comptime assert has_accelerator(), "Requires GPU"
-
-    var ctx = DeviceContext()
+def _run_cavity(var ctx: DeviceContext, pmc: Bool) raises:
+    """One period of the cavity mode. `pmc=False`: PEC walls, E_z mode.
+    `pmc=True`: the dual problem (E -> cB, cB -> -E) — PMC walls with the
+    same profile on B_z, so E_z, B_x, B_y are the unexcited components."""
+    var bc = BC_PMC_WALL if pmc else BC_PEC_WALL
+    var i_mode = IDX_BZ if pmc else IDX_EZ
+    var i_zero0 = IDX_BX if pmc else IDX_EX
+    var i_zero1 = IDX_BY if pmc else IDX_EY
+    var i_zero2 = IDX_EZ if pmc else IDX_BZ
     var mesh = BlockMesh3D[P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, nz=NZ,
         periodic_x=False, periodic_y=False, periodic_z=False,
-        bc_left=BC_PEC_WALL, bc_right=BC_PEC_WALL,
-        bc_bottom=BC_PEC_WALL, bc_top=BC_PEC_WALL,
-        bc_down=BC_PEC_WALL, bc_up=BC_PEC_WALL,
+        bc_left=bc, bc_right=bc,
+        bc_bottom=bc, bc_top=bc,
+        bc_down=bc, bc_up=bc,
     )
     var q = DGState3D[P, MAXWELL_NC](ctx, mesh.num_elements)
 
@@ -84,12 +93,9 @@ def main() raises:
                             var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
                             var n = kn * P1 * P1 + jn * P1 + in_
                             var b = (e * nodes_per_elem + n) * MAXWELL_NC
-                            host[b + IDX_EX] = Real(0.0)
-                            host[b + IDX_EY] = Real(0.0)
-                            host[b + IDX_EZ] = sin(PI * x) * sin(PI * y)
-                            host[b + IDX_BX] = Real(0.0)
-                            host[b + IDX_BY] = Real(0.0)
-                            host[b + IDX_BZ] = Real(0.0)
+                            for c in range(MAXWELL_NC):
+                                host[b + c] = Real(0.0)
+                            host[b + i_mode] = sin(PI * x) * sin(PI * y)
     ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
 
     var app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
@@ -135,19 +141,26 @@ def main() raises:
                                 var n = kn * P1 * P1 + jn * P1 + in_
                                 var b = (e * nodes_per_elem + n) * MAXWELL_NC
                                 var exact_ez = sin(PI * x) * sin(PI * y)
-                                var d_ez = h[b + IDX_EZ] - exact_ez
+                                var d_ez = h[b + i_mode] - exact_ez
                                 var jw = jv * weights[in_] * weights[jn] * weights[kn]
                                 err_ez += jw * d_ez * d_ez
                                 # E_x, E_y, B_z must remain identically zero.
-                                for idx in [IDX_EX, IDX_EY, IDX_BZ]:
+                                for idx in [i_zero0, i_zero1, i_zero2]:
                                     var v = h[b + idx]
                                     if v > max_other: max_other = v
                                     if -v > max_other: max_other = -v
     var l2_ez = err_ez ** Real(0.5)
-    print("3D Maxwell cavity TM mode — t =", t)
-    print("  L2 E_z error vs IC:                                  ", l2_ez)
-    print("  max |E_x, E_y, B_z| (must be ~0 by symmetry):        ", max_other)
-    assert_true(l2_ez < Real(5.0e-4), "E_z L2 error too large — PEC reflection wrong")
+    print("3D Maxwell cavity,", "PMC walls, B_z mode" if pmc else "PEC walls, E_z mode", "— t =", t)
+    print("  L2 mode error vs IC:                    ", l2_ez)
+    print("  max |unexcited components| (must be ~0):", max_other)
+    assert_true(l2_ez < Real(2.0e-4), "mode L2 error too large — wall reflection wrong")
     assert_true(max_other < Real(1.0e-10),
-                "spurious E_x / E_y / B_z excited — wall BC mixing modes")
+                "unexcited components grew — wall BC mixing modes")
+
+
+def main() raises:
+    comptime assert has_accelerator(), "Requires GPU"
+    var ctx = DeviceContext()
+    _run_cavity(ctx, False)
+    _run_cavity(ctx, True)
     print("PASSED")

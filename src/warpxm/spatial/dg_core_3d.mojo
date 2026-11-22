@@ -79,7 +79,7 @@ def _dg_3d_compute_rhs_core[
     face_pos_elem: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
     elem_face_dir: TileTensor[INDEX_DTYPE, EFLayout, MutAnyOrigin],
     face_bc: TileTensor[INDEX_DTYPE, FaceLayout, MutAnyOrigin],
-    jacobian_x: Real, jacobian_y: Real, jacobian_z: Real,
+    inv_jacobian_x: Real, inv_jacobian_y: Real, inv_jacobian_z: Real,
     num_elements: Int,
     flux_x_fn: FluxX,
     flux_y_fn: FluxY,
@@ -145,34 +145,34 @@ def _dg_3d_compute_rhs_core[
     # `test_imhd_briowu_2d_hlld`-style y-drift assertions rely on, so
     # any 3D bit-identity test (3D Alfvén, 3D Brio-Wu) needs to allow
     # for ~ULP-level drift.
-    var d_flat = NodalBasis1D[P].diff_matrix_flat()
-    var inv_jac_x: Scalar[WXM_DTYPE] = Real(1.0) / jacobian_x
-    var inv_jac_y: Scalar[WXM_DTYPE] = Real(1.0) / jacobian_y
-    var inv_jac_z: Scalar[WXM_DTYPE] = Real(1.0) / jacobian_z
+    var inv_jac_x: Scalar[WXM_DTYPE] = inv_jacobian_x
+    var inv_jac_y: Scalar[WXM_DTYPE] = inv_jacobian_y
+    var inv_jac_z: Scalar[WXM_DTYPE] = inv_jacobian_z
     var accum: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
     comptime for kx in range(P1):
-        var d_in_kx: Scalar[WXM_DTYPE] = d_flat[in_ * P1 + kx] * inv_jac_x
+        var d_in_kx: Scalar[WXM_DTYPE] = NodalBasis1D[P].diff_entry[kx](in_) * inv_jac_x
         var k_node = kn * P1 * P1 + jn * P1 + kx
         comptime for c in range(NC):
             var v = rebind[Scalar[WXM_DTYPE]](f_shared[eb_in_block, k_node, c, 0])
             accum[c] -= d_in_kx * v
     comptime for ky in range(P1):
-        var d_jn_ky: Scalar[WXM_DTYPE] = d_flat[jn * P1 + ky] * inv_jac_y
+        var d_jn_ky: Scalar[WXM_DTYPE] = NodalBasis1D[P].diff_entry[ky](jn) * inv_jac_y
         var k_node = kn * P1 * P1 + ky * P1 + in_
         comptime for c in range(NC):
             var v = rebind[Scalar[WXM_DTYPE]](f_shared[eb_in_block, k_node, c, 1])
             accum[c] -= d_jn_ky * v
     comptime for kz in range(P1):
-        var d_kn_kz: Scalar[WXM_DTYPE] = d_flat[kn * P1 + kz] * inv_jac_z
+        var d_kn_kz: Scalar[WXM_DTYPE] = NodalBasis1D[P].diff_entry[kz](kn) * inv_jac_z
         var k_node = kz * P1 * P1 + jn * P1 + in_
         comptime for c in range(NC):
             var v = rebind[Scalar[WXM_DTYPE]](f_shared[eb_in_block, k_node, c, 2])
             accum[c] -= d_kn_kz * v
 
-    var weights = NodalBasis1D[P].weights()
-    var w_0: Scalar[WXM_DTYPE] = weights[0]
-    var w_P: Scalar[WXM_DTYPE] = weights[P]
+    # Face scales as products of reciprocals: `inv_jac / w` is a double
+    # division (about ten FP64 instructions) on every face node.
+    comptime inv_w0: Real = Real(1.0) / NodalBasis1D[P].weights()[0]
+    comptime inv_wP: Real = Real(1.0) / NodalBasis1D[P].weights()[P]
 
     if in_ == 0:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_LEFT_3D]))
@@ -185,7 +185,7 @@ def _dg_3d_compute_rhs_core[
             q_nbr = _load_node_3d[P, NC](q, neg_e, kn * P1 * P1 + jn * P1 + P)
         var f_star = num_flux_fn(q_nbr, q_n, Real(1.0), Real(0.0), Real(0.0))
         comptime for c in range(NC):
-            accum[c] += (f_star[c] - fx_n[c]) * (inv_jac_x / w_0)
+            accum[c] += (f_star[c] - fx_n[c]) * (inv_jac_x * inv_w0)
     if in_ == P:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_RIGHT_3D]))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
@@ -197,7 +197,7 @@ def _dg_3d_compute_rhs_core[
             q_nbr = _load_node_3d[P, NC](q, pos_e, kn * P1 * P1 + jn * P1 + 0)
         var f_star = num_flux_fn(q_n, q_nbr, Real(1.0), Real(0.0), Real(0.0))
         comptime for c in range(NC):
-            accum[c] += (fx_n[c] - f_star[c]) * (inv_jac_x / w_P)
+            accum[c] += (fx_n[c] - f_star[c]) * (inv_jac_x * inv_wP)
     if jn == 0:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_BOTTOM_3D]))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
@@ -209,7 +209,7 @@ def _dg_3d_compute_rhs_core[
             q_nbr = _load_node_3d[P, NC](q, neg_e, kn * P1 * P1 + P * P1 + in_)
         var f_star = num_flux_fn(q_nbr, q_n, Real(0.0), Real(1.0), Real(0.0))
         comptime for c in range(NC):
-            accum[c] += (f_star[c] - fy_n[c]) * (inv_jac_y / w_0)
+            accum[c] += (f_star[c] - fy_n[c]) * (inv_jac_y * inv_w0)
     if jn == P:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_TOP_3D]))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
@@ -221,7 +221,7 @@ def _dg_3d_compute_rhs_core[
             q_nbr = _load_node_3d[P, NC](q, pos_e, kn * P1 * P1 + 0 * P1 + in_)
         var f_star = num_flux_fn(q_n, q_nbr, Real(0.0), Real(1.0), Real(0.0))
         comptime for c in range(NC):
-            accum[c] += (fy_n[c] - f_star[c]) * (inv_jac_y / w_P)
+            accum[c] += (fy_n[c] - f_star[c]) * (inv_jac_y * inv_wP)
     if kn == 0:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_DOWN_3D]))
         var neg_e = Int(rebind[Scalar[INDEX_DTYPE]](face_neg_elem[f_id]))
@@ -233,7 +233,7 @@ def _dg_3d_compute_rhs_core[
             q_nbr = _load_node_3d[P, NC](q, neg_e, P * P1 * P1 + jn * P1 + in_)
         var f_star = num_flux_fn(q_nbr, q_n, Real(0.0), Real(0.0), Real(1.0))
         comptime for c in range(NC):
-            accum[c] += (f_star[c] - fz_n[c]) * (inv_jac_z / w_0)
+            accum[c] += (f_star[c] - fz_n[c]) * (inv_jac_z * inv_w0)
     if kn == P:
         var f_id = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[e * 6 + FACE_DIR_UP_3D]))
         var pos_e = Int(rebind[Scalar[INDEX_DTYPE]](face_pos_elem[f_id]))
@@ -245,7 +245,7 @@ def _dg_3d_compute_rhs_core[
             q_nbr = _load_node_3d[P, NC](q, pos_e, 0 * P1 * P1 + jn * P1 + in_)
         var f_star = num_flux_fn(q_n, q_nbr, Real(0.0), Real(0.0), Real(1.0))
         comptime for c in range(NC):
-            accum[c] += (fz_n[c] - f_star[c]) * (inv_jac_z / w_P)
+            accum[c] += (fz_n[c] - f_star[c]) * (inv_jac_z * inv_wP)
 
     var base = (e * nodes_per_elem + local_n) * NC
     comptime for c in range(NC):

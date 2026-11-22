@@ -20,8 +20,16 @@
 #     f_y = (ρu_y, ρu_x u_y, ρu_y² + P, ρu_y u_z, u_y (E + P))
 #     f_z = (ρu_z, ρu_x u_z, ρu_y u_z, ρu_z² + P, u_z (E + P))
 #
-# A 1D caller passes `nx = ±1, ny = 0, nz = 0`; the unused y/z terms in
-# the numerical flux multiply by zero and the compiler folds them away.
+# The numerical flux forms F·n directly for a 3-component unit normal
+# (1D callers pass `nx = ±1, ny = 0, nz = 0`), one flux evaluation per
+# side. It does not build f_x, f_y, f_z and dot them with n: IEEE
+# arithmetic cannot fold `0.0 * f_y`, so that form pays for three fluxes
+# per side on every face.
+#
+# Each state is divided by ρ exactly once (`inv_rho`); velocities and the
+# kinetic energy are products with it. A double division costs roughly ten
+# FP64 instructions on the device, which is the bottleneck on GPUs with a
+# narrow FP64 pipe.
 
 from std.collections import Array
 
@@ -50,12 +58,40 @@ def _pressure_floored(
     q: Array[Real, EULER_NC], gamma: Real, rho_min: Real, press_min: Real,
 ) -> Real:
     """γ-law pressure with floors. Mirrors `euler_getPressureFloored`."""
-    var rho = _rho_floored(q, rho_min)
+    var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+    return _pressure_from_inv_rho(q, inv_rho, gamma, press_min)
+
+
+@always_inline
+def _pressure_from_inv_rho(
+    q: Array[Real, EULER_NC], inv_rho: Real, gamma: Real, press_min: Real,
+) -> Real:
     var ke = Real(0.5) * (q[IDX_MX] * q[IDX_MX]
                           + q[IDX_MY] * q[IDX_MY]
-                          + q[IDX_MZ] * q[IDX_MZ]) / rho
+                          + q[IDX_MZ] * q[IDX_MZ]) * inv_rho
     var p = (gamma - Real(1.0)) * (q[IDX_E] - ke)
     return fmax(p, press_min)
+
+
+@always_inline
+def _normal_flux_and_speed(
+    q: Array[Real, EULER_NC],
+    nx: Real, ny: Real, nz: Real,
+    gamma: Real, rho_min: Real, press_min: Real,
+) -> Array[Real, EULER_NC + 1]:
+    """F(q)·n in slots 0..NC-1 and the signal speed |u·n| + c in slot NC."""
+    var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+    var p = _pressure_from_inv_rho(q, inv_rho, gamma, press_min)
+    var m_n = q[IDX_MX] * nx + q[IDX_MY] * ny + q[IDX_MZ] * nz
+    var u_n = m_n * inv_rho
+    var out = Array[Real, EULER_NC + 1](fill=Real(0.0))
+    out[IDX_RHO] = m_n
+    out[IDX_MX] = q[IDX_MX] * u_n + p * nx
+    out[IDX_MY] = q[IDX_MY] * u_n + p * ny
+    out[IDX_MZ] = q[IDX_MZ] * u_n + p * nz
+    out[IDX_E] = u_n * (q[IDX_E] + p)
+    out[EULER_NC] = fabs(u_n) + sqrt(gamma * p * inv_rho)
+    return out^
 
 
 @fieldwise_init
@@ -83,15 +119,16 @@ struct Euler(ImplicitlyCopyable, Movable):
     # ------------------------------------------------------------------
 
     @staticmethod
+    @always_inline
     def internal_flux_axis_static[axis: Int](
         q: Array[Real, EULER_NC],
         gamma: Real, rho_min: Real, press_min: Real,
     ) -> Array[Real, EULER_NC]:
         comptime assert axis >= 0 and axis < 3, "axis must be 0, 1, or 2"
-        var rho = _rho_floored(q, rho_min)
-        var p = _pressure_floored(q, gamma, rho_min, press_min)
+        var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+        var p = _pressure_from_inv_rho(q, inv_rho, gamma, press_min)
         comptime mom_idx = IDX_MX + axis
-        var u_axis = q[mom_idx] / rho
+        var u_axis = q[mom_idx] * inv_rho
         var f: Array[Real, EULER_NC] = Array[Real, EULER_NC](fill=Real(0.0))
         f[IDX_RHO] = q[mom_idx]
         f[IDX_MX] = q[IDX_MX] * u_axis
@@ -148,28 +185,11 @@ struct Euler(ImplicitlyCopyable, Movable):
         nx: Real, ny: Real, nz: Real,
         gamma: Real, rho_min: Real, press_min: Real,
     ) -> Array[Real, EULER_NC]:
-        var rho_l = _rho_floored(q_l, rho_min)
-        var rho_r = _rho_floored(q_r, rho_min)
-        var p_l = _pressure_floored(q_l, gamma, rho_min, press_min)
-        var p_r = _pressure_floored(q_r, gamma, rho_min, press_min)
-
-        var u_n_l = (q_l[IDX_MX] * nx + q_l[IDX_MY] * ny + q_l[IDX_MZ] * nz) / rho_l
-        var u_n_r = (q_r[IDX_MX] * nx + q_r[IDX_MY] * ny + q_r[IDX_MZ] * nz) / rho_r
-
-        var c_l = sqrt(gamma * p_l / rho_l)
-        var c_r = sqrt(gamma * p_r / rho_r)
-        var c_max = fmax(fabs(u_n_l) + c_l, fabs(u_n_r) + c_r)
-
-        var fx_l = Self.internal_flux_axis_static[0](q_l, gamma, rho_min, press_min)
-        var fy_l = Self.internal_flux_axis_static[1](q_l, gamma, rho_min, press_min)
-        var fz_l = Self.internal_flux_axis_static[2](q_l, gamma, rho_min, press_min)
-        var fx_r = Self.internal_flux_axis_static[0](q_r, gamma, rho_min, press_min)
-        var fy_r = Self.internal_flux_axis_static[1](q_r, gamma, rho_min, press_min)
-        var fz_r = Self.internal_flux_axis_static[2](q_r, gamma, rho_min, press_min)
+        var fs_l = _normal_flux_and_speed(q_l, nx, ny, nz, gamma, rho_min, press_min)
+        var fs_r = _normal_flux_and_speed(q_r, nx, ny, nz, gamma, rho_min, press_min)
+        var c_max = fmax(fs_l[EULER_NC], fs_r[EULER_NC])
 
         var f: Array[Real, EULER_NC] = Array[Real, EULER_NC](fill=Real(0.0))
         comptime for c in range(EULER_NC):
-            var f_n_l = nx * fx_l[c] + ny * fy_l[c] + nz * fz_l[c]
-            var f_n_r = nx * fx_r[c] + ny * fy_r[c] + nz * fz_r[c]
-            f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
+            f[c] = Real(0.5) * (fs_l[c] + fs_r[c]) - Real(0.5) * c_max * (q_r[c] - q_l[c])
         return f^

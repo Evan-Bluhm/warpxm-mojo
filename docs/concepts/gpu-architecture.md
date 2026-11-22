@@ -103,8 +103,8 @@ single precision would be a one-line edit but hasn't been needed.
 ## SQRT on NVIDIA float64
 
 `std.math.sqrt` doesn't currently provide a `float64` overload on NVIDIA
-GPUs. We work around it with `x ** Real(0.5)` exposed as
-`math_compat.sqrt`:
+GPUs. `math_compat.sqrt` calls the `llvm.sqrt` intrinsic instead, which
+lowers to the native double-precision square root:
 
 ```mojo
 from warpxm.core.math_compat import sqrt   # not std.math.sqrt
@@ -112,6 +112,10 @@ from warpxm.core.math_compat import sqrt   # not std.math.sqrt
 
 Every kernel that needs a square root (fast magnetosonic speed, HLLD
 star-state Alfvén speed, etc.) routes through this helper.
+
+Do not write `x ** Real(0.5)` in a kernel. It compiles, but to a software
+`pow`; an earlier version of this helper did exactly that, and it was the
+largest single cost in the Euler and MHD right-hand-side kernels.
 
 ## Launch overhead and CPU-bound bottlenecks
 

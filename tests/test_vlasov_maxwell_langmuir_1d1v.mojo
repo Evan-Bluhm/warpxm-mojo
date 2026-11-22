@@ -8,32 +8,45 @@
 # the current source, and the position-dependent v-acceleration that
 # develops as `f` becomes x-dependent.
 #
-# The physical mode is a Bohm-Gross / Langmuir wave with thermal
-# correction `ω² = ω_p² + 3 k² v_th²`. With our parameters
-# (ω_p = 1, k = 2π, v_th² = σ² = 0.5), `ω² ≈ 60.2`, period ≈ 0.81.
-# Landau damping is non-trivial at this k·v_th (ω / (k·v_th) ≈ 1.75),
-# so over the test horizon T = 1 we expect substantial damping of
-# the amplitude.
+# With these parameters (ω_p = 1, k = 2π, σ² = 0.5) the mode is far
+# into the kinetic regime, `k·λ_D = k·σ/√2 ≈ 3.1`: there is no weakly
+# damped Langmuir branch (see `test_vlasov_maxwell_bohm_gross_1d1v`
+# for the dispersion check at small `k·λ_D`). Instead the response is
+# the ballistic / phase-mixing transient, which linear theory gives in
+# closed form. Linearising about `f₀(v) = exp(-v²/σ²)/(σ√π)` and
+# integrating the perturbed Vlasov equation along free-streaming
+# characteristics, the amplitude `E(t)` of the `sin(kx)` mode obeys the
+# Volterra equation
 #
-# This slice's check is not a precise dispersion fit — that would
-# need a longer run + FFT. Instead:
+#     dE/dt = -ω_p² ∫₀ᵗ E(τ) · G(t − τ) dτ,
+#     G(s)  = exp(-a s²) · (1 − 2 a s²),      a = k² σ² / 4.
 #
-#   (a) Total energy `W = ½ ∫ E_x² dx + ½ ∫∫ v² f dv dx`
-#       is conserved by the continuous Vlasov-Maxwell-current-source
-#       system when `λ_skin = ε₀`. Numerically it should drift by
-#       only DG / SSPRK3 truncation. Tolerance: 1e-2 relative.
+# (`G` is the current response to a unit field impulse:
+# `∫ v ∂_v f₀ e^{-ikvs} dv = -G(s)`.) `∫₀^∞ G ds = 0`, so the current
+# phase-mixes away and `E` settles at a non-zero plateau — here
+# `E(1)/E(0) = 0.90692`, i.e. the field gives up 17.7 % of its energy
+# to the particles.
 #
-#   (b) Total particle mass `M = ∫∫ f dv dx` is conserved to
-#       round-off (the Vlasov solver is a conservation law and
-#       periodic-x has no boundary fluxes; the v-boundary copyout
-#       is benign because `f ≈ 0` at v = ±v_max).
+# Checks:
 #
-#   (c) No NaNs / unbounded blow-up — the field amplitude stays
-#       bounded by a few × the initial amplitude.
+#   (a) Field amplitude vs linear theory. `√(W_E(t)/W_E(0))` is
+#       compared with the Volterra solution (integrated on the host)
+#       at t = 0.5 and t = 1. This fails if either direction of the
+#       coupling, or the x-advection that sets `k`, is wrong.
+#
+#   (b) Total energy `W = ½ ∫ E_x² dx + ½ ∫∫ v² f dv dx` is conserved
+#       by the continuous system when `λ_skin = ε₀`. The drift is
+#       measured against the initial FIELD energy (2.5e-5), not the
+#       total (0.125, almost all thermal) — relative to the total even
+#       losing the whole field would be a 2e-4 change.
+#
+#   (c) Total particle mass `M = ∫∫ f dv dx` is conserved (periodic
+#       x; `f ≈ 0` at the v boundaries).
 #
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_maxwell_langmuir_1d1v.mojo
 
+from std.collections import List
 from std.math import exp, sin, sqrt
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
@@ -68,7 +81,6 @@ comptime SKIN_DEPTH_NORM: Real = 1.0
 comptime EPS0: Real = 1.0
 comptime C_LIGHT: Real = 1.0
 comptime T_FINAL: Real = 1.0
-comptime DT: Real = 5.0e-3
 comptime EPS: Real = 0.01  # amplitude of the E_x perturbation
 
 
@@ -78,8 +90,8 @@ def compute_total_energy(
     mut x_mesh: BlockMesh1D[P_X],
     mut q_phase: PhaseState1D1V[P_X, P_V, VLASOV_NC],
     mut q_maxwell: DGState1D[P_X, MAXWELL_NC],
-) raises -> Real:
-    """W = ½ ∫ E_x² dx + ½ ∫∫ v² f dv dx via GLL quadrature."""
+) raises -> Tuple[Real, Real]:
+    """(W_E, W_K) = (½ ∫ E_x² dx, ½ ∫∫ v² f dv dx) via GLL quadrature."""
     var x_weights = NodalBasis1D[P_X].weights()
     var v_weights = NodalBasis1D[P_V].weights()
     var ref_v_nodes = NodalBasis1D[P_V].nodes()
@@ -113,7 +125,7 @@ def compute_total_energy(
                             * v_weights[iv] * phase_mesh.jacobian_v
                         )
                         w_K += w * Real(0.5) * v * v * f
-    return w_E + w_K
+    return Tuple[Real, Real](w_E, w_K)
 
 
 def compute_total_mass(
@@ -195,7 +207,7 @@ def main() raises:
         ctx, phase_mesh, x_mesh, q_phase, q_maxwell,
     )
     var m0 = compute_total_mass(ctx, phase_mesh, q_phase)
-    print("Vlasov-Maxwell Langmuir IC: W =", w0, " M =", m0)
+    print("Vlasov-Maxwell Langmuir IC: W_E =", w0[0], " W_K =", w0[1], " M =", m0)
 
     # --- solvers + stepper ---
     var vlasov_app = VlasovMaxwell(
@@ -223,54 +235,90 @@ def main() raises:
             ctx, j_current, qm_out, CHARGE_MASS_RATIO, EPS0,
         )
 
-    # --- time loop ---
-    var t: Real = 0.0
-    var nsteps: Int = 0
-    while t < T_FINAL - Real(0.5) * DT:
-        var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q_phase, q_maxwell, dt_use, compute_joint_rhs)
-        t += dt_use
-        nsteps += 1
-    ctx.synchronize()
+    # --- linear theory: Volterra solution for E(t)/E(0) ---
+    # Heun's method with trapezoidal convolution; N = 500 is converged
+    # to 1e-6 (N = 4000 changes the result by 7e-7).
+    comptime N_LIN = 500
+    var k_wave = TWO_PI
+    var a_lin = k_wave * k_wave * SIGMA_SQ / Real(4.0)
+    var h_lin = T_FINAL / Real(N_LIN)
+    var g_lin = List[Real]()
+    for j in range(N_LIN + 1):
+        var s_lag = Real(j) * h_lin
+        g_lin.append(
+            exp(-a_lin * s_lag * s_lag)
+            * (Real(1.0) - Real(2.0) * a_lin * s_lag * s_lag)
+        )
+    var e_lin = List[Real]()
+    e_lin.append(Real(1.0))
+    for n in range(N_LIN):
+        # ∫₀^{t_n} E(τ) G(t_n − τ) dτ
+        var i0: Real = 0.0
+        for j in range(n + 1):
+            var wq = Real(0.5) if (j == 0 or j == n) else Real(1.0)
+            i0 += wq * e_lin[j] * g_lin[n - j]
+        i0 = i0 * h_lin if n > 0 else Real(0.0)
+        var e_pred = e_lin[n] - h_lin * i0
+        # ∫₀^{t_{n+1}} with the predictor as the last sample.
+        var i1: Real = Real(0.5) * e_pred * g_lin[0]
+        for j in range(n + 1):
+            var wq = Real(0.5) if j == 0 else Real(1.0)
+            i1 += wq * e_lin[j] * g_lin[n + 1 - j]
+        i1 *= h_lin
+        e_lin.append(e_lin[n] - Real(0.5) * h_lin * (i0 + i1))
 
-    # Final diagnostics.
-    var w1 = compute_total_energy(
-        ctx, phase_mesh, x_mesh, q_phase, q_maxwell,
-    )
+    # --- time loop: two halves, sampled at t = 0.5 and t = 1 ---
+    comptime STEPS_PER_HALF = 100
+    var dt = T_FINAL / Real(2 * STEPS_PER_HALF)
+    var t: Real = 0.0
+    var max_amp_err: Real = 0.0
+    var w1 = w0
+    for half in range(2):
+        for _ in range(STEPS_PER_HALF):
+            stepper.step(ctx, q_phase, q_maxwell, dt, compute_joint_rhs)
+            t += dt
+        ctx.synchronize()
+        w1 = compute_total_energy(
+            ctx, phase_mesh, x_mesh, q_phase, q_maxwell,
+        )
+        var amp_obs = sqrt(w1[0] / w0[0])
+        var amp_lin = e_lin[(half + 1) * (N_LIN // 2)]
+        var amp_err = abs(amp_obs - amp_lin)
+        if amp_err > max_amp_err:
+            max_amp_err = amp_err
+        print(
+            "  t =", t, " E/E0 observed =", amp_obs,
+            " linear theory =", amp_lin, " diff =", amp_obs - amp_lin,
+        )
     var m1 = compute_total_mass(ctx, phase_mesh, q_phase)
 
-    # Peak |E_x| for the blow-up check.
-    var max_abs_ex: Real = 0.0
-    with q_maxwell.buf.map_to_host() as h:
-        for ex in range(NX):
-            for ix in range(P_X + 1):
-                var node_x = ex * (P_X + 1) + ix
-                var v = h[node_x * MAXWELL_NC + IDX_EX]
-                var av = v if v >= 0.0 else -v
-                if av > max_abs_ex:
-                    max_abs_ex = av
-
-    var dW_rel = (w1 - w0) / w0
-    var adW_rel = dW_rel if dW_rel >= 0.0 else -dW_rel
-    var dM = m1 - m0
-    var adM = dM if dM >= 0.0 else -dM
+    var dW = (w1[0] + w1[1]) - (w0[0] + w0[1])
+    var dW_field_rel = abs(dW) / w0[0]
+    var adM = abs(m1 - m0)
     print(
-        "Vlasov-Maxwell Langmuir T_FINAL: steps =", nsteps,
-        "t =", t,
-        "W =", w1, "(ΔW/W =", dW_rel, ")",
-        "ΔM =", dM,
-        "max |E_x| =", max_abs_ex,
+        "Vlasov-Maxwell Langmuir: t =", t,
+        " W_E =", w1[0], " ΔW_K =", w1[1] - w0[1],
+        " ΔW / W_E(0) =", dW / w0[0],
+        " ΔM =", m1 - m0,
     )
 
-    # (a) Energy conservation. Continuous V-M-current-source conserves
-    # energy when λ_skin = ε₀ (= 1 here). Numerical truncation drift
-    # is bounded.
-    assert_true(adW_rel < Real(1.0e-2), "energy not conserved")
-    # (b) Mass conservation. Periodic-x has no boundary fluxes;
-    # v-boundaries are physically inactive (f ≈ 0 at v = ±v_max).
-    # Tolerance: copyout BC noise + GLL quadrature rounding ⇒ 1e-9.
-    assert_true(adM < Real(1.0e-9), "mass not conserved")
-    # (c) No blow-up.
-    assert_true(max_abs_ex < Real(10.0) * EPS, "E_x blew up")
+    # (a) Field amplitude follows linear theory. Measured differences:
+    # 1.6e-5 at t = 0.5, 2.3e-4 at t = 1 (velocity-grid resolution of
+    # the phase-mixed perturbation). With the Lorentz force or the
+    # current source removed E/E0 stays at 1 (0.09 off).
+    assert_true(
+        max_amp_err < Real(1.0e-3),
+        "E_x amplitude departs from the linear Vlasov response",
+    )
+    # (b) Energy conservation, relative to the field energy. Measured
+    # 1.3e-5: the 4.4e-6 lost by the field reappears as kinetic energy
+    # to within 3e-10.
+    assert_true(
+        dW_field_rel < Real(1.0e-4),
+        "energy not conserved on the field-energy scale",
+    )
+    # (c) Mass conservation. Measured 7e-11 (copyout flux of the
+    # Maxwellian tail at |v| = 3).
+    assert_true(adM < Real(5.0e-10), "mass not conserved")
 
     print("PASSED")

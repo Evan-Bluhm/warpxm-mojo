@@ -97,3 +97,13 @@ limiter.apply(ctx, mesh, q)
 The smoothness fudge $\alpha_{\text{coeff}}$ defaults to 1000 (matches
 upstream WARPXM) — large enough that the limiter is dormant on smooth
 runs and only activates at sharp gradients.
+
+The tolerance is absolute: the limiter ignores deviations smaller than
+$\alpha = \alpha_{\text{coeff}} \, \Delta x^{1.5}$. With the default
+coefficient that is $\alpha \approx 0.35$ on a 200-cell unit domain and
+$\alpha \approx 5.5$ on a 32-cell one, so whenever the solution itself is
+smaller than that (near-vacuum states, coarse meshes) the limiter never
+acts and unlimited oscillations are left to the positivity preserver. The
+Einfeldt 1-2-3 tests pass `alpha_coeff=Real(10.0)` for this reason. Choose
+the coefficient so that $\alpha$ sits below the smallest solution scale
+that needs limiting.

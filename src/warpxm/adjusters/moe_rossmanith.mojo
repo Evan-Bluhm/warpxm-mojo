@@ -18,7 +18,7 @@ from std.math import ceildiv
 from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.math_compat import fabs, fmin, fmax
+from warpxm.core.math_compat import fabs, fmin, fmax, sqrt
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block_2d import BlockMesh2D
 from warpxm.mesh.block_3d import BlockMesh3D
@@ -38,7 +38,7 @@ def _phi_func(y: Real) -> Real:
 
 @always_inline
 def _alpha_dx(alpha_coeff: Real, dx: Real) -> Real:
-    return alpha_coeff * dx * (dx ** Real(0.5))
+    return alpha_coeff * dx * sqrt(dx)
 
 
 @always_inline

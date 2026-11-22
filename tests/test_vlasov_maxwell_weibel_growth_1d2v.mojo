@@ -1,77 +1,62 @@
-# Weibel eigenmode-IC characterisation (1D2V).
+# Weibel instability growth rate (1D2V Vlasov-Maxwell) vs linear theory.
 #
-# Continuation of the slice-21 smoke test. The slice-21 setup used a
-# pure `B_z` seed and parameters where `k > k_max = ω_p √(T_perp/T_par
-# − 1) / c`, i.e. above the Weibel cutoff — no growth was possible
-# regardless of IC quality. This slice fixes the parameter regime
-# (`k < k_max`) and constructs the analytic linear-Vlasov eigenmode
-# IC at the Davidson quartic-corrected growth rate, but the observed
-# behaviour is still mixed growth / decay (`max|B_z|` peaks at ≈ 1.1×
-# the seed and then decays). The Davidson formula is only approximate
-# in this regime — the full plasma-dispersion-function root would
-# need Z(ζ) evaluated to many digits. The simulation infrastructure
-# is correct (mass conservation, no blow-up, ∂B/∂t pathway active);
-# what remains is converging the IC to a high-fidelity eigenmode.
+# A bi-Maxwellian `f₀ ∝ exp(-v1²/σ_par² − v2²/σ_perp²)` that is hotter
+# across `k` (v2) than along it (v1) is unstable to a purely growing
+# transverse mode `(E_y, B_z, δf) ∝ exp(ikx + γt)`.
 #
-# This test is therefore a **characterisation** of the current Weibel
-# behaviour rather than a strict γ_W match. Assertions cover mass
-# conservation and bounded `|B_z|`; the observed `γ_obs` is printed
-# alongside the theory value for visual comparison.
+# Linear theory. The kinetic dispersion relation for transverse modes
+# on this distribution is (Weibel 1959; Krall & Trivelpiece §9.10)
 #
-# Linear theory (Davidson 1972 — cold-parallel limit). For
-# `(E_y, B_z, δf) ∝ exp(ikx + γt)` with the bi-Maxwellian `f₀ ∝
-# exp(-v1²/σ_par² − v2²/σ_perp²)`, the transverse Weibel branch grows
-# at
+#     ω² − k²c² − ω_p² + ω_p² · (σ_perp²/σ_par²) · [1 + ζ Z(ζ)] = 0,
+#     ζ = ω / (k σ_par),
 #
-#     γ_W² = (kc)² · (T_perp/T_par − 1) / (1 + (kc/ω_p)²)
-#         = (kc)² · (σ_perp²/σ_par² − 1) / (1 + k²c²/ω_p²)
+# with `Z` the plasma dispersion function. On the imaginary axis,
+# `ω = iγ`, `ζ = is` with `s = γ/(k σ_par)`, and `Z(is) = i√π e^{s²}
+# erfc(s)`, so the growth rate is the real root of
 #
-# Parameters (chosen so we sit comfortably below the cutoff):
-#   L = 4 ⇒ k = π/2 ≈ 1.571
-#   σ_par² = 0.25, σ_perp² = 1.0 ⇒ T_perp/T_par = 4
-#   c = 1, ω_p² = 1 (norm chosen so n = 1)
-#   k_max = ω_p √(σ_perp²/σ_par² − 1)/c = √3 ≈ 1.732
-#   k < k_max ✓
-#   ⇒ γ_W = (π/2) · √3 / √(1 + π²/4) ≈ 1.461
+#     ω_p² · [(σ_perp²/σ_par²) · (1 − √π s e^{s²} erfc(s)) − 1]
+#         = γ² + k²c².
 #
-# Eigenmode IC. Choose `B̂_z = -iδ` so `Re[B̂_z · e^{ikx}] = δ sin(kx)`.
-# Faraday's law `∂_t B_z = −∂_x E_y` then gives `Ê_y = iγ B̂_z / k =
-# γδ/k`, so `Re[Ê_y · e^{ikx}] = (γ/k) δ cos(kx)`. The kinetic
-# eigenfunction follows from linearised Vlasov:
+# `γ → 0` gives the cutoff `k_max = (ω_p/c) √(σ_perp²/σ_par² − 1)`.
 #
-#     δf̂(v1, v2) = -α [v2 B̂_z ∂_v1 f₀ + (Ê_y − v1 B̂_z) ∂_v2 f₀]
-#                / (γ + ik v1)
+# Parameters: `L = 2π` ⇒ `k = 1`; `σ_par² = 0.09`, `σ_perp² = 1`
+# (`T_perp/T_par = 11.1`, `k_max = 3.18`); `c = ω_p = 1` (n = 1,
+# α = −1, ε₀ = 1). Bisection on the relation above gives
 #
-# Multiplying by the conjugate denominator and splitting into real
-# and imaginary parts gives (for `f₀ ∝ exp(-v1²/σ_par²-v2²/σ_perp²)`):
+#     γ_W = 0.364360.
 #
-#     Re[δf̂] = 2αδ v2 f₀ · [1/(k σ_perp²) − k v1² / (σ_par² D)]
-#     Im[δf̂] = -2αδ γ v1 v2 f₀ / (σ_par² D)
+# (The cold-parallel Davidson formula `γ² = k²c²(A−1)/(1 + k²c²/ω_p²)`
+# is not usable here or in the earlier version of this test: it needs
+# `γ ≫ k σ_par`, and here `γ/(k σ_par) = 1.2`. For the earlier
+# parameters — `k = π/2`, `σ_par² = 0.25` — it gave 0.69 against a true
+# kinetic root of 0.064, which is why that version saw no clean growth.)
 #
-# where `D = γ² + k²v1²`. The real-space perturbation is
-#
-#     δf(x, v1, v2, 0) = Re[δf̂] cos(kx) − Im[δf̂] sin(kx).
-#
-# (This is the growing-mode eigenfunction at γ = γ_W; the decaying
-# mode would use the same magnitudes with opposite sign on the
-# Im-part. Initialising one mode only purges the standing-wave
-# transient that hobbled slice 21.)
+# IC: unperturbed `f₀` plus a `B_z = δ sin(kx)` seed with `δ = 1e-6`.
+# The seed projects onto the growing mode, its decaying partner and the
+# stable electromagnetic pair (`ω = ±1.496`); by `t = 10` the growing
+# mode dominates and the amplitude has grown 12×, 456× by `t = 20` —
+# still linear (`B_z ≈ 4.6e-4`).
 #
 # Checks:
-#   (a) mass conservation < 1e-9,
-#   (b) monotone growth in `max|B_z|` over the linear-fit window,
-#   (c) least-squares slope of `ln |B_z|` vs `t` within ±25 % of
-#       `γ_W` (the looseness absorbs initial higher-mode contamination
-#       from the only-approximate Davidson formula, plus DG / SSPRK3
-#       truncation on a finite grid).
+#   (a) least-squares slope of `ln |b(t)|` over `t ∈ [10, 20]`, where
+#       `b` is the `sin(kx)` Fourier amplitude of `B_z`, matches `γ_W`.
+#       Measured 0.364446 — 2.4e-4 relative. This needs every piece of
+#       the 1D2V coupling with the right sign and magnitude: Faraday
+#       and Ampère, the `J_y` current source, and both the `E_y` and
+#       `v × B_z` terms of the Lorentz force.
+#   (b) mass conservation < 1e-9.
+#
+# Build / run:
+#     pixi run mojo run -I src tests/test_vlasov_maxwell_weibel_growth_1d2v.mojo
 
-from std.math import exp, sin, cos, sqrt, log, ceildiv
+from std.collections import List
+from std.math import exp, sin, sqrt, log
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.maxwell import (
-    Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_BZ,
+    Maxwell, MAXWELL_NC, IDX_BZ,
 )
 from warpxm.apps.vlasovmaxwell import VlasovMaxwell, VLASOV_NC
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
@@ -94,24 +79,28 @@ from warpxm.variable.state_1d import DGState1D
 comptime P_X: Int = 2
 comptime P_V1: Int = 2
 comptime P_V2: Int = 2
-comptime NX: Int = 16
+comptime NX: Int = 8
 comptime NV1: Int = 12
 comptime NV2: Int = 10
 comptime X_MIN: Real = 0.0
-comptime X_MAX: Real = 4.0
-comptime V_MAX: Real = 4.0
-comptime SIGMA_PAR_SQ: Real = 0.25
+comptime X_MAX: Real = TWO_PI
+comptime V1_MAX: Real = 1.5     # 5 σ_par
+comptime V2_MAX: Real = 4.0     # 4 σ_perp
+comptime SIGMA_PAR_SQ: Real = 0.09
 comptime SIGMA_PERP_SQ: Real = 1.0
 comptime CHARGE_MASS_RATIO: Real = -1.0
 comptime SKIN_DEPTH_NORM: Real = 1.0
 comptime EPS0: Real = 1.0
 comptime C_LIGHT: Real = 1.0
-comptime T_FINAL: Real = 1.5
-comptime DT: Real = 4.0e-3
-comptime DELTA: Real = 1.0e-3       # eigenmode amplitude
-comptime SAMPLE_EVERY: Int = 10     # `max|B_z|` sample stride
-comptime FIT_T_MIN: Real = 0.3      # linear-fit window
-comptime FIT_T_MAX: Real = 1.3
+# Growing root of the kinetic dispersion relation (see header).
+comptime GAMMA_W: Real = 0.364360
+comptime T_FINAL: Real = 20.0
+comptime N_STEPS: Int = 400
+comptime DT: Real = T_FINAL / Real(N_STEPS)
+comptime DELTA: Real = 1.0e-6       # B_z seed amplitude
+comptime SAMPLE_EVERY: Int = 4      # sample stride for the B_z amplitude
+comptime FIT_T_MIN: Real = 10.0     # linear-fit window
+comptime FIT_T_MAX: Real = 20.0
 
 
 def compute_total_mass(
@@ -147,20 +136,25 @@ def compute_total_mass(
     return acc
 
 
-def max_abs_bz(
+def bz_sin_amplitude(
     var ctx: DeviceContext,
+    mut x_mesh: BlockMesh1D[P_X],
     mut q_maxwell: DGState1D[P_X, MAXWELL_NC],
 ) raises -> Real:
-    var m: Real = 0.0
+    """Amplitude of the sin(kx) Fourier mode of B_z: (2/L) ∫ B_z sin(kx) dx."""
+    var x_weights = NodalBasis1D[P_X].weights()
+    var x_nodes = NodalBasis1D[P_X].nodes()
+    var k_wave = TWO_PI / (X_MAX - X_MIN)
+    var acc: Real = 0.0
     with q_maxwell.buf.map_to_host() as h:
         for ex in range(NX):
+            var xl = X_MIN + Real(ex) * x_mesh.dx
             for ix in range(P_X + 1):
+                var x = xl + (Real(1.0) + x_nodes[ix]) * x_mesh.jacobian
                 var node_x = ex * (P_X + 1) + ix
-                var v: Real = h[node_x * MAXWELL_NC + IDX_BZ]
-                var av = v if v >= 0.0 else -v
-                if av > m:
-                    m = av
-    return m
+                var bz: Real = h[node_x * MAXWELL_NC + IDX_BZ]
+                acc += x_weights[ix] * x_mesh.jacobian * bz * sin(k_wave * x)
+    return Real(2.0) * acc / (X_MAX - X_MIN)
 
 
 def main() raises:
@@ -170,8 +164,8 @@ def main() raises:
     var phase_mesh = PhaseMesh1D2V[P_X, P_V1, P_V2](
         ctx,
         X_MIN, X_MAX,
-        -V_MAX, V_MAX,
-        -V_MAX, V_MAX,
+        -V1_MAX, V1_MAX,
+        -V2_MAX, V2_MAX,
         num_x=NX, num_v1=NV1, num_v2=NV2,
         periodic_x=True,
     )
@@ -184,40 +178,10 @@ def main() raises:
     )
     var q_maxwell = DGState1D[P_X, MAXWELL_NC](ctx, NX)
 
-    # Theoretical growth rate. Davidson's small-thermal-correction
-    # formula `γ² ≈ (kc)²A/(1 + (kc/ω_p)²)` over-predicts γ in our
-    # parameter regime — `γ/(k v_t_par)` is order one, not large, so
-    # `ζZ(ζ) ≈ -1` overshoots. The kinetic correction
-    # `ζZ(ζ) → -1 - 1/(2ζ²)` produces a quartic
-    #
-    #     γ⁴ + γ²·((kc)² − ω_p²) − ω_p² · A · k² · v_t_par² = 0
-    #
-    # whose positive root is the actual growth rate. For our params
-    # this drops `γ_W` from ≈ 1.46 to ≈ 0.69.
-    var k_wave = TWO_PI / (X_MAX - X_MIN)   # = π/2 for L = 4
-    var ratio = SIGMA_PERP_SQ / SIGMA_PAR_SQ
-    var A = ratio - Real(1.0)
-    var kc_sq = k_wave * k_wave * C_LIGHT * C_LIGHT
-    var omega_p_sq = Real(1.0)
-    var v_t_par_sq = SIGMA_PAR_SQ / Real(2.0)
-    var b = kc_sq - omega_p_sq
-    var disc = (
-        b * b + Real(4.0) * omega_p_sq * A * k_wave * k_wave * v_t_par_sq
-    )
-    var gamma_sq = (-b + sqrt(disc)) / Real(2.0)
-    var gamma_W = sqrt(gamma_sq)
-
-    print(
-        "Weibel params: L =", X_MAX - X_MIN,
-        " k =", k_wave,
-        " σ_par² =", SIGMA_PAR_SQ,
-        " σ_perp² =", SIGMA_PERP_SQ,
-        " γ_W =", gamma_W,
-    )
-
-    # IC: f = f₀ + δf with the analytic linear eigenmode at γ = γ_W.
-    # f₀ = norm · exp(-v1²/σ_par² - v2²/σ_perp²), n = 1 ⇒
-    # norm = 1/(π σ_par σ_perp).
+    var k_wave = TWO_PI / (X_MAX - X_MIN)
+    # IC: f = f₀ = norm · exp(-v1²/σ_par² - v2²/σ_perp²), n = 1 ⇒
+    # norm = 1/(π σ_par σ_perp). No δf: the B_z seed alone projects onto
+    # the growing mode.
     var sigma_par = sqrt(SIGMA_PAR_SQ)
     var sigma_perp = sqrt(SIGMA_PERP_SQ)
     var norm = Real(1.0) / (PI * sigma_par * sigma_perp)
@@ -227,13 +191,11 @@ def main() raises:
     var ref_v2_nodes = NodalBasis1D[P_V2].nodes()
     var p_host = ctx.enqueue_create_host_buffer[Real.dtype](q_phase.buf_len)
     var nodes_per_phase = (P_X + 1) * (P_V1 + 1) * (P_V2 + 1)
-    var alpha_coef = CHARGE_MASS_RATIO  # α = q/m
     for ex in range(NX):
-        var xl = X_MIN + Real(ex) * phase_mesh.dx
         for ev1 in range(NV1):
-            var v1l = -V_MAX + Real(ev1) * phase_mesh.dv1
+            var v1l = -V1_MAX + Real(ev1) * phase_mesh.dv1
             for ev2 in range(NV2):
-                var v2l = -V_MAX + Real(ev2) * phase_mesh.dv2
+                var v2l = -V2_MAX + Real(ev2) * phase_mesh.dv2
                 var phase_e = (ex * NV1 + ev1) * NV2 + ev2
                 for iv2 in range(P_V2 + 1):
                     var v2 = (
@@ -248,43 +210,19 @@ def main() raises:
                               * phase_mesh.jacobian_v1
                         )
                         for ix in range(P_X + 1):
-                            var x = (
-                                xl
-                                + (Real(1.0) + ref_x_nodes[ix])
-                                  * phase_mesh.jacobian_x
-                            )
                             var local_n = (
                                 (iv2 * (P_V1 + 1) + iv1) * (P_X + 1) + ix
                             )
                             var idx = (
                                 phase_e * nodes_per_phase + local_n
                             ) * VLASOV_NC
-                            var f0 = norm * exp(
+                            p_host[idx] = norm * exp(
                                 -v1 * v1 / SIGMA_PAR_SQ
                                 - v2 * v2 / SIGMA_PERP_SQ
                             )
-                            var denom = gamma_sq + k_wave * k_wave * v1 * v1
-                            var re_df = (
-                                Real(2.0) * alpha_coef * DELTA * v2 * f0
-                                * (
-                                    Real(1.0) / (k_wave * SIGMA_PERP_SQ)
-                                    - k_wave * v1 * v1
-                                      / (SIGMA_PAR_SQ * denom)
-                                )
-                            )
-                            var im_df = (
-                                -Real(2.0) * alpha_coef * DELTA * gamma_W
-                                * v1 * v2 * f0
-                                / (SIGMA_PAR_SQ * denom)
-                            )
-                            var df = (
-                                cos(k_wave * x) * re_df
-                                - sin(k_wave * x) * im_df
-                            )
-                            p_host[idx] = f0 + df
     ctx.enqueue_copy(dst_buf=q_phase.buf, src_buf=p_host)
 
-    # IC: B_z(x, 0) = δ sin(kx), E_y(x, 0) = (γ/k) δ cos(kx), rest zero.
+    # IC: B_z(x, 0) = δ sin(kx), all other field components zero.
     var m_host = ctx.enqueue_create_host_buffer[Real.dtype](q_maxwell.buf_len)
     for kk in range(q_maxwell.buf_len):
         m_host[kk] = Real(0.0)
@@ -294,16 +232,13 @@ def main() raises:
             var x = xl + (Real(1.0) + ref_x_nodes[ix]) * x_mesh.jacobian
             var node_x = ex * (P_X + 1) + ix
             m_host[node_x * MAXWELL_NC + IDX_BZ] = DELTA * sin(k_wave * x)
-            m_host[node_x * MAXWELL_NC + IDX_EY] = (
-                (gamma_W / k_wave) * DELTA * cos(k_wave * x)
-            )
     ctx.enqueue_copy(dst_buf=q_maxwell.buf, src_buf=m_host)
     ctx.synchronize()
 
     # Initial diagnostics.
     var m0 = compute_total_mass(ctx, phase_mesh, q_phase)
-    var bz0 = max_abs_bz(ctx, q_maxwell)
-    print("Weibel eigenmode IC: M =", m0, " max |B_z|_0 =", bz0)
+    var bz0 = bz_sin_amplitude(ctx, x_mesh, q_maxwell)
+    print("Weibel IC: M =", m0, " B_z sin(kx) amplitude =", bz0)
 
     # --- solvers + stepper ---
     var vlasov_app = VlasovMaxwell(
@@ -336,30 +271,18 @@ def main() raises:
             CHARGE_MASS_RATIO, EPS0,
         )
 
-    # --- time loop with periodic max|B_z| sampling ---
+    # --- time loop, sampling the B_z sin(kx) amplitude ---
     var t_samples = List[Real]()
     var bz_samples = List[Real]()
-    t_samples.append(Real(0.0))
-    bz_samples.append(bz0)
-    var bz_peak_over_run: Real = bz0
-
     var t: Real = 0.0
-    var nsteps: Int = 0
-    while t < T_FINAL - Real(0.5) * DT:
-        var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q_phase, q_maxwell, dt_use, compute_joint_rhs)
-        t += dt_use
-        nsteps += 1
-        if nsteps % SAMPLE_EVERY == 0:
+    for step in range(N_STEPS):
+        stepper.step(ctx, q_phase, q_maxwell, DT, compute_joint_rhs)
+        t += DT
+        if (step + 1) % SAMPLE_EVERY == 0:
             ctx.synchronize()
-            var bz_now = max_abs_bz(ctx, q_maxwell)
             t_samples.append(t)
-            bz_samples.append(bz_now)
-            if bz_now > bz_peak_over_run:
-                bz_peak_over_run = bz_now
-    ctx.synchronize()
-
-    var bz_final = max_abs_bz(ctx, q_maxwell)
+            bz_samples.append(bz_sin_amplitude(ctx, x_mesh, q_maxwell))
+    var bz_final = bz_samples[len(bz_samples) - 1]
     var m1 = compute_total_mass(ctx, phase_mesh, q_phase)
 
     # --- linear least-squares fit of ln|B_z| vs t over [FIT_T_MIN, FIT_T_MAX] ---
@@ -372,7 +295,7 @@ def main() raises:
         var ti = t_samples[i]
         if ti < FIT_T_MIN or ti > FIT_T_MAX:
             continue
-        var yi = log(bz_samples[i])
+        var yi = log(abs(bz_samples[i]))
         sum_t += ti
         sum_y += yi
         sum_tt += ti * ti
@@ -383,28 +306,24 @@ def main() raises:
     var gamma_obs = (
         (nf * sum_ty - sum_t * sum_y) / (nf * sum_tt - sum_t * sum_t)
     )
-    var rel_err = (gamma_obs - gamma_W) / gamma_W
+    var rel_err = (gamma_obs - GAMMA_W) / GAMMA_W
     var dM = m1 - m0
-    var adM = dM if dM >= 0.0 else -dM
-
     print(
-        "Weibel growth: steps =", nsteps, "t =", t,
+        "Weibel growth: steps =", N_STEPS, " t =", t,
         " samples_in_fit =", n_fit,
-        " max|B_z|_T =", bz_final,
-        " peak =", bz_peak_over_run,
+        " B_z(T)/B_z(0) =", bz_final / bz0,
     )
     print(
         "Weibel fit: γ_obs =", gamma_obs,
-        " γ_theory =", gamma_W,
-        " rel_err =", rel_err,
+        " γ_theory =", GAMMA_W,
+        " rel_err =", rel_err, " ΔM =", dM,
     )
-    print("ΔM =", dM)
 
-    assert_true(adM < Real(1.0e-9), "mass not conserved")
-    # `max|B_z|` is allowed to stay within a factor of ~10 of the seed —
-    # bounded amplitude is the load-bearing infrastructure check; the
-    # growth-rate match is reported but not enforced (see header).
-    assert_true(bz_peak_over_run < Real(10.0) * DELTA, "B_z blew up")
-    assert_true(bz_final > Real(1.0e-12), "B_z vanished")
+    # Measured 2.4e-4; the residual is the decaying `ω = ±1.496` wave
+    # still riding on the fit window.
+    assert_true(
+        abs(rel_err) < Real(3.0e-3), "Weibel growth rate off linear theory",
+    )
+    assert_true(abs(dM) < Real(1.0e-9), "mass not conserved")
 
     print("PASSED")

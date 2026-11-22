@@ -44,11 +44,21 @@ def _bsq(q: Array[Real, MHD_NC]) -> Real:
 def _gas_pressure_floored(
     q: Array[Real, MHD_NC], gamma: Real, rho_min: Real, press_min: Real,
 ) -> Real:
-    var rho = _rho_floored(q, rho_min)
+    var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+    return _gas_pressure_from_inv_rho(q, inv_rho, gamma, press_min)
+
+
+@always_inline
+def _gas_pressure_from_inv_rho(
+    q: Array[Real, MHD_NC], inv_rho: Real, gamma: Real, press_min: Real,
+) -> Real:
+    """Floored gas pressure given 1/ρ. Every flux routine divides by ρ
+    exactly once and passes the reciprocal around: a double division costs
+    roughly ten FP64 instructions on the device."""
     var msq = (q[IDX_MX] * q[IDX_MX]
                + q[IDX_MY] * q[IDX_MY]
                + q[IDX_MZ] * q[IDX_MZ])
-    var ke = Real(0.5) * msq / rho
+    var ke = Real(0.5) * msq * inv_rho
     var mag = Real(0.5) * _bsq(q)
     var p = (gamma - Real(1.0)) * (q[IDX_E] - ke - mag)
     return fmax(p, press_min)
@@ -59,7 +69,14 @@ def _fast_speed(
     rho: Real, p_gas: Real, Bn: Real, Btot_sq: Real, gamma: Real,
 ) -> Real:
     """Fast magnetosonic speed in the direction of normal component `B_n`."""
-    var inv_rho = Real(1.0) / rho
+    return _fast_speed_inv_rho(Real(1.0) / rho, p_gas, Bn, Btot_sq, gamma)
+
+
+@always_inline
+def _fast_speed_inv_rho(
+    inv_rho: Real, p_gas: Real, Bn: Real, Btot_sq: Real, gamma: Real,
+) -> Real:
+    """`_fast_speed` for callers that already hold 1/ρ."""
     var c_s_sq = gamma * p_gas * inv_rho
     var c_a_sq = Btot_sq * inv_rho
     var c_a_n_sq = Bn * Bn * inv_rho
@@ -67,6 +84,52 @@ def _fast_speed(
     var disc = sum_sq * sum_sq - Real(4.0) * c_s_sq * c_a_n_sq
     var disc_safe = fmax(disc, Real(0.0))
     return sqrt(Real(0.5) * (sum_sq + sqrt(disc_safe)))
+
+
+@always_inline
+def _normal_flux_and_speed(
+    q: Array[Real, MHD_NC],
+    nx: Real, ny: Real, nz: Real,
+    gamma: Real, rho_min: Real, press_min: Real,
+) -> Array[Real, MHD_NC + 1]:
+    """F(q)·n in slots 0..NC-1 and the signal speed |u·n| + c_fast in
+    slot NC, for a unit normal n.
+
+    Forms F·n directly — one flux evaluation — instead of building f_x,
+    f_y, f_z and dotting them with n. IEEE arithmetic cannot fold
+    `0.0 * f_y`, so the three-flux form pays for all three on every face
+    even when the normal is axis-aligned.
+        F·n[ρ]   = m·n
+        F·n[m_i] = (m·n) u_i + p_tot n_i − (B·n) B_i
+        F·n[E]   = (E + p_tot)(u·n) − (B·n)(u·B)
+        F·n[B_i] = B_i (u·n) − (B·n) u_i
+    """
+    var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+    var p = _gas_pressure_from_inv_rho(q, inv_rho, gamma, press_min)
+    var ux = q[IDX_MX] * inv_rho
+    var uy = q[IDX_MY] * inv_rho
+    var uz = q[IDX_MZ] * inv_rho
+    var Bx = q[IDX_BX]
+    var By = q[IDX_BY]
+    var Bz = q[IDX_BZ]
+    var bsq = _bsq(q)
+    var p_tot = p + Real(0.5) * bsq
+    var m_n = q[IDX_MX] * nx + q[IDX_MY] * ny + q[IDX_MZ] * nz
+    var u_n = m_n * inv_rho
+    var B_n = Bx * nx + By * ny + Bz * nz
+    var udotB = ux * Bx + uy * By + uz * Bz
+
+    var out = Array[Real, MHD_NC + 1](fill=Real(0.0))
+    out[IDX_RHO] = m_n
+    out[IDX_MX] = m_n * ux + p_tot * nx - B_n * Bx
+    out[IDX_MY] = m_n * uy + p_tot * ny - B_n * By
+    out[IDX_MZ] = m_n * uz + p_tot * nz - B_n * Bz
+    out[IDX_E] = (q[IDX_E] + p_tot) * u_n - B_n * udotB
+    out[IDX_BX] = Bx * u_n - B_n * ux
+    out[IDX_BY] = By * u_n - B_n * uy
+    out[IDX_BZ] = Bz * u_n - B_n * uz
+    out[MHD_NC] = fabs(u_n) + _fast_speed_inv_rho(inv_rho, p, B_n, bsq, gamma)
+    return out^
 
 
 @fieldwise_init
@@ -83,15 +146,16 @@ struct IMHD(ImplicitlyCopyable, Movable):
         return MHD_NC
 
     @staticmethod
+    @always_inline
     def internal_flux_x_static(
         q: Array[Real, MHD_NC],
         gamma: Real, rho_min: Real, press_min: Real,
     ) -> Array[Real, MHD_NC]:
-        var rho = _rho_floored(q, rho_min)
-        var p = _gas_pressure_floored(q, gamma, rho_min, press_min)
-        var ux = q[IDX_MX] / rho
-        var uy = q[IDX_MY] / rho
-        var uz = q[IDX_MZ] / rho
+        var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+        var p = _gas_pressure_from_inv_rho(q, inv_rho, gamma, press_min)
+        var ux = q[IDX_MX] * inv_rho
+        var uy = q[IDX_MY] * inv_rho
+        var uz = q[IDX_MZ] * inv_rho
         var Bx = q[IDX_BX]
         var By = q[IDX_BY]
         var Bz = q[IDX_BZ]
@@ -111,15 +175,16 @@ struct IMHD(ImplicitlyCopyable, Movable):
         return f^
 
     @staticmethod
+    @always_inline
     def internal_flux_y_static(
         q: Array[Real, MHD_NC],
         gamma: Real, rho_min: Real, press_min: Real,
     ) -> Array[Real, MHD_NC]:
-        var rho = _rho_floored(q, rho_min)
-        var p = _gas_pressure_floored(q, gamma, rho_min, press_min)
-        var ux = q[IDX_MX] / rho
-        var uy = q[IDX_MY] / rho
-        var uz = q[IDX_MZ] / rho
+        var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+        var p = _gas_pressure_from_inv_rho(q, inv_rho, gamma, press_min)
+        var ux = q[IDX_MX] * inv_rho
+        var uy = q[IDX_MY] * inv_rho
+        var uz = q[IDX_MZ] * inv_rho
         var Bx = q[IDX_BX]
         var By = q[IDX_BY]
         var Bz = q[IDX_BZ]
@@ -139,15 +204,16 @@ struct IMHD(ImplicitlyCopyable, Movable):
         return f^
 
     @staticmethod
+    @always_inline
     def internal_flux_z_static(
         q: Array[Real, MHD_NC],
         gamma: Real, rho_min: Real, press_min: Real,
     ) -> Array[Real, MHD_NC]:
-        var rho = _rho_floored(q, rho_min)
-        var p = _gas_pressure_floored(q, gamma, rho_min, press_min)
-        var ux = q[IDX_MX] / rho
-        var uy = q[IDX_MY] / rho
-        var uz = q[IDX_MZ] / rho
+        var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+        var p = _gas_pressure_from_inv_rho(q, inv_rho, gamma, press_min)
+        var ux = q[IDX_MX] * inv_rho
+        var uy = q[IDX_MY] * inv_rho
+        var uz = q[IDX_MZ] * inv_rho
         var Bx = q[IDX_BX]
         var By = q[IDX_BY]
         var Bz = q[IDX_BZ]
@@ -178,34 +244,13 @@ struct IMHD(ImplicitlyCopyable, Movable):
         nx: Real, ny: Real, nz: Real,
         gamma: Real, rho_min: Real, press_min: Real,
     ) -> Array[Real, MHD_NC]:
-        var rho_l = _rho_floored(q_l, rho_min)
-        var rho_r = _rho_floored(q_r, rho_min)
-        var p_l = _gas_pressure_floored(q_l, gamma, rho_min, press_min)
-        var p_r = _gas_pressure_floored(q_r, gamma, rho_min, press_min)
-        var bsq_l = _bsq(q_l)
-        var bsq_r = _bsq(q_r)
-
-        var u_n_l = (q_l[IDX_MX] * nx + q_l[IDX_MY] * ny + q_l[IDX_MZ] * nz) / rho_l
-        var u_n_r = (q_r[IDX_MX] * nx + q_r[IDX_MY] * ny + q_r[IDX_MZ] * nz) / rho_r
-        var B_n_l = q_l[IDX_BX] * nx + q_l[IDX_BY] * ny + q_l[IDX_BZ] * nz
-        var B_n_r = q_r[IDX_BX] * nx + q_r[IDX_BY] * ny + q_r[IDX_BZ] * nz
-
-        var c_f_l = _fast_speed(rho_l, p_l, B_n_l, bsq_l, gamma)
-        var c_f_r = _fast_speed(rho_r, p_r, B_n_r, bsq_r, gamma)
-        var c_max = fmax(fabs(u_n_l) + c_f_l, fabs(u_n_r) + c_f_r)
-
-        var fx_l = Self.internal_flux_x_static(q_l, gamma, rho_min, press_min)
-        var fy_l = Self.internal_flux_y_static(q_l, gamma, rho_min, press_min)
-        var fz_l = Self.internal_flux_z_static(q_l, gamma, rho_min, press_min)
-        var fx_r = Self.internal_flux_x_static(q_r, gamma, rho_min, press_min)
-        var fy_r = Self.internal_flux_y_static(q_r, gamma, rho_min, press_min)
-        var fz_r = Self.internal_flux_z_static(q_r, gamma, rho_min, press_min)
+        var fs_l = _normal_flux_and_speed(q_l, nx, ny, nz, gamma, rho_min, press_min)
+        var fs_r = _normal_flux_and_speed(q_r, nx, ny, nz, gamma, rho_min, press_min)
+        var c_max = fmax(fs_l[MHD_NC], fs_r[MHD_NC])
 
         var f: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
         comptime for c in range(MHD_NC):
-            var f_n_l = nx * fx_l[c] + ny * fy_l[c] + nz * fz_l[c]
-            var f_n_r = nx * fx_r[c] + ny * fy_r[c] + nz * fz_r[c]
-            f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
+            f[c] = Real(0.5) * (fs_l[c] + fs_r[c]) - Real(0.5) * c_max * (q_r[c] - q_l[c])
         return f^
 
     # ------------------------------------------------------------------
@@ -258,28 +303,30 @@ def _hlld_core_3d(
     two transverse momenta, the normal B, and the two transverse Bs.
     """
     var rho_l = _rho_floored(q_l, rho_min)
-    var p_gas_l = _gas_pressure_floored(q_l, gamma, rho_min, press_min)
+    var inv_rho_l = Real(1.0) / rho_l
+    var p_gas_l = _gas_pressure_from_inv_rho(q_l, inv_rho_l, gamma, press_min)
     var bsq_l = _bsq(q_l)
-    var u_n_l = q_l[M_N] / rho_l
-    var u_t1_l = q_l[M_T1] / rho_l
-    var u_t2_l = q_l[M_T2] / rho_l
+    var u_n_l = q_l[M_N] * inv_rho_l
+    var u_t1_l = q_l[M_T1] * inv_rho_l
+    var u_t2_l = q_l[M_T2] * inv_rho_l
     var B_n_l = q_l[B_N]
     var B_t1_l = q_l[B_T1]
     var B_t2_l = q_l[B_T2]
     var p_T_l = p_gas_l + Real(0.5) * bsq_l
-    var c_f_l = _fast_speed(rho_l, p_gas_l, B_n_l, bsq_l, gamma)
+    var c_f_l = _fast_speed_inv_rho(inv_rho_l, p_gas_l, B_n_l, bsq_l, gamma)
 
     var rho_r = _rho_floored(q_r, rho_min)
-    var p_gas_r = _gas_pressure_floored(q_r, gamma, rho_min, press_min)
+    var inv_rho_r = Real(1.0) / rho_r
+    var p_gas_r = _gas_pressure_from_inv_rho(q_r, inv_rho_r, gamma, press_min)
     var bsq_r = _bsq(q_r)
-    var u_n_r = q_r[M_N] / rho_r
-    var u_t1_r = q_r[M_T1] / rho_r
-    var u_t2_r = q_r[M_T2] / rho_r
+    var u_n_r = q_r[M_N] * inv_rho_r
+    var u_t1_r = q_r[M_T1] * inv_rho_r
+    var u_t2_r = q_r[M_T2] * inv_rho_r
     var B_n_r = q_r[B_N]
     var B_t1_r = q_r[B_T1]
     var B_t2_r = q_r[B_T2]
     var p_T_r = p_gas_r + Real(0.5) * bsq_r
-    var c_f_r = _fast_speed(rho_r, p_gas_r, B_n_r, bsq_r, gamma)
+    var c_f_r = _fast_speed_inv_rho(inv_rho_r, p_gas_r, B_n_r, bsq_r, gamma)
 
     var c_max = fmax(c_f_l, c_f_r)
     var S_L = (u_n_l if u_n_l < u_n_r else u_n_r) - c_max

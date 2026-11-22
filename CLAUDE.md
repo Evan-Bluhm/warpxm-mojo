@@ -84,7 +84,9 @@ All cells with a check have an end-to-end regression test passing on the GPU.
 Supporting infrastructure:
 
 - **BCs**: `BC_PERIODIC` (implicit), `BC_COPYOUT`, `BC_WALL_FREESLIP`,
-  `BC_PEC_WALL` (Maxwell, MHD), `BC_PMC_WALL` (Maxwell). Per-axis selection in
+  `BC_PEC_WALL` (Maxwell, ideal MHD 2D/3D), `BC_PMC_WALL` (Maxwell). GLM-MHD
+  treats every kind as copy-out; `BC_DIRICHLET` is a placeholder with no
+  implementation. Per-axis selection in
   the mesh constructor.
 - **GLL polynomial orders**: P = 1, 2, 3, 4 tables; convergence rates of
   P+1 verified for P=1, 2, 3 on the 1D advection convergence test.
@@ -114,21 +116,30 @@ Supporting infrastructure:
 | 2D pair-plasma Langmuir         | mass conserved per species to machine epsilon           |
 | Pair-plasma asym δ-scaling      | ratio 100.0 / 100.0 between δ ∈ {0.01, 0.001, 0.0001} — physical O(δ²) |
 | 2D Maxwell PEC cavity TM₁₁      | unexcited components stay at 0.0 exactly                |
-| 2D MHD Brio-Wu                  | 1D-extruded into 2D, y-drift 2.8e-13                    |
+| 2D MHD Brio-Wu                  | flux balance of all conserved integrals to 2e-12; rarefactions isentropic to 3e-4 |
 | 2D Orszag-Tang (upstream WARPXM units) | mass drift 6e-14, ψ² bounded — domain [0, 2π]², ρ₀=γ², p₀=γ |
 | 2D Orszag-Tang (Athena units)   | ρ ∈ [0.047, 0.547] at t=0.3 (Athena ref), mass drift 8e-14, ψ² 6e-5 |
 | 3D Orszag-Tang (Athena, z-extruded) | z-drift 0.0 exactly; ρ + P + ψ² match 2D bit-for-bit, mass drift 1.7e-12 |
 | 2D GLM ψ-bump decay             | ~900× decay over 2 time units (45000× over 4)           |
 | 3D MHD blast                    | ∫B_x dV preserved to 4e-15 (Faraday's law)              |
 | 3D cyclotron orbit              | ΔE = 3e-13 (magnetic force does no work)                |
-| 1D Einfeldt 1-2-3 problem       | near-vacuum centre survives (min ρ 1e-3, min P 6e-3)   |
-| 2D Einfeldt 1-2-3 problem       | y-extruded 1D; y-drift 0 exactly; min ρ 3e-4, min P 9e-4 |
-| 3D Einfeldt 1-2-3 problem       | y/z-extruded; both drifts 0; min ρ 2e-3, min P 6e-3    |
+| 1D Einfeldt 1-2-3 problem       | L1(ρ) 7.3e-3 vs exact; centre ρ 0.025 (exact 0.0219); flux balance 1e-14 |
+| 2D Einfeldt 1-2-3 problem       | y-extruded 1D; same L1(ρ) 7.3e-3; transverse momentum 4e-15; mass 1e-14 |
+| 3D Einfeldt 1-2-3 problem       | y/z-extruded; matches the 2D result to 12 digits        |
 | 2D strong MHD blast (ΔP=100)    | P_gas clamped to p_eps; mass / ∫B_x preserved 2e-13    |
 | 3D strong MHD blast (ΔP=100)    | P_gas clamped to p_eps; mass / ∫B_x preserved 2e-13    |
-| 2D Brio-Wu (HLLD)               | passes with same far-field tolerances as Rusanov path  |
-| 3D Brio-Wu (HLLD)               | exact y/z-extrusion (drifts 0), passes Rusanov tolerances |
-| Adaptive DP45 (smooth advection)| 187 steps (vs ~2000 SSPRK3), L2 1.2e-7, dt up to 0.008  |
+| 2D Brio-Wu (HLLD)               | same flux-balance and isentropy checks as the Rusanov path |
+| 3D Brio-Wu (HLLD)               | exact y/z-extrusion (drifts 0), same checks as Rusanov  |
+| Adaptive DP45 (smooth advection)| 186 steps (vs ~2000 SSPRK3), L2 3.1e-7 at rtol 1e-5; error tracks tolerance |
+| Temporal order (1D Euler)       | SSPRK3 2.99, DP45 5.00 against a small-step reference  |
+| HLLD Alfvén-wave convergence    | rate 3.00 at P=2; x / y / z propagation agree to round-off |
+| MHD wall BCs (closed box)       | mass 6e-15; PEC conserves energy to 8e-15, free-slip does not |
+| Maxwell PMC cavity              | dual of the PEC cavity; identical errors in 1D/2D/3D   |
+| Sod / Lax shock tubes           | L1 vs exact Riemann solution 5e-3..1e-2; flux balance 1e-13 |
+| Euler positivity preserver      | cell means to 1e-15; worst node lands on the floor to 1e-12 |
+| Vlasov-Maxwell uniform oscillator | E and J match E0 cos t, −E0 sin t to 2e-6 each quarter period |
+| Vlasov-Maxwell Weibel growth    | fitted γ 0.36445 vs kinetic theory 0.36436             |
+| Vlasov-Maxwell Landau-damped EM wave | period within 5e-4, damping within 5e-3 of kinetic root |
 | Adaptive DP45 (2D entropy wave) | 200 steps for t=1, dt 5.3e-4..1e-2, ρ L2 6.6e-7        |
 | Adaptive DP45 (2D MHD Alfvén)   | 169 steps for t=1 (vs 1000 SSPRK3), L2 ~4.3e-6 on B/u  |
 | 1D Maxwell PEC cavity TM        | L2 E_z 8e-6 after one period, unexcited components 0.0 |
@@ -175,6 +186,14 @@ What's shipped (so it's easy to see at a glance):
 - **Primitive-bound limiting** — Zhang-Shu positivity preservers for
   Euler (1D / 2D / 3D) and ideal MHD (2D / 3D). MHD preserver also
   works with GLM-MHD (NC=9 ψ component shrunk along with the rest).
+- **Slope limiter tolerance** — the limiter only acts on deviations
+  larger than `α = alpha_coeff · dx^1.5`. The default `alpha_coeff = 1000`
+  (upstream's) gives α ≈ 0.35 on a 200-cell unit domain, so on problems
+  whose solution is much smaller than that (near-vacuum, coarse meshes)
+  it is a no-op and the positivity preserver is left to do all the work.
+  That is what made the Einfeldt 1-2-3 tests fail or pass on round-off;
+  they now pass `alpha_coeff=10`. Pick α below the smallest solution scale
+  you need limited.
 - **Slope limiter** — Moe-Rossmanith conserved-variable limiter,
   NDIM-parametric (2D + 3D) and NC-parameterised. 1D variant
   (Euler-only) lives in `adjusters/moe_rossmanith_1d.mojo`.
@@ -258,10 +277,34 @@ Mojo 1.2.0 specifics (toolchain is pinned to `mojo ==1.2.0` +
   launch sites pass `Int64(size)`.
 - `row_major(Idx(n))` → `row_major(Int(n))`.
 - Prefer `comptime match` over `comptime if / elif` chains on a parameter.
+- Inside kernels use `NodalBasis1D[P].diff_entry[col](row)` (a select over
+  immediates) and comptime weights, not the `@inline(.never)` table
+  accessors, which become real calls through per-thread local memory.
 - `NodalBasis1D.nodes()/weights()/diff_matrix_flat()` are `@inline(.never)` to
   dodge a 1.2.0 optimizer bug (an `Array` returned by an inlined function
   reads back as garbage in host code after a `ctx.enqueue_copy`). See the
   note in `basis/nodal_basis_1d.mojo` before removing it.
+
+### Kernel performance rules
+
+Every DG kernel is bound by the FP64 pipe on consumer GPUs (86–88 % busy on
+an RTX 3090), so FP64 instruction count is what matters. Rules that came out
+of profiling with `ncu` (see `bench/BASELINE.md`):
+
+- **Square roots go through `core.math_compat.sqrt`** (the `llvm.sqrt`
+  intrinsic). Never `x ** 0.5`: that is a software `pow`, and was the
+  largest single cost in the MHD flux.
+- **Divide once.** Take `inv_rho = 1 / ρ` once per state and multiply; a
+  double division is about ten FP64 instructions. The DG cores receive
+  `1 / jacobian` from the launcher and use comptime reciprocal weights.
+- **Numerical fluxes form F·n directly** (`_normal_flux_and_speed` in
+  `apps/euler.mojo`, `apps/imhd.mojo`): one flux evaluation per side. Do
+  not build f_x, f_y, f_z and dot with n — `0.0 * f_y` cannot be folded.
+- **No per-thread local memory**: index scratch arrays with comptime
+  indices only, and do not call non-inlined functions that return arrays.
+- **Adjuster kernels run one thread per element**, so their latency is the
+  serial depth of the worst element. Keep iterative work (the MHD
+  positivity bisection) conditional on the node actually violating.
 
 ### Apps architecture
 
