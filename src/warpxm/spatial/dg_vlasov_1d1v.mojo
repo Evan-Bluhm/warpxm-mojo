@@ -75,8 +75,8 @@ def _vlasov_rhs_kernel_1d1v[
     node_v: TileTensor[WXM_DTYPE, NodeVLayout, MutAnyOrigin],
     aux: TileTensor[WXM_DTYPE, AuxLayout, MutAnyOrigin],
     num_v_i64: Int64,
-    charge_mass_ratio: Real, skin_depth_norm: Real,
-    jacobian_x: Real, jacobian_v: Real,
+    accel_factor: Real,
+    inv_jacobian_x: Real, inv_jacobian_v: Real,
     num_phase_elements_i64: Int64,
 ):
     """Per-phase-node DG residual for 1D1V Vlasov.
@@ -86,7 +86,7 @@ def _vlasov_rhs_kernel_1d1v[
     `(E_x, E_y, E_z, B_x, B_y, B_z)`); for 1D1V only `E_x` enters
     because `v_y = v_z = 0` collapses `v × B` to zero.
 
-    Thread layout: `block_idx.x = phase_e`,
+    Thread layout: `(block_idx.x, block_idx.y) = (ev, ex)`,
     `(thread_idx.x, thread_idx.y) = (ix, iv)` indexing the local node
     `(ix, iv) ∈ [0, P_x+1) × [0, P_v+1)`.
     """
@@ -105,14 +105,16 @@ def _vlasov_rhs_kernel_1d1v[
     comptime assert node_v.flat_rank == 1
     comptime assert aux.flat_rank == 1
 
-    var phase_e = Int(block_idx.x)
+    # The launch grid is (num_v, num_x), so the element indices come
+    # straight from the block index (no 64-bit divide/modulo per thread).
+    var ev = Int(block_idx.x)
+    var ex = Int(block_idx.y)
+    var phase_e = ex * num_v + ev
     var ix = Int(thread_idx.x)
     var iv = Int(thread_idx.y)
     if phase_e >= num_phase_elements or ix >= P1x or iv >= P1v:
         return
 
-    var ex = phase_e // num_v
-    var ev = phase_e % num_v
     var local_n = iv * P1x + ix
 
     # v-coordinate for the current phase node — same on both sides of an
@@ -128,7 +130,7 @@ def _vlasov_rhs_kernel_1d1v[
         aux[node_x * VLASOV_AUX_NC + AUX_EX]
     )
     var av_n: Real = VlasovMaxwell.acceleration_v_1d1v_static(
-        ex_field, charge_mass_ratio, skin_depth_norm,
+        ex_field, accel_factor, Real(1.0),
     )
 
     # Shared-memory cache of the per-node fluxes for this phase cell, so
@@ -147,23 +149,26 @@ def _vlasov_rhs_kernel_1d1v[
 
     barrier()
 
+    # FP64 and local-memory hygiene (see CLAUDE.md, "Kernel performance
+    # rules"): the launcher passes 1 / jacobian and (q/m) / λ_skin, the
+    # weights enter as comptime reciprocals, and the differentiation
+    # matrices are read through `diff_entry` — so the kernel issues no
+    # double divisions and keeps nothing in per-thread local memory.
     # --- Volume term ------------------------------------------------------
     # ∂F_x/∂x along the ix axis (uses the P_x diff matrix);
     # ∂F_v/∂v along the iv axis (uses the P_v diff matrix).
-    var dx_flat = NodalBasis1D[P_x].diff_matrix_flat()
-    var dv_flat = NodalBasis1D[P_v].diff_matrix_flat()
     var dfdx: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
     var dgdv: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
     comptime for kn in range(P1x):
-        var dx_ix_kn: Scalar[WXM_DTYPE] = dx_flat[ix * P1x + kn]
+        var dx_ix_kn: Scalar[WXM_DTYPE] = NodalBasis1D[P_x].diff_entry[kn](ix)
         var k_node = iv * P1x + kn
         comptime for c in range(NC):
             var fx_kn = rebind[Scalar[WXM_DTYPE]](f_shared[k_node, c, 0])
             dfdx[c] += dx_ix_kn * fx_kn
 
     comptime for ln in range(P1v):
-        var dv_iv_ln: Scalar[WXM_DTYPE] = dv_flat[iv * P1v + ln]
+        var dv_iv_ln: Scalar[WXM_DTYPE] = NodalBasis1D[P_v].diff_entry[ln](iv)
         var l_node = ln * P1x + ix
         comptime for c in range(NC):
             var fv_ln = rebind[Scalar[WXM_DTYPE]](f_shared[l_node, c, 1])
@@ -175,12 +180,14 @@ def _vlasov_rhs_kernel_1d1v[
     # gives a zero ghost state for slice 3 (interior `f` carried through
     # an inert numerical flux because `a_v = 0`), and the x-axis is
     # periodic in the smoke test that uses this kernel.
-    var weights_x = NodalBasis1D[P_x].weights()
-    var weights_v = NodalBasis1D[P_v].weights()
-    var wx_0: Scalar[WXM_DTYPE] = weights_x[0]
-    var wx_P: Scalar[WXM_DTYPE] = weights_x[P_x]
-    var wv_0: Scalar[WXM_DTYPE] = weights_v[0]
-    var wv_P: Scalar[WXM_DTYPE] = weights_v[P_v]
+    comptime inv_wx_0: Real = Real(1.0) / NodalBasis1D[P_x].weights()[0]
+    var sx_0: Scalar[WXM_DTYPE] = inv_jacobian_x * inv_wx_0
+    comptime inv_wx_P: Real = Real(1.0) / NodalBasis1D[P_x].weights()[P_x]
+    var sx_P: Scalar[WXM_DTYPE] = inv_jacobian_x * inv_wx_P
+    comptime inv_wv_0: Real = Real(1.0) / NodalBasis1D[P_v].weights()[0]
+    var sv_0: Scalar[WXM_DTYPE] = inv_jacobian_v * inv_wv_0
+    comptime inv_wv_P: Real = Real(1.0) / NodalBasis1D[P_v].weights()[P_v]
+    var sv_P: Scalar[WXM_DTYPE] = inv_jacobian_v * inv_wv_P
 
     var surface: Array[Real, NC] = Array[Real, NC](fill=Real(0.0))
 
@@ -196,7 +203,7 @@ def _vlasov_rhs_kernel_1d1v[
             q_neg, f_n, vx_n,
         )
         comptime for c in range(NC):
-            surface[c] += (f_star[c] - fx_n[c]) / (jacobian_x * wx_0)
+            surface[c] += (f_star[c] - fx_n[c]) * sx_0
 
     if ix == P_x:
         var fR = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[phase_e * 4 + FACE_DIR_RIGHT]))
@@ -210,7 +217,7 @@ def _vlasov_rhs_kernel_1d1v[
             f_n, q_pos, vx_n,
         )
         comptime for c in range(NC):
-            surface[c] += (fx_n[c] - f_star[c]) / (jacobian_x * wx_P)
+            surface[c] += (fx_n[c] - f_star[c]) * sx_P
 
     if iv == 0:
         var fB = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[phase_e * 4 + FACE_DIR_BOTTOM]))
@@ -228,7 +235,7 @@ def _vlasov_rhs_kernel_1d1v[
             q_neg, f_n, av_n,
         )
         comptime for c in range(NC):
-            surface[c] += (f_star[c] - fv_n[c]) / (jacobian_v * wv_0)
+            surface[c] += (f_star[c] - fv_n[c]) * sv_0
 
     if iv == P_v:
         var fT = Int(rebind[Scalar[INDEX_DTYPE]](elem_face_dir[phase_e * 4 + FACE_DIR_TOP]))
@@ -246,13 +253,13 @@ def _vlasov_rhs_kernel_1d1v[
             f_n, q_pos, av_n,
         )
         comptime for c in range(NC):
-            surface[c] += (fv_n[c] - f_star[c]) / (jacobian_v * wv_P)
+            surface[c] += (fv_n[c] - f_star[c]) * sv_P
 
     # --- Write back -------------------------------------------------------
     var base = (phase_e * nodes_per_phase + local_n) * NC
     comptime for c in range(NC):
         var v: Scalar[WXM_DTYPE] = (
-            -dfdx[c] / jacobian_x - dgdv[c] / jacobian_v + surface[c]
+            -dfdx[c] * inv_jacobian_x - dgdv[c] * inv_jacobian_v + surface[c]
         )
         rhs[base + c] = rebind[rhs.ElementType](v)
 
@@ -306,8 +313,8 @@ struct DGVlasovSolver1D1V[P_x: Int, P_v: Int]:
         ctx.enqueue_function[kernel](
             q_view, rhs_view, fn_view, fp_view, ef_view, fbc_view,
             node_v_view, aux_view, Int64(mesh.num_v),
-            self.app.charge_mass_ratio, self.app.skin_depth_norm,
-            mesh.jacobian_x, mesh.jacobian_v, Int64(mesh.num_phase_elements),
-            grid_dim=mesh.num_phase_elements,
+            self.app.charge_mass_ratio / self.app.skin_depth_norm,
+            Real(1.0) / mesh.jacobian_x, Real(1.0) / mesh.jacobian_v, Int64(mesh.num_phase_elements),
+            grid_dim=(mesh.num_v, mesh.num_x),
             block_dim=(P1x, P1v),
         )

@@ -173,3 +173,36 @@ The MHD positivity preserver was a separate bottleneck in limited runs:
 because it bisected 50 times for every node of any element that needed
 limiting. It now bisects only nodes that still violate the bound at the
 current θ: 0.19 ms per call, same result to round-off.
+
+## Vlasov-Maxwell 1D2V (2026-11-21)
+
+Driver: `profiling/prof_vlasov_1d2v.mojo` — 64 × 32 × 32 phase-space
+elements at P = 2 (1.77M nodes), coupled SSPRK3 step. Per-launch numbers
+from `ncu` on the RTX 3090:
+
+| Kernel                    | before   | after    | what changed |
+| ------------------------- | -------: | -------: | ------------ |
+| kinetic RHS               | 1.549 ms | 0.555 ms | no local memory, no double divisions |
+| first moment (v1)         | 0.867 ms | 0.064 ms | 32 lanes per x-node + shared-memory combine |
+| first moment (v2)         | 0.710 ms | 0.055 ms | same |
+| whole step                | 111 steps/s | 444 steps/s | **4.0×** |
+
+This is the kernel where upstream's diagnosis applied directly. The
+kinetic RHS wrote 464 MB to DRAM per launch for a 14 MB result: the three
+differentiation matrices and three weight tables were returned by
+non-inlined calls into per-thread local memory (92 registers, 1.77M local
+stores per launch). With `diff_entry`, comptime reciprocal weights and
+host-side `1 / jacobian` and `(q/m) / λ_skin` it writes 12 MB, uses 53
+registers and has no local loads or stores.
+
+The moment kernels were the other half of the step: one thread per x-node
+looping serially over all 9216 velocity nodes, so 192 threads on the whole
+GPU. They are now one generic kernel (`_moment_kernel_1d2v`) with 32 lanes
+per x-node.
+
+What is left in the kinetic RHS is about 360 instructions per thread, of
+which only ~40 are FP64; the rest is 64-bit index arithmetic and selects.
+Launching on a (num_v2, num_v1, num_x) grid to avoid unpacking the block
+index removed instructions but did not change the time. The 1D1V RHS got
+the same treatment; the 1D1V moment kernels are still one thread per
+x-node (their velocity loop is two orders of magnitude shorter).
