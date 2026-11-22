@@ -1,0 +1,13 @@
+{
+  // Project-local Zed settings for warpxm-mojo.
+  // Add `src/` to the Mojo language server's module search path (mirrors the
+  // `-I src` used in mojo run/build). The zed-mojo extension turns each entry
+  // into `-I <dir>`; relative paths resolve against the project root.
+  "lsp": {
+    "mojo": {
+      "settings": {
+        "include_dirs": ["src"]
+      }
+    }
+  }
+}
