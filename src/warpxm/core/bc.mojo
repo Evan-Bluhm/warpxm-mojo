@@ -25,12 +25,6 @@ comptime BC_COPYOUT: Int = 1
 # copied. Used for the "Wall" BC on impermeable boundaries in 5-moment Euler.
 comptime BC_WALL_FREESLIP: Int = 2
 
-# Dirichlet — ghost state set to a fixed user-prescribed vector. Today we
-# don't carry the prescribed value (it would need per-component storage); a
-# follow-up commit will add a `bc_value_buf` per boundary face. Listed here
-# as a placeholder so kernel-side dispatch can reserve a branch number.
-comptime BC_DIRICHLET: Int = 3
-
 # Perfect electric conductor (PEC) wall — Maxwell-specific reflecting BC.
 # Tangential components of E (and the normal component of B) are zero on
 # the wall; the ghost state is built by flipping those components from the

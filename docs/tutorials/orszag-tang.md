@@ -6,12 +6,12 @@ structure over time. This tutorial runs the full
 `examples/imhd_orszag_tang_2d_vtu.mojo` driver, which exercises:
 
 * `ImhdGLM` with Dedner divergence cleaning,
-* `DGImhdGLMSolver2D` with Rusanov flux (HLLD is a one-line switch),
-* `MoeRossmanith2D[P, MHD_GLM_NC]` slope limiter,
-* `SSPRK3_2D[P, MHD_GLM_NC]` for time stepping, with the GLM damping
-  source composed into the `compute_rhs` closure,
-* `FrameWriter` + `dump_imhd_glm_2d_frame` for VTU output,
-* host-side integrated conservation diagnostics each frame.
+* `DGImhdGLMSolver[2, P]` with Rusanov flux (HLLD is a one-line switch),
+* `MoeRossmanith[2, P, MHD_GLM_NC]` slope limiter,
+* `SSPRK3[2, P, MHD_GLM_NC]` with a CFL-driven time step, and the GLM
+  damping source composed into the `compute_rhs` closure,
+* `FrameWriter` + `dump_imhd_glm_frame` for VTU output,
+* integrated conservation diagnostics each frame via `mesh.integrate`.
 
 ## What's modelled
 
@@ -33,29 +33,27 @@ output frames.
 ## Run it
 
 ```fish
-mkdir -p /tmp/orszag_tang
-pixi run mojo run -I src examples/imhd_orszag_tang_2d_vtu.mojo
+pixi run example imhd_orszag_tang_2d_vtu
 ```
 
-The console prints, per frame, the integrated diagnostics:
+The console prints the integrated diagnostics per frame:
 
 ```text
-time         ∫ρ dV            ∫E dV            ∫ψ² dV         rel Δmass   rel ΔE
------------  ---------------- ---------------- ---------------- ----------  ----------
-0.0          109.66           ...              0.0              0.0         0.0
-0.05         109.66           ...              <bounded>        6e-14       8e-14
+time   ∫ρ dV   ∫E dV   ∫ψ² dV   rel Δmass   rel ΔE
+0.0 109.66227112320146 173.2663883746777 0.0 0.0 0.0
+0.05 109.66227112321529 173.26638837467803 5.785429809628215e-10 1.2608859452087446e-13 1.9684170505552763e-15
 ...
+0.5 109.66227112321464 173.26638837467752 1.0308759465270991e-05 1.2012757155277556e-13 -9.842085252776382e-16
+Wrote 11 frames and output/orszag_tang/orszag_tang.pvd
 ```
 
-These are useful sanity checks:
+* `∫ρ dV` and `∫E dV` are conserved on the periodic domain: the relative
+  drifts stay at 1e-13 and 1e-14.
+* `∫ψ² dV` stays small (1e-5 at $t = 0.5$): GLM cleaning carries the
+  divergence error away and damps it.
 
-* `∫ρ dV` should be exactly conserved (periodic boundaries).
-* `∫E dV` should be exactly conserved.
-* `∫ψ² dV` should stay bounded — the GLM cleaning dissipates the
-  divergence error fast enough that ψ doesn't grow.
-
-After the run, `/tmp/orszag_tang/orszag_tang.pvd` is the time-series
-collection for ParaView.
+`output/orszag_tang/orszag_tang.pvd` is the time-series collection for
+ParaView. `FrameWriter("orszag_tang")` creates the directory.
 
 ## Walkthrough
 
@@ -71,66 +69,122 @@ damps it — the simulation runs to $t = 0.5$ with mass drift $6 \times
 ### Mesh and IC
 
 ```mojo
-var mesh = BlockMesh2D[P](
-    ctx, 0.0, TWO_PI, 0.0, TWO_PI,
-    nx=64, ny=64, periodic_x=True, periodic_y=True,
+from warpxm.prelude import *
+from warpxm.physics.imhd_glm import *
+
+comptime State = DGState[2, P, MHD_GLM_NC]
+
+var mesh = BlockMesh[2, P](
+    ctx, Real(0.0), TWO_PI, Real(0.0), TWO_PI,
+    nx=NX, ny=NY, periodic_x=True, periodic_y=True,
 )
-var q = DGState2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
+var q = State(ctx, mesh.num_elements)
+
+def initial(x: Real, y: Real) -> Array[Real, MHD_GLM_NC]:
+    var rho = GAMMA * GAMMA
+    var ux = -sin(y)
+    var uy = sin(x)
+    var bx = -sin(y)
+    var by = sin(Real(2.0) * x)
+    var energy = (
+        GAMMA / (GAMMA - Real(1.0))
+        + Real(0.5) * rho * (ux * ux + uy * uy)
+        + Real(0.5) * (bx * bx + by * by)
+    )
+    var v = Array[Real, MHD_GLM_NC](fill=Real(0.0))
+    v[IDX_RHO] = rho
+    v[IDX_MX] = rho * ux
+    v[IDX_MY] = rho * uy
+    v[IDX_E] = energy
+    v[IDX_BX] = bx
+    v[IDX_BY] = by
+    return v^
+mesh.fill(q, initial)
 ```
 
-`MHD_GLM_NC = 9` (component index 8 is the GLM scalar ψ; see
-`IDX_PSI`). The IC loop initialises ρ, momenta, energy (including
-magnetic), B-components, and sets ψ ≡ 0 at every node.
+`MHD_GLM_NC = 9`; component `IDX_PSI = 8` is the GLM scalar ψ, left at
+zero. The closure returns the conserved state at a point and
+`mesh.fill` evaluates it at every GLL node.
 
-### Stepper
+### Solver and closures
 
 ```mojo
 var app = ImhdGLM(
-    gas_gamma=Real(5.0/3.0),
-    min_density=Real(1e-12),
-    min_pressure=Real(1e-12),
-    cfl_max=Real(0.5),
-    c_h=Real(4.0),
-    c_p_sq=Real(0.5),
+    gas_gamma=GAMMA, min_density=Real(1e-12),
+    min_pressure=Real(1e-12), cfl_max=Real(0.5),
+    c_h=C_H, c_p_sq=C_P_SQ,
 )
-var spatial = DGImhdGLMSolver2D[P](app)
-var stepper = SSPRK3_2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
-var limiter = MoeRossmanith2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
+var spatial = DGImhdGLMSolver[2, P](app)
+var stepper = SSPRK3[2, P, MHD_GLM_NC](ctx, mesh.num_elements)
+var limiter = MoeRossmanith[2, P, MHD_GLM_NC](ctx, mesh.num_elements)
+var fw = FrameWriter("orszag_tang")
 
-def compute_rhs(
-    mut q_in: DGState2D[P, MHD_GLM_NC],
-    mut q_out: DGState2D[P, MHD_GLM_NC],
-) raises {imm}:
+def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
-    apply_glm_damping_2d[P](ctx, q_in, q_out, C_H, C_P_SQ)
+    apply_glm_damping(ctx, q_in, q_out, C_H, C_P_SQ)
 
-def adjust(mut q_: DGState2D[P, MHD_GLM_NC]) raises {mut limiter, imm}:
+def adjust(mut q_: State) raises {mut limiter, imm}:
     limiter.apply(ctx, mesh, q_)
+
+def suggest_dt(mut q_: State) raises {imm} -> Real:
+    return spatial.suggest_dt(ctx, mesh, q_)
 ```
 
 The spatial solver handles the $\psi$-coupled flux; the parabolic GLM
 damping is composed into `compute_rhs` as a source kernel that adds
 $-\tfrac{c_h^{2}}{c_p^{2}}\psi$ to the $\psi$ RHS. The limiter is
-NC-parameterised and works at NC=9 without changes.
+NC-parameterised and works at NC = 9 without changes.
 
-### Inside the time loop
+### Frame loop
 
 ```mojo
+def psi_squared(v: Array[Real, MHD_GLM_NC]) -> Real:
+    return v[IDX_PSI] * v[IDX_PSI]
+
+var t: Real = 0.0
 for frame in range(NUM_FRAMES):
-    dump_imhd_glm_2d_frame[P, MHD_GLM_NC](fw.next_path(t), ctx, mesh, q, GAMMA)
-    mass = _integrate_field[IDX_RHO](ctx, q, mesh)
-    e_tot = _integrate_field[IDX_E](ctx, q, mesh)
-    psi2 = _integrate_squared_field[IDX_PSI](ctx, q, mesh)
-    # print diagnostics
+    dump_imhd_glm_frame(fw.next_path(t), mesh, q, GAMMA)
+    var mass = mesh.integrate(q, IDX_RHO)
+    var energy = mesh.integrate(q, IDX_E)
+    print(
+        t, mass, energy, mesh.integrate_fn(q, psi_squared),
+        (mass - mass_0) / mass_0, (energy - energy_0) / energy_0,
+    )
     if frame < NUM_FRAMES - 1:
-        # advance to next frame time
-        ...
+        t = stepper.run_until_cfl(
+            ctx, q, t, T_FINAL * Real(frame + 1) / Real(NUM_FRAMES - 1),
+            compute_rhs, adjust, suggest_dt, dt_interval=10,
+        )
+
+fw.write_pvd()
 ```
 
-The `_integrate_field` / `_integrate_squared_field` helpers in the
-driver are short host-side reductions using GLL quadrature weights —
-the exact-mean integration property of the basis means these come
-out conservative to machine precision.
+`mesh.integrate(q, comp)` and `mesh.integrate_fn(q, f)` are GLL
+quadratures of a component and of any pointwise function of the node
+state.
+
+The time step is not hard-coded. `spatial.suggest_dt` takes the largest
+of $|u| + \sqrt{c_s^2 + c_A^2}$ over all nodes, floors it at $c_h$, and
+returns `cfl_max / ((2P + 1) · λ · (1/Δx + 1/Δy))`. `run_until_cfl`
+advances to each frame time, refreshing the step every `dt_interval = 10`
+steps and shortening the last step to land on the frame time exactly. It
+accepts a `dt_min` argument and raises if the suggested step falls to or
+below it, or is NaN, so a degenerating run fails instead of stalling.
+
+### Athena normalisation
+
+`examples/imhd_orszag_tang_2d_athena_vtu.mojo` is the same problem in
+the Athena convention (domain $[0, 1]^2$, $\rho_0 = 25/(36\pi)$,
+$p_0 = 5/(12\pi)$, $B_0 = 1/\sqrt{4\pi}$) at P = 3 on 128² cells, run
+to $t = 4$ in 41 frames (about six minutes). It constructs the limiter
+with `alpha_coeff=Real(100.0)`. The limiter only acts on deviations
+above $\alpha = \texttt{alpha\_coeff} \cdot \Delta x^{1.5}$, and with
+the default 1000 it is idle on this problem: a node then evacuates, its
+sound speed grows, and the CFL step collapses (with the old fixed step
+the run went NaN near $t = 0.55$). With 100 the step stays between
+5.9e-5 and 9.3e-5 and $\rho \in [0.042, 0.45]$ at $t = 0.3$, against
+Athena's $[0.047, 0.55]$; the limiter is somewhat more diffusive than
+the reference.
 
 ## What you'll see
 
@@ -148,8 +202,8 @@ Stone-Gardiner all show it.
 
 ## Variations
 
-* **HLLD flux**: change `DGImhdGLMSolver2D[P](app)` to
-  `DGImhdGLMSolver2D[P, USE_HLLD=True](app)`. The shock structure
+* **HLLD flux**: change `DGImhdGLMSolver[2, P](app)` to
+  `DGImhdGLMSolver[2, P, USE_HLLD=True](app)`. The shock structure
   sharpens noticeably; integrated quantities drift more slowly. The
   GLM path composes the IMHD HLLD solver with the exact 2x2
   (B_n, ψ) Riemann block — see
@@ -159,6 +213,6 @@ Stone-Gardiner all show it.
   cleaner, and `psi^{2}` becomes a more aggressive lower bound on the
   divergence error magnitude.
 * **Removing GLM**: substitute `IMHD` for `ImhdGLM`, drop the
-  `apply_glm_damping_2d` line from `compute_rhs`, and switch
+  `apply_glm_damping` line from `compute_rhs`, and switch
   `MHD_GLM_NC` → `MHD_NC` throughout. The simulation will diverge
   within ~0.1 time units as $\nabla\cdot\mathbf{B}$ grows.

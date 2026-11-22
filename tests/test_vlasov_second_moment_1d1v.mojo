@@ -16,18 +16,13 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_second_moment_1d1v.mojo
 
-from std.math import exp, sqrt, erf
+from std.math import exp, erf
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.vlasovmaxwell import VLASOV_NC
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, PI
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.vlasov_moments_1d1v import VlasovMoments1D1V
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
 
 
 comptime P_X: Int = 2
@@ -51,23 +46,11 @@ def main() raises:
 
     var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
 
-    var ref_v_nodes = NodalBasis1D[P_V].nodes()
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for ex in range(NX):
-        for ev in range(NV):
-            var vl = -V_MAX + Real(ev) * mesh.dv
-            for ix in range(P_X + 1):
-                for iv in range(P_V + 1):
-                    var v = vl + (Real(1.0) + ref_v_nodes[iv]) * mesh.jacobian_v
-                    var phase_e = ex * NV + ev
-                    var idx = (
-                        (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                    ) * VLASOV_NC
-                    host[idx] = exp(-v * v / SIGMA_SQ)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
-    ctx.synchronize()
+    def maxwellian(x: Real, v: Real) -> Real:
+        return exp(-v * v / SIGMA_SQ)
+    mesh.fill(q, maxwellian)
 
-    var e_dens = DGState1D[P_X, 1](ctx, NX)
+    var e_dens = DGState[1, P_X, 1](ctx, NX)
     var moments = VlasovMoments1D1V[P_X, P_V]()
     moments.second_moment(ctx, mesh, q, e_dens)
     ctx.synchronize()

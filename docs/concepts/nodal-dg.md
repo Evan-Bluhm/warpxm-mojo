@@ -30,8 +30,9 @@ two pieces are computed separately in our DG kernels:
   \mathbf{F}_h)\cdot\hat{n}$ is applied only at face GLL nodes — for
   GLL bases this localisation is exact.
 
-In the code those two contributions appear as `dfdx` (volume) and
-`surface` (face) arrays in every `_*_rhs_kernel_*` function.
+In the code those two contributions are the "Volume term" and "Surface
+term" blocks of `_dg_compute_rhs_core` (`spatial/dg_core.mojo`), which
+every `_<phys>_rhs_kernel` calls.
 
 ## Gauss-Lobatto-Legendre nodes
 
@@ -66,14 +67,15 @@ factor naturally — the volume derivative along axis $\hat{x}$ is the 1D
 derivative matrix applied along one tensor axis, leaving the others
 untouched.
 
-Concretely, the 2D Euler kernel computes
+Concretely, in 2D the DG core computes one derivative per axis,
 
 ```mojo
-var dfdx = ...   # ∂F/∂x at this node, by 1D differentiation along i
-var dgdy = ...   # ∂G/∂y at this node, by 1D differentiation along j
+deriv[0 * NC + c]   # ∂F/∂x at this node, by 1D differentiation along i
+deriv[1 * NC + c]   # ∂G/∂y at this node, by 1D differentiation along j
 ```
 
-and the surface term is non-zero only at the four faces.
+in a `comptime for` over the axes, and the surface term is non-zero only
+at the four faces.
 
 ## Numerical fluxes
 
@@ -98,7 +100,7 @@ the same numerical-flux machinery. The BC is selected per-axis in the
 mesh constructor:
 
 ```mojo
-var mesh = BlockMesh2D[P](
+var mesh = BlockMesh[2, P](
     ctx, x_min, x_max, y_min, y_max,
     nx=NX, ny=NY,
     periodic_x=False, periodic_y=True,
@@ -114,11 +116,12 @@ See the [`core.bc`](../api/core.md) module for the full enum and
 | Concept                       | File                                                          |
 | ----------------------------- | ------------------------------------------------------------- |
 | GLL nodes + weights           | `src/warpxm/basis/nodal_basis_1d.mojo`                        |
-| Mesh + ghost wiring           | `src/warpxm/mesh/block_{1,2,3}d.mojo`                         |
-| Shared DG core (per dim)      | `src/warpxm/spatial/dg_core_{1,2,3}d.mojo`                    |
-| Advection DG kernel           | `src/warpxm/spatial/dg_{1,2,3}d.mojo` (the un-prefixed files) |
-| Per-physics DG kernels        | `src/warpxm/spatial/dg_{euler,maxwell,imhd,imhd_glm}_{N}d.mojo` |
-| Volume vs surface split       | Each kernel — search for `dfdx` (volume) and `surface` (face) |
+| Mesh + ghost wiring           | `src/warpxm/mesh/block.mojo`                                  |
+| Shared DG core                | `src/warpxm/spatial/dg_core.mojo`                             |
+| Host-side kernel launcher     | `src/warpxm/spatial/dg_launch.mojo`                           |
+| Per-physics DG kernels        | `src/warpxm/spatial/dg_{advection,euler,maxwell,imhd,imhd_glm}.mojo` |
+| Phase-space (kinetic) DG      | `src/warpxm/spatial/kinetic/dg_vlasov_1d{1,2}v.mojo`          |
+| Volume vs surface split       | `dg_core.mojo` — the "Volume term" and "Surface term" blocks  |
 
-Reading just one DG kernel — `spatial/dg_euler_2d.mojo` is a good
-target — is usually enough to internalise the pattern.
+Reading one wrapper (`spatial/dg_euler.mojo` is a good target) and the
+core it calls is usually enough to internalise the pattern.

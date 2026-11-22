@@ -17,7 +17,7 @@ modules and calls into them directly.
 git clone https://github.com/<your-fork>/warpxm-mojo.git
 cd warpxm-mojo
 pixi install
-pixi run mojo run -I src examples/advection_1d.mojo
+pixi run example advection_1d
 ```
 
 That last command runs a 1D periodic advection problem on the GPU
@@ -31,9 +31,10 @@ Then:
 ```fish
 pixi run build              # type-check every example (~30s)
 pixi run test               # full regression suite, in parallel (~1 min)
+pixi run example            # list the examples; add a name to run one
 ```
 
-Both should report no failures on a working install.
+The first two should report no failures on a working install.
 
 ## Documentation
 
@@ -71,33 +72,44 @@ pixi run --environment docs docs-build
 (1D MHD is the only physical gap — the lowest-rank MHD problem
 requires a perpendicular B field that doesn't fit a 1D mesh.)
 
+There is also a continuum-kinetic **Vlasov-Maxwell** solver (phase-space
+DG) in 1D1V and 1D2V, with moments, a BGK collision operator and
+self-consistent coupling to Maxwell.
+
 Plus:
 
-* Moe-Rossmanith slope limiter (1D Euler-only; 2D / 3D
-  NC-parametric across all physics).
+* Moe-Rossmanith slope limiter (`MoeRossmanith[NDIM, P, NC]`, any
+  physics, any dimension).
 * Zhang-Shu positivity preserver (Euler 1D / 2D / 3D; MHD 2D / 3D).
 * Rusanov flux everywhere; Miyoshi-Kusano HLLD for MHD and GLM-MHD
   (2D and 3D, selectable at compile time via
-  `DGImhdSolver{2,3}D[P, USE_HLLD=True]` and
-  `DGImhdGLMSolver{2,3}D[P, USE_HLLD=True]`).
+  `DGImhdSolver[NDIM, P, USE_HLLD=True]` and
+  `DGImhdGLMSolver[NDIM, P, USE_HLLD=True]`).
 * SSPRK3 time integration plus Dormand-Prince adaptive RK45 — both
-  closure-driven and dimension-agnostic
-  (`DormandPrince45_{1,2,3}D[P, NC]`). DP45 takes 6–40× fewer steps
+  closure-driven and generic over the dimension (`SSPRK3[NDIM, P, NC]`,
+  `DormandPrince45[NDIM, P, NC]`), with CFL-driven step selection
+  (`solver.suggest_dt`). DP45 takes 6–40× fewer steps
   than fixed-Δt SSPRK3 on smooth problems.
-* ParaView VTU writers for every 2D / 3D physics, with a
-  `FrameWriter` for time-series + `.pvd` collection.
+* One generic ParaView `.vtu` writer (appended binary) with per-physics
+  presets, and a `FrameWriter` for time series + `.pvd` collection.
+* Host-side helpers on the meshes (`fill`, `integrate`, `l2_error`,
+  `visit_nodes`) so a driver never indexes the state buffer itself.
 
-66 regression tests, all passing. See `docs/contributing/index.md` for
-the open roadmap items.
+The full matrix and capability notes are in [docs/features.md](docs/features.md); the
+regression suite's quantitative results are in [docs/validation.md](docs/validation.md).
 
 ## Architecture
 
-Each physics is a **single file** in `apps/`; the DG launcher (the
-shared `dg_core_{1,2,3}d` template) owns dimensionality, and the app
-operates on local node values via a 3-component-normal numerical flux.
-Adding a new (physics, dimension) combination is mostly mechanical —
-see `docs/contributing/adding-a-physics.md`. The 1D Maxwell and 1D
-plasma packages were added this way in under an hour each.
+Each physics is a **single file** in `apps/` plus one thin DG wrapper in
+`spatial/`. The shared DG core (`spatial/dg_core.mojo`) owns
+dimensionality, and the app operates on local node values via a
+3-component-normal numerical flux. Everything else is written once for
+every dimension: the mesh (`BlockMesh[NDIM, P]`), the state
+(`DGState[NDIM, P, NC]`), the solvers (`DGEulerSolver[NDIM, P]`, ...),
+the time steppers, the limiter and positivity preservers, and the
+pointwise source kernels. A new physics therefore works in 1D, 2D and 3D
+as soon as its app and wrapper exist; see
+`docs/contributing/adding-a-physics.md`.
 
 ## Status
 

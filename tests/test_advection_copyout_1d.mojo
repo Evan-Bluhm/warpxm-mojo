@@ -16,87 +16,65 @@
 # x = 1.25, i.e. well outside the domain, so the post-test L2 norm of `q`
 # should be ≪ the initial peak height.
 
+from std.collections import Array
 from std.math import exp
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.advection import Advection
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import BC_COPYOUT
-from warpxm.core.math_compat import fabs
-from warpxm.core.types import Real
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.spatial.dg_1d import DGSpatialSolver1D
-from warpxm.temporal.ssprk3_1d import SSPRK3_1D
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.advection import *
 
 
 comptime P: Int = 2
 comptime NUM_ELEMENTS: Int = 64
 comptime SIGMA: Real = 0.025
 comptime X0: Real = 0.25
+comptime State = DGState[1, P, 1]
 
 
-@always_inline
-def _gauss(x: Real) -> Real:
+def _gauss(x: Real) -> Array[Real, 1]:
     var z = (x - X0) / SIGMA
-    return exp(-Real(0.5) * z * z)
+    return [exp(-Real(0.5) * z * z)]
+
+
+def _max_abs(mesh: BlockMesh[1, P], mut q: State) raises -> Real:
+    var max_abs: Real = 0.0
+    def visit(x: Real, w: Real, v: Array[Real, 1]) {mut max_abs}:
+        max_abs = fmax(max_abs, fabs(v[0]))
+    mesh.visit_nodes(q, visit)
+    return max_abs
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh1D[P](
+    var mesh = BlockMesh[1, P](
         ctx, Real(0.0), Real(1.0), NUM_ELEMENTS, periodic=False,
         bc_left=BC_COPYOUT, bc_right=BC_COPYOUT,
     )
-    var q = DGState1D[P, 1](ctx, mesh.num_elements)
-
-    var nodes_per_elem = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    var initial_peak: Real = 0.0
-    for e in range(mesh.num_elements):
-        var xl = mesh.x_min + Real(e) * mesh.dx
-        for i in range(nodes_per_elem):
-            var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
-            var v = _gauss(x)
-            host[e * nodes_per_elem + i] = v
-            if v > initial_peak: initial_peak = v
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    var q = State(ctx, mesh.num_elements)
+    mesh.fill(q, _gauss)
+    var initial_peak = _max_abs(mesh, q)
 
     var app = Advection[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
-    var spatial = DGSpatialSolver1D[P, 1](app)
-    var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
+    var spatial = DGAdvectionSolver[1, P, 1](app)
+    var stepper = SSPRK3[1, P, 1](ctx, mesh.num_elements)
     var dt: Real = 1.0e-3
     var t_final: Real = 1.0
 
-    def compute_rhs(
-        mut q_in: DGState1D[P, 1],
-        mut q_out: DGState1D[P, 1],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def no_adjust(mut q_: DGState1D[P, 1]) raises {imm}:
-        pass
-
-    var t: Real = 0.0
-    while t < t_final - Real(0.5) * dt:
-        var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
-        t += dt_use
+    _ = stepper.run_until(
+        ctx, q, Real(0.0), t_final, dt, compute_rhs, no_op_adjust[1, P, 1],
+    )
     ctx.synchronize()
 
     # Check max |q|. The pulse should have exited; remaining "echo" should be
     # tiny (well below 1% of the initial peak).
-    var max_abs: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for k in range(q.buf_len):
-            var a = fabs(h[k])
-            if a > max_abs: max_abs = a
+    var max_abs = _max_abs(mesh, q)
     print("initial peak =", initial_peak)
     print("final max|q| =", max_abs)
     assert_true(

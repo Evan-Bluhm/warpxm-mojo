@@ -28,26 +28,33 @@ of physics.
 (1D MHD is the only physical gap — $B_x$ along a 1D mesh becomes
 constant, leaving no useful 1D MHD problem.)
 
+There is also a continuum-kinetic **Vlasov-Maxwell** solver (phase-space
+DG) in 1D1V and 1D2V, with moments, a BGK collision operator and
+self-consistent coupling to Maxwell.
+
 Plus:
 
 * **Slope limiter:** Moe-Rossmanith conserved-variable limiter,
-  NC-parameterised across all physics for 2D + 3D
-  (`adjusters/moe_rossmanith.mojo`). 1D variant in
-  `moe_rossmanith_1d.mojo` is Euler-only.
+  generic over the dimension and NC-parameterised across all physics
+  (`MoeRossmanith[NDIM, P, NC]` in `adjusters/moe_rossmanith.mojo`).
 * **Positivity preservation:** Zhang-Shu cell-mean-preserving θ-shrink
   for Euler (1D / 2D / 3D) and MHD (2D / 3D). Keeps ρ > 0 and P > 0
   even on near-vacuum problems (Einfeldt 1-2-3, strong Sedov blast).
 * **MHD flux:** Rusanov (default) and HLLD (Miyoshi-Kusano 2005,
-  five-state) on both `DGImhdSolver{2,3}D` and
-  `DGImhdGLMSolver{2,3}D`, selectable at compile time via
+  five-state) on both `DGImhdSolver[NDIM, P]` and
+  `DGImhdGLMSolver[NDIM, P]`, selectable at compile time via
   `USE_HLLD=True`.
 * **Time integration:** Three-stage SSPRK3 (Shu-Osher) and 5(4)
-  Dormand-Prince — both dimension-agnostic and closure-driven
-  (`DormandPrince45_{1,2,3}D[P, NC]`). DP45 takes 6–40× fewer steps
+  Dormand-Prince — both closure-driven and generic over the dimension
+  (`SSPRK3[NDIM, P, NC]`, `DormandPrince45[NDIM, P, NC]`), with CFL-driven
+  step selection (`solver.suggest_dt`). DP45 takes 6–40× fewer steps
   than fixed-Δt SSPRK3 on smooth problems.
-* **Output:** ParaView-readable `.vtu` writers for every 2D / 3D
-  physics, with a `FrameWriter` that emits time-series + a `.pvd`
-  collection.
+* **Output:** one generic ParaView `.vtu` writer (appended binary) with
+  per-physics presets, and a `FrameWriter` that emits time series + a
+  `.pvd` collection.
+* **Driver helpers:** `mesh.fill`, `integrate`, `l2_error` and
+  `visit_nodes` for initial conditions and diagnostics, so a driver never
+  indexes the state buffer itself.
 
 ## Where to go next
 
@@ -64,7 +71,7 @@ Plus:
 ## Status
 
 The framework is fully feature-complete across the physics × dimension
-matrix above (1D MHD is the only intentional gap). 66 regression tests
-pass, covering every (physics, dimension) combination plus convergence
-verification at P=1/2/3. Ongoing work focuses on scale — see
-[Roadmap](contributing/index.md#roadmap) for what's open.
+matrix above (1D MHD is the only intentional gap). The regression suite
+covers every (physics, dimension) combination plus convergence
+verification at P=1/2/3: see [Features](features.md) for the full matrix
+and open work, and [Validation](validation.md) for the measured results.

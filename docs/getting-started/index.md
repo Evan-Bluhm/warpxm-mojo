@@ -11,12 +11,13 @@ The shortest path:
 git clone https://github.com/<your-fork>/warpxm-mojo.git
 cd warpxm-mojo
 pixi install
-pixi run mojo run -I src examples/advection_1d.mojo
+pixi run example advection_1d
 ```
 
 If the last command prints node values and an L2 error after one
 period, you're fully set up. (For an actual convergence study across
-$P = 1, 2, 3$, run `examples/convergence_advection_1d.mojo` instead.)
+$P = 1, 2, 3$, run `pixi run example convergence_advection_1d` instead.
+`pixi run example` with no name lists every example.)
 
 ## Three pages from here
 
@@ -26,5 +27,5 @@ $P = 1, 2, 3$, run `examples/convergence_advection_1d.mojo` instead.)
    `examples/advection_1d.mojo`: what it computes, how the mesh / state /
    stepper fit together, and what the output means.
 3. [Viewing output in ParaView](paraview.md) — every 2D / 3D physics has
-   a VTU writer. This page shows how to load a `.pvd` time series and
+   a VTU preset. This page shows how to load a `.pvd` time series and
    colour by ρ or |B|.

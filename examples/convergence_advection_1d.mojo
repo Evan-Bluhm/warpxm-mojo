@@ -5,80 +5,50 @@
 # time stepping at small Δt the spatial error dominates, so the L2 error
 # should scale like dx^(P + 1) for smooth solutions.
 #
-# Build / run:
-#     pixi run mojo run -I src examples/convergence_advection_1d.mojo
+#     pixi run example convergence_advection_1d
 
+from std.collections import Array
 from std.math import log2, sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 
-from warpxm.apps.advection import Advection
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, TWO_PI
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.spatial.dg_1d import DGSpatialSolver1D
-from warpxm.temporal.ssprk3_1d import SSPRK3_1D
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.advection import *
 
 
 def run_once[P: Int](
     var ctx: DeviceContext, num_elements: Int, dt: Real, t_final: Real,
 ) raises -> Real:
     """Run advection at order P with N elements and return the post-period L2 error."""
-    var mesh = BlockMesh1D[P](ctx, Real(-0.5), Real(0.5), num_elements, periodic=True)
-    var q = DGState1D[P, 1](ctx, mesh.num_elements)
+    comptime State = DGState[1, P, 1]
+    var mesh = BlockMesh[1, P](ctx, Real(-0.5), Real(0.5), num_elements, periodic=True)
+    var q = State(ctx, mesh.num_elements)
 
-    var nodes_per_elem = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
-
-    # IC: sin(2π x)
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.total_nodes)
-    for e in range(mesh.num_elements):
-        var xl = mesh.x_min + Real(e) * mesh.dx
-        for i in range(nodes_per_elem):
-            var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
-            host[e * nodes_per_elem + i] = sin(TWO_PI * x)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def wave(x: Real) -> Real:
+        return sin(TWO_PI * x)
+    def initial(x: Real) -> Array[Real, 1]:
+        return [sin(TWO_PI * x)]
+    mesh.fill(q, initial)
 
     var app = Advection[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
-    var spatial = DGSpatialSolver1D[P, 1](app)
-    var stepper = SSPRK3_1D[P, 1](ctx, mesh.num_elements)
+    var spatial = DGAdvectionSolver[1, P, 1](app)
+    var stepper = SSPRK3[1, P, 1](ctx, mesh.num_elements)
 
-
-    def compute_rhs(
-        mut q_in: DGState1D[P, 1],
-        mut q_out: DGState1D[P, 1],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def no_adjust(mut q_: DGState1D[P, 1]) raises {imm}:
-        pass
-
-    var t: Real = 0.0
-    while t < t_final - Real(0.5) * dt:
-        var dt_use = dt if (t + dt) < t_final else (t_final - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
-        t += dt_use
-    ctx.synchronize()
-
-    var acc: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for e in range(mesh.num_elements):
-            var xl = mesh.x_min + Real(e) * mesh.dx
-            for i in range(nodes_per_elem):
-                var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
-                var exact = sin(TWO_PI * x)
-                var d = h[e * nodes_per_elem + i] - exact
-                acc += weights[i] * mesh.jacobian * d * d
-    return acc ** Real(0.5)
+    _ = stepper.run_until(
+        ctx, q, Real(0.0), t_final, dt, compute_rhs, no_op_adjust[1, P, 1],
+    )
+    return mesh.l2_error(q, 0, wave)
 
 
 def sweep_p[P: Int](var ctx: DeviceContext) raises:
     """Run two resolutions at order P and print observed convergence rate."""
-    # Pick dt so the time-integration error stays below the spatial error.
-    # SSPRK3 is third-order in time; with dt = 5e-4 over one period we contribute
-    # ~ (5e-4)^3 · O(1) ≈ 1e-10, well below the spatial errors below.
+    # A convergence study wants the time error out of the way, so the step is
+    # set by accuracy, not by the CFL limit (which would give dt ∝ dx and a
+    # third-order time error that swamps the P = 4 spatial error). SSPRK3
+    # with dt = 5e-4 over one period contributes ~ (5e-4)^3 ≈ 1e-10.
     var dt: Real = 5.0e-4
     var t_final: Real = 1.0
 

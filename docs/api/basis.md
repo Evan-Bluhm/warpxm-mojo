@@ -39,12 +39,25 @@ Nodes are stored on $[-1, 1]$. Physical-space conversion happens in the
 mesh constructor:
 
 ```mojo
-x_physical = mesh.x_min + Real(e) * mesh.dx + (Real(1.0) + xi) * mesh.jacobian
+x_physical = mesh.x_min + Real(e) * mesh.dx + (Real(1.0) + xi) * mesh.jacobian_x
 ```
 
-with `mesh.jacobian = mesh.dx / 2` and `xi` a reference-node coordinate
-from `NodalBasis1D[P].nodes()`. Every example demonstrates this
-conversion in its IC loop.
+with `mesh.jacobian_x = mesh.dx / 2` and `xi` a reference-node coordinate
+from `NodalBasis1D[P].nodes()`. Drivers do not do this themselves:
+`mesh.fill`, `mesh.visit_nodes` and the other mesh helpers supply the
+physical coordinates and quadrature weights (see
+[`mesh`](mesh.md#host-side-helpers)).
+
+## Inside kernels
+
+`nodes()`, `weights()` and `diff_matrix_flat()` are for host code. They
+are deliberately not inlined, so in a kernel they would be real calls
+returning arrays through per-thread local memory. Kernels use instead:
+
+* `NodalBasis1D[P].diff_entry[col](row)`: one differentiation-matrix
+  entry as a select over compile-time constants;
+* comptime weights, e.g.
+  `comptime inv_w0: Real = Real(1.0) / NodalBasis1D[P].weights()[0]`.
 
 ## Why GLL specifically
 

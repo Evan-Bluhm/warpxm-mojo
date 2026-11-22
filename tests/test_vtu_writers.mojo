@@ -1,13 +1,14 @@
 # Round-trip test for every VTU frame writer and the PVD frame collection.
 #
-# Covers `driver/vtu_2d`, `vtu_3d`, `vtu_imhd_2d`, `vtu_imhd_3d` (plain
-# and GLM), `vtu_maxwell_2d`, `vtu_maxwell_3d` and `driver/frame_writer`.
+# Covers the generic writer `io/vtu` through every preset in
+# `io/vtu_presets` (Euler, ideal MHD, GLM-MHD, Maxwell; 2D and 3D) and
+# `io/frame_writer`.
 #
 # Each writer is handed a state built from a known analytic primitive
 # field on a mesh with unequal element counts and extents (so a swapped
 # axis or stride shows up). The file is then read back and parsed:
 #
-#   * exactly one well-formed VTKFile / Piece, balanced DataArray tags,
+#   * exactly one well-formed VTKFile / Piece, self-closing DataArray tags,
 #     and exactly the expected set of point-data arrays;
 #   * declared NumberOfPoints / NumberOfCells equal the mesh counts AND
 #     the number of values actually present in every array;
@@ -17,8 +18,10 @@
 #     sum to the domain area / volume; offsets and cell types are right;
 #   * every point-data array equals the analytic value at its point
 #     (derived quantities such as u = m/ρ and P included) to 1e-14 — the
-#     writer prints shortest round-trip Float64, so only arithmetic
-#     round-off is left.
+#     arrays are raw little-endian Float64, so only arithmetic round-off
+#     is left;
+#   * the appended-binary section is exactly the declared blocks: every
+#     array's type, offset and byte count is checked against the mesh.
 #
 # Output goes to a directory owned by this test; any file left by an
 # earlier run is deleted before it is rewritten, so a writer that
@@ -28,7 +31,8 @@
 #     pixi run mojo run -I src tests/test_vtu_writers.mojo
 
 from std.collections import List
-from std.collections.string import atof, atol
+from std.collections.string import atol
+from std.memory import bitcast
 from std.os import makedirs, remove, rmdir
 from std.os.path import exists
 from std.sys import has_accelerator
@@ -41,17 +45,15 @@ from warpxm.apps.imhd_glm import MHD_GLM_NC
 from warpxm.apps.maxwell import MAXWELL_NC
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real
-from warpxm.driver.frame_writer import FrameWriter
-from warpxm.driver.vtu_2d import dump_euler_2d_frame
-from warpxm.driver.vtu_3d import dump_euler_3d_frame
-from warpxm.driver.vtu_imhd_2d import dump_imhd_2d_frame, dump_imhd_glm_2d_frame
-from warpxm.driver.vtu_imhd_3d import dump_imhd_3d_frame, dump_imhd_glm_3d_frame
-from warpxm.driver.vtu_maxwell_2d import dump_maxwell_2d_frame
-from warpxm.driver.vtu_maxwell_3d import dump_maxwell_3d_frame
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.variable.state_2d import DGState2D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.io.frame_writer import FrameWriter
+from warpxm.io.vtu_presets import dump_euler_frame
+from warpxm.io.vtu_presets import dump_euler_frame
+from warpxm.io.vtu_presets import dump_imhd_frame, dump_imhd_glm_frame
+from warpxm.io.vtu_presets import dump_imhd_frame, dump_imhd_glm_frame
+from warpxm.io.vtu_presets import dump_maxwell_frame
+from warpxm.io.vtu_presets import dump_maxwell_frame
+from warpxm.mesh.block import BlockMesh
+from warpxm.variable.state import DGState
 
 
 comptime OUTPUT_DIR: String = "/tmp/warpxm_test_vtu_writers"
@@ -143,7 +145,7 @@ def _conserved(
 
 
 def _fill_2d[P: Int, NC: Int](
-    var ctx: DeviceContext, mut q: DGState2D[P, NC], kind: Int, shift: Real,
+    var ctx: DeviceContext, mut q: DGState[2, P, NC], kind: Int, shift: Real,
 ) raises -> List[Real]:
     """Fill `q` from the analytic field; return node coordinates (x, y, z
     per node, in solver node order) computed independently of the mesh's
@@ -174,7 +176,7 @@ def _fill_2d[P: Int, NC: Int](
 
 
 def _fill_3d[P: Int, NC: Int](
-    var ctx: DeviceContext, mut q: DGState3D[P, NC], kind: Int,
+    var ctx: DeviceContext, mut q: DGState[3, P, NC], kind: Int,
 ) raises -> List[Real]:
     var P1 = P + 1
     var ref_nodes = NodalBasis1D[P].nodes()
@@ -215,56 +217,145 @@ def _fresh(path: String) raises -> String:
     return path
 
 
-def _read(path: String) raises -> String:
+struct VtuFile(Movable):
+    """A parsed `.vtu`: the XML text (header and trailer, with the binary
+    section cut out) and the raw appended-data bytes."""
+    var text: String
+    var blob: List[UInt8]
+
+    def __init__(out self, var text: String, var blob: List[UInt8]):
+        self.text = text^
+        self.blob = blob^
+
+
+def _read_text(path: String) raises -> String:
     assert_true(exists(path), "writer produced no file at " + path)
     return String(open(path, "r").read())
+
+
+def _find(bytes: List[UInt8], pattern: String, start: Int) -> Int:
+    """First index >= start where `pattern` occurs in `bytes`, or -1."""
+    var pat = pattern.as_bytes()
+    var n = len(pat)
+    var i = start
+    while i + n <= len(bytes):
+        var ok = True
+        for k in range(n):
+            if bytes[i + k] != pat[k]:
+                ok = False
+                break
+        if ok:
+            return i
+        i += 1
+    return -1
+
+
+def _read(path: String) raises -> VtuFile:
+    """Split a `.vtu` at its appended-data section."""
+    assert_true(exists(path), "writer produced no file at " + path)
+    var bytes = open(path, "r").read_bytes()
+    var open_tag = "<AppendedData encoding=\"raw\">\n_"
+    var at = _find(bytes, open_tag, 0)
+    assert_true(at > 0, "no raw AppendedData section in " + path)
+    var begin = at + open_tag.byte_length()
+    # The binary payload can contain anything, so find the trailer from
+    # the end of the file.
+    var trailer = "\n  </AppendedData>\n</VTKFile>\n"
+    var end = len(bytes) - trailer.byte_length()
+    assert_true(end >= begin and _find(bytes, trailer, end) == end,
+                "bad trailer in " + path)
+    var view = Span[UInt8, _](bytes)
+    var text = (
+        String(from_utf8_lossy=view[0:begin])
+        + String(from_utf8_lossy=view[end:len(bytes)])
+    )
+    var blob = List[UInt8](capacity=end - begin)
+    for i in range(begin, end):
+        blob.append(bytes[i])
+    return VtuFile(text^, blob^)
 
 
 def _abs(v: Real) -> Real:
     return v if v >= Real(0.0) else -v
 
 
-def _array_body(text: String, marker: String) raises -> String:
-    """Text between the DataArray open tag containing `marker` and its
-    close tag. `marker` must identify exactly one array."""
+def _attr(tag: String, key: String) raises -> String:
+    var marker = key + "=\""
+    assert_true(tag.count(marker) == 1, "expected exactly one " + key + " in " + tag)
+    var begin = tag.find(marker) + marker.byte_length()
+    var end = tag.find("\"", begin)
+    return String(tag[byte=begin:end])
+
+
+def _array_tag(text: String, marker: String) raises -> String:
+    """The self-closing DataArray tag containing `marker`, which must
+    identify exactly one array."""
     assert_true(text.count(marker) == 1, "expected exactly one array with " + marker)
     var at = text.find(marker)
-    var begin = text.find(">", at) + 1
-    var end = text.find("</DataArray>", begin)
-    assert_true(begin > 0 and end > begin, "malformed DataArray for " + marker)
-    return String(text[byte=begin:end])
+    var begin = at
+    while begin > 0 and String(text[byte=begin]) != "<":
+        begin -= 1
+    var end = text.find("/>", at)
+    assert_true(end > at, "DataArray tag is not self-closing for " + marker)
+    var tag = String(text[byte=begin:end])
+    assert_true(tag.startswith("<DataArray"), "marker is not inside a DataArray tag")
+    assert_true(_attr(tag, "format") == "appended", "array is not appended-binary")
+    return tag
 
 
-def _floats(body: String) raises -> List[Real]:
-    var out = List[Real]()
-    for tok in body.split():
-        out.append(atof(tok))
-    return out^
+def _u64(blob: List[UInt8], at: Int) -> UInt64:
+    var u: UInt64 = 0
+    for k in range(8):
+        u |= UInt64(blob[at + k]) << UInt64(8 * k)
+    return u
 
 
-def _ints(body: String) raises -> List[Int]:
-    var out = List[Int]()
-    for tok in body.split():
-        out.append(atol(tok))
-    return out^
+def _block(vtu: VtuFile, marker: String, dtype: String, elem_bytes: Int) raises -> Tuple[Int, Int]:
+    """(start, count) of the payload of the array identified by `marker`,
+    after checking its declared type and block header."""
+    var tag = _array_tag(vtu.text, marker)
+    assert_true(_attr(tag, "type") == dtype, marker + ": wrong DataArray type")
+    var offset = atol(_attr(tag, "offset"))
+    assert_true(offset >= 0 and offset + 8 <= len(vtu.blob), marker + ": offset out of range")
+    var nbytes = Int(_u64(vtu.blob, offset))
+    assert_true(nbytes % elem_bytes == 0 and offset + 8 + nbytes <= len(vtu.blob),
+                marker + ": block size inconsistent with the file")
+    return (offset + 8, nbytes // elem_bytes)
+
+
+def _floats(vtu: VtuFile, marker: String) raises -> List[Real]:
+    var blk = _block(vtu, marker, "Float64", 8)
+    var vals = List[Real](capacity=blk[1])
+    for i in range(blk[1]):
+        vals.append(bitcast[DType.float64, 1](_u64(vtu.blob, blk[0] + 8 * i)))
+    return vals^
+
+
+def _ints(vtu: VtuFile, marker: String, dtype: String) raises -> List[Int]:
+    var width = 4 if dtype == "Int32" else 1
+    var blk = _block(vtu, marker, dtype, width)
+    var vals = List[Int](capacity=blk[1])
+    for i in range(blk[1]):
+        var v = 0
+        for k in range(width):
+            v |= Int(vtu.blob[blk[0] + width * i + k]) << (8 * k)
+        vals.append(v)
+    return vals^
 
 
 def _attr_int(text: String, key: String) raises -> Int:
     """Integer value of the single `key="N"` attribute."""
-    var marker = key + "=\""
-    assert_true(text.count(marker) == 1, "expected exactly one " + key)
-    var begin = text.find(marker) + marker.byte_length()
-    var end = text.find("\"", begin)
-    return atol(String(text[byte=begin:end]))
+    return atol(_attr(text, key))
 
 
 # --- checks ---------------------------------------------------------------
 
 def _check_grid(
-    label: String, text: String, ndim: Int, order: Int, num_elements: Int,
+    label: String, vtu: VtuFile, ndim: Int, order: Int, num_elements: Int,
     coords: List[Real], measure: Real, num_fields: Int,
 ) raises:
     """Structure, geometry and topology of one VTU file."""
+    var text = vtu.text.copy()
     var nodes_per_elem = (order + 1) ** ndim
     var cells_per_elem = order ** ndim
     var num_points = num_elements * nodes_per_elem
@@ -274,14 +365,26 @@ def _check_grid(
 
     assert_true(text.startswith("<?xml version=\"1.0\"?>\n<VTKFile type=\"UnstructuredGrid\""),
                 label + ": bad header")
-    assert_true(text.endswith("</UnstructuredGrid>\n</VTKFile>\n"), label + ": bad trailer")
-    for tag in ["VTKFile", "UnstructuredGrid", "Piece", "Points", "Cells", "PointData"]:
+    assert_true("byte_order=\"LittleEndian\"" in text and "header_type=\"UInt64\"" in text,
+                label + ": header does not declare the binary encoding")
+    assert_true(text.endswith("</AppendedData>\n</VTKFile>\n"), label + ": bad trailer")
+    for tag in ["VTKFile", "UnstructuredGrid", "Piece", "Points", "Cells", "PointData",
+                "AppendedData"]:
         assert_true(text.count("<" + tag) == 1 and text.count("</" + tag + ">") == 1,
                     label + ": unbalanced <" + tag + ">")
     # points + connectivity + offsets + types + the point-data arrays.
     assert_true(text.count("<DataArray") == 4 + num_fields
-                and text.count("</DataArray>") == 4 + num_fields,
+                and text.count("</DataArray>") == 0,
                 label + ": wrong number of DataArray elements")
+    # The blocks tile the appended section exactly: nothing missing, no
+    # trailing bytes. Each block is an 8-byte header plus its payload.
+    var expected_bytes = (
+        (8 + num_points * 24) + (8 + num_cells * corners * 4)
+        + (8 + num_cells * 4) + (8 + num_cells)
+        + num_fields * (8 + num_points * 8)
+    )
+    assert_true(len(vtu.blob) == expected_bytes,
+                label + ": appended-data size does not match the declared arrays")
 
     assert_true(_attr_int(text, "NumberOfPoints") == num_points,
                 label + ": declared NumberOfPoints != mesh node count")
@@ -289,7 +392,7 @@ def _check_grid(
                 label + ": declared NumberOfCells != mesh sub-cell count")
 
     # Points: one xyz triple per DG node, equal to the node coordinates.
-    var pts = _floats(_array_body(text, "NumberOfComponents=\"3\""))
+    var pts = _floats(vtu, "NumberOfComponents=\"3\"")
     assert_true(len(coords) == 3 * num_points, label + ": test coordinate list has wrong length")
     assert_true(len(pts) == 3 * num_points, label + ": point value count != 3 * NumberOfPoints")
     var max_dx: Real = 0.0
@@ -299,7 +402,7 @@ def _check_grid(
     assert_true(max_dx < COORD_TOL, label + ": point coordinates differ from DG nodes")
 
     # Connectivity.
-    var conn = _ints(_array_body(text, "Name=\"connectivity\""))
+    var conn = _ints(vtu, "Name=\"connectivity\"", "Int32")
     assert_true(len(conn) == corners * num_cells,
                 label + ": connectivity count != corners * NumberOfCells")
     var total: Real = 0.0
@@ -341,8 +444,8 @@ def _check_grid(
     assert_true(_abs(total - measure) < Real(1.0e-12) * measure,
                 label + ": sub-cells do not tile the domain")
 
-    var offsets = _ints(_array_body(text, "Name=\"offsets\""))
-    var types = _ints(_array_body(text, "Name=\"types\""))
+    var offsets = _ints(vtu, "Name=\"offsets\"", "Int32")
+    var types = _ints(vtu, "Name=\"types\"", "UInt8")
     assert_true(len(offsets) == num_cells and len(types) == num_cells,
                 label + ": offsets / types count != NumberOfCells")
     for c in range(num_cells):
@@ -351,7 +454,7 @@ def _check_grid(
 
 
 def _check_fields(
-    label: String, text: String, names: List[String], coords: List[Real],
+    label: String, vtu: VtuFile, names: List[String], coords: List[Real],
     shift: Real,
 ) raises -> Real:
     """Every named point-data array equals the analytic field at its
@@ -359,7 +462,7 @@ def _check_fields(
     var num_points = len(coords) // 3
     var worst: Real = 0.0
     for name in names:
-        var vals = _floats(_array_body(text, "Name=\"" + name + "\""))
+        var vals = _floats(vtu, "Name=\"" + name + "\"")
         assert_true(len(vals) == num_points,
                     label + ": " + name + " value count != NumberOfPoints")
         for i in range(num_points):
@@ -376,26 +479,26 @@ def _check(
     label: String, path: String, ndim: Int, order: Int,
     names: List[String], coords: List[Real], shift: Real,
 ) raises:
-    var text = _read(path)
+    var vtu = _read(path)
     var num_elements = NX * NY if ndim == 2 else NX * NY * NZ
     var measure = (X_MAX - X_MIN) * (Y_MAX - Y_MIN)
     if ndim == 3:
         measure *= Z_MAX - Z_MIN
-    _check_grid(label, text, ndim, order, num_elements, coords, measure, len(names))
-    var worst = _check_fields(label, text, names, coords, shift)
+    _check_grid(label, vtu, ndim, order, num_elements, coords, measure, len(names))
+    var worst = _check_fields(label, vtu, names, coords, shift)
     print(label, ":", len(coords) // 3, "points,", len(names), "fields, max |Δ| =", worst)
     remove(path)
 
 
-def _mesh_2d[P: Int](var ctx: DeviceContext) raises -> BlockMesh2D[P]:
-    return BlockMesh2D[P](
+def _mesh_2d[P: Int](var ctx: DeviceContext) raises -> BlockMesh[2, P]:
+    return BlockMesh[2, P](
         ctx, X_MIN, X_MAX, Y_MIN, Y_MAX,
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
 
 
-def _mesh_3d[P: Int](var ctx: DeviceContext) raises -> BlockMesh3D[P]:
-    return BlockMesh3D[P](
+def _mesh_3d[P: Int](var ctx: DeviceContext) raises -> BlockMesh[3, P]:
+    return BlockMesh[3, P](
         ctx, X_MIN, X_MAX, Y_MIN, Y_MAX, Z_MIN, Z_MAX, nx=NX, ny=NY, nz=NZ,
     )
 
@@ -403,30 +506,30 @@ def _mesh_3d[P: Int](var ctx: DeviceContext) raises -> BlockMesh3D[P]:
 def _test_2d[P: Int](var ctx: DeviceContext) raises:
     var mesh = _mesh_2d[P](ctx)
 
-    var q_euler = DGState2D[P, EULER_NC](ctx, mesh.num_elements)
+    var q_euler = DGState[2, P, EULER_NC](ctx, mesh.num_elements)
     var xy = _fill_2d[P, EULER_NC](ctx, q_euler, KIND_FLUID, Real(0.0))
     var path = _fresh(OUTPUT_DIR + "/euler_2d.vtu")
-    dump_euler_2d_frame[P](path, ctx, mesh, q_euler, GAMMA)
-    _check("Euler 2D", path, 2, P, ["rho", "u", "v", "P"], xy, Real(0.0))
+    dump_euler_frame(path, mesh, q_euler, GAMMA)
+    _check("Euler 2D", path, 2, P, ["rho", "u", "v", "w", "P"], xy, Real(0.0))
 
-    var q_mhd = DGState2D[P, MHD_NC](ctx, mesh.num_elements)
+    var q_mhd = DGState[2, P, MHD_NC](ctx, mesh.num_elements)
     xy = _fill_2d[P, MHD_NC](ctx, q_mhd, KIND_FLUID, Real(0.0))
     path = _fresh(OUTPUT_DIR + "/imhd_2d.vtu")
-    dump_imhd_2d_frame[P](path, ctx, mesh, q_mhd, GAMMA)
+    dump_imhd_frame(path, mesh, q_mhd, GAMMA)
     _check("IMHD 2D", path, 2, P,
-           ["rho", "u", "v", "P", "Bx", "By", "B2_over_2"], xy, Real(0.0))
+           ["rho", "u", "v", "w", "P", "Bx", "By", "Bz", "B2_over_2"], xy, Real(0.0))
 
-    var q_glm = DGState2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
+    var q_glm = DGState[2, P, MHD_GLM_NC](ctx, mesh.num_elements)
     xy = _fill_2d[P, MHD_GLM_NC](ctx, q_glm, KIND_FLUID, Real(0.0))
     path = _fresh(OUTPUT_DIR + "/imhd_glm_2d.vtu")
-    dump_imhd_glm_2d_frame[P, MHD_GLM_NC](path, ctx, mesh, q_glm, GAMMA)
+    dump_imhd_glm_frame(path, mesh, q_glm, GAMMA)
     _check("GLM-MHD 2D", path, 2, P,
-           ["rho", "u", "v", "P", "Bx", "By", "B2_over_2", "psi"], xy, Real(0.0))
+           ["rho", "u", "v", "w", "P", "Bx", "By", "Bz", "B2_over_2", "psi"], xy, Real(0.0))
 
-    var q_max = DGState2D[P, MAXWELL_NC](ctx, mesh.num_elements)
+    var q_max = DGState[2, P, MAXWELL_NC](ctx, mesh.num_elements)
     xy = _fill_2d[P, MAXWELL_NC](ctx, q_max, KIND_MAXWELL, Real(0.0))
     path = _fresh(OUTPUT_DIR + "/maxwell_2d.vtu")
-    dump_maxwell_2d_frame[P](path, ctx, mesh, q_max)
+    dump_maxwell_frame(path, mesh, q_max)
     _check("Maxwell 2D", path, 2, P,
            ["E_x", "E_y", "E_z", "B_x", "B_y", "B_z", "E_energy", "B_energy"],
            xy, Real(0.0))
@@ -435,31 +538,31 @@ def _test_2d[P: Int](var ctx: DeviceContext) raises:
 def _test_3d[P: Int](var ctx: DeviceContext) raises:
     var mesh = _mesh_3d[P](ctx)
 
-    var q_euler = DGState3D[P, EULER_NC](ctx, mesh.num_elements)
+    var q_euler = DGState[3, P, EULER_NC](ctx, mesh.num_elements)
     var xyz = _fill_3d[P, EULER_NC](ctx, q_euler, KIND_FLUID)
     var path = _fresh(OUTPUT_DIR + "/euler_3d.vtu")
-    dump_euler_3d_frame[P](path, ctx, mesh, q_euler, GAMMA)
+    dump_euler_frame(path, mesh, q_euler, GAMMA)
     _check("Euler 3D", path, 3, P, ["rho", "u", "v", "w", "P"], xyz, Real(0.0))
 
-    var q_mhd = DGState3D[P, MHD_NC](ctx, mesh.num_elements)
+    var q_mhd = DGState[3, P, MHD_NC](ctx, mesh.num_elements)
     xyz = _fill_3d[P, MHD_NC](ctx, q_mhd, KIND_FLUID)
     path = _fresh(OUTPUT_DIR + "/imhd_3d.vtu")
-    dump_imhd_3d_frame[P](path, ctx, mesh, q_mhd, GAMMA)
+    dump_imhd_frame(path, mesh, q_mhd, GAMMA)
     _check("IMHD 3D", path, 3, P,
            ["rho", "u", "v", "w", "P", "Bx", "By", "Bz", "B2_over_2"], xyz, Real(0.0))
 
-    var q_glm = DGState3D[P, MHD_GLM_NC](ctx, mesh.num_elements)
+    var q_glm = DGState[3, P, MHD_GLM_NC](ctx, mesh.num_elements)
     xyz = _fill_3d[P, MHD_GLM_NC](ctx, q_glm, KIND_FLUID)
     path = _fresh(OUTPUT_DIR + "/imhd_glm_3d.vtu")
-    dump_imhd_glm_3d_frame[P, MHD_GLM_NC](path, ctx, mesh, q_glm, GAMMA)
+    dump_imhd_glm_frame(path, mesh, q_glm, GAMMA)
     _check("GLM-MHD 3D", path, 3, P,
            ["rho", "u", "v", "w", "P", "Bx", "By", "Bz", "B2_over_2", "psi"],
            xyz, Real(0.0))
 
-    var q_max = DGState3D[P, MAXWELL_NC](ctx, mesh.num_elements)
+    var q_max = DGState[3, P, MAXWELL_NC](ctx, mesh.num_elements)
     xyz = _fill_3d[P, MAXWELL_NC](ctx, q_max, KIND_MAXWELL)
     path = _fresh(OUTPUT_DIR + "/maxwell_3d.vtu")
-    dump_maxwell_3d_frame[P](path, ctx, mesh, q_max)
+    dump_maxwell_frame(path, mesh, q_max)
     _check("Maxwell 3D", path, 3, P,
            ["E_x", "E_y", "E_z", "B_x", "B_y", "B_z", "E_energy", "B_energy"],
            xyz, Real(0.0))
@@ -468,10 +571,12 @@ def _test_3d[P: Int](var ctx: DeviceContext) raises:
 def _test_frames[P: Int](var ctx: DeviceContext) raises:
     """Three frames with different states and times, then the PVD."""
     var mesh = _mesh_2d[P](ctx)
-    var q = DGState2D[P, MHD_GLM_NC](ctx, mesh.num_elements)
+    var q = DGState[2, P, MHD_GLM_NC](ctx, mesh.num_elements)
     var times = [Real(0.0), Real(0.125), Real(2.5)]
     var shifts = [Real(0.0), Real(0.5), Real(1.25)]
-    var names: List[String] = ["rho", "u", "v", "P", "Bx", "By", "B2_over_2", "psi"]
+    var names: List[String] = [
+        "rho", "u", "v", "w", "P", "Bx", "By", "Bz", "B2_over_2", "psi",
+    ]
 
     var pvd_path = _fresh(OUTPUT_DIR + "/frames.pvd")
     for i in range(3):
@@ -484,12 +589,12 @@ def _test_frames[P: Int](var ctx: DeviceContext) raises:
         var path = fw.next_path(times[i])
         assert_true(path == OUTPUT_DIR + "/frames_000" + String(i) + ".vtu",
                     "FrameWriter returned an unexpected path: " + path)
-        dump_imhd_glm_2d_frame[P, MHD_GLM_NC](path, ctx, mesh, q, GAMMA)
+        dump_imhd_glm_frame(path, mesh, q, GAMMA)
     fw.write_pvd()
 
     # PVD: one DataSet per frame, in order, each pairing the right time
     # with the right (relative) file name, and the file must exist.
-    var pvd = _read(pvd_path)
+    var pvd = _read_text(pvd_path)
     assert_true(pvd.startswith("<?xml version=\"1.0\"?>\n<VTKFile type=\"Collection\""),
                 "PVD: bad header")
     assert_true(pvd.endswith("  </Collection>\n</VTKFile>\n"), "PVD: bad trailer")

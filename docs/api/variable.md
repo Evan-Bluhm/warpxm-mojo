@@ -1,91 +1,112 @@
 # `warpxm.variable`
 
-Conserved-variable storage. `DGState1D / 2D / 3D` are thin wrappers
-around a flat `DeviceBuffer[Real.dtype]` with the right indexing
-helpers and size accounting.
+Conserved-variable storage: `DGState[NDIM, P, NC]` for configuration-space
+fields and `PhaseState1D1V` / `PhaseState1D2V` for the kinetic
+distribution function. Each is a thin wrapper around one flat
+`DeviceBuffer[Real.dtype]`.
 
-## `DGStateNd[P, NC]`
+## `DGState[NDIM, P, NC]`
 
 ```mojo
-from warpxm.variable.state_1d import DGState1D
-from warpxm.variable.state_2d import DGState2D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.variable.state import DGState
 
-var q = DGState1D[P, NC](ctx, num_elements)
-var q = DGState2D[P, NC](ctx, num_elements)
-var q = DGState3D[P, NC](ctx, num_elements)
+var q1 = DGState[1, P, NC](ctx, num_elements)
+var q2 = DGState[2, P, NC](ctx, mesh.num_elements)
+var q3 = DGState[3, P, NC](ctx, mesh.num_elements)
 ```
 
-Fields:
+One struct serves every dimension: only the node count per element,
+`(P+1)^NDIM`, depends on `NDIM`. That is why the time steppers and the
+pointwise source kernels are written once. The buffer is zero-filled on
+construction.
 
-| Field | Meaning |
-| ----- | ------- |
-| `q.buf` | `DeviceBuffer[Real.dtype]` — flat storage |
-| `q.buf_len` | total scalar count (`num_elements * (P+1)^d * NC`) |
-| `q.total_nodes` | total node count (no NC factor — useful for scalar IC loops) |
-| `q.num_elements` | element count, copied from the mesh |
+| Member | Meaning |
+| ------ | ------- |
+| `q.buf` | `DeviceBuffer[Real.dtype]`, flat storage |
+| `q.buf_len` | total scalar count, `total_nodes * NC` |
+| `q.total_nodes` | `num_elements * (P+1)^NDIM` |
+| `q.num_elements` | element count |
+| `DGState[NDIM, P, NC].num_nodes_per_elem` | comptime, `(P+1)^NDIM` |
+| `DGState[NDIM, P, NC].index(elem, node, comp)` | static; flat buffer index |
+
+A driver usually names the type once:
+
+```mojo
+comptime State = DGState[2, P, EULER_NC]
+```
 
 ## Memory layout
 
-The conventional flat index is:
-
 ```text
-q.buf[ (e * nodes_per_elem + n) * NC + c ]
+q.buf[(e * (P+1)^NDIM + n) * NC + c]
 ```
 
-* `e` — element index, `0 ≤ e < num_elements`
-* `n` — within-element node index, `0 ≤ n < (P+1)^d`
-  * In 2D: `n = jn * (P+1) + in_`
-  * In 3D: `n = kn * (P+1)*(P+1) + jn * (P+1) + in_`
-* `c` — component index, `0 ≤ c < NC` (e.g., `IDX_RHO`, `IDX_MX`, …)
+* `e`: element index, `0 ≤ e < num_elements` (row-major over the mesh,
+  x fastest: `e = (k * ny + j) * nx + i`)
+* `n`: node index within the element, x fastest:
+  `n = (kn * (P+1) + jn) * (P+1) + in`
+* `c`: component index, `0 ≤ c < NC` (`IDX_RHO`, `IDX_MX`, …)
 
-This layout is used by every DG kernel, limiter, positivity preserver,
-and VTU writer. Don't reorder it.
+Every DG kernel, limiter, positivity preserver and the VTU writer use
+this layout. Host code should not re-derive it: use the mesh helpers, or
+`index` when a specific node is needed.
 
-## IC pattern
+## Setting and reading a state
+
+Initial conditions and diagnostics go through the mesh (see
+[`mesh`](mesh.md#host-side-helpers)):
 
 ```mojo
-var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-for j in range(NY):
-    for i in range(NX):
-        var xl = mesh.x_min + Real(i) * mesh.dx
-        var e = j * NX + i
-        for jn in range(P1):
-            for in_ in range(P1):
-                var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                # ... compute physical state here ...
-                var n = jn * P1 + in_
-                var b = (e * nodes_per_elem + n) * NC
-                host[b + IDX_RHO] = rho
-                host[b + IDX_MX] = rho * u
-                ...
-ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+def initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
+    return [Real(1.0), Real(0.0), Real(0.0), Real(0.0), Real(2.5)]
+mesh.fill(q, initial)
+var mass = mesh.integrate(q, IDX_RHO)
 ```
 
-Every example in `examples/` follows this pattern. The IC loop runs on
-the host, building a host buffer, then `enqueue_copy` uploads it.
-
-## Reading back to host
+To sample particular nodes, map the buffer and use `index`:
 
 ```mojo
+var mid = State.num_nodes_per_elem // 2
 with q.buf.map_to_host() as h:
-    for i in range(q.buf_len):
-        print(h[i])
+    var rho_centre = h[State.index(elem, mid, IDX_RHO)]
 ```
 
-`map_to_host()` is a context manager that handles synchronisation. The
-returned host view is read-write — if you modify it, the changes are
-written back when the `with` block exits.
+`map_to_host()` is a context manager that synchronises the device queue
+and copies the buffer to the host. The view is read-write: changes are
+written back when the `with` block exits. It copies the whole buffer, so
+keep it out of the time loop of a large run.
 
 ## Multi-state problems
 
-The plasma stepper bundles three states (two fluids + Maxwell). You
-construct each one separately:
+The coupled steppers take several states, each constructed separately:
 
 ```mojo
-var q_s1 = DGState2D[P, EULER_NC](ctx, mesh.num_elements)
-var q_s2 = DGState2D[P, EULER_NC](ctx, mesh.num_elements)
-var q_maxwell = DGState2D[P, MAXWELL_NC](ctx, mesh.num_elements)
+var q_s1 = DGState[2, P, EULER_NC](ctx, mesh.num_elements)
+var q_s2 = DGState[2, P, EULER_NC](ctx, mesh.num_elements)
+var q_maxwell = DGState[2, P, MAXWELL_NC](ctx, mesh.num_elements)
 ```
 
-The plasma stepper threads them through coupled RK stages.
+## Phase-space states
+
+```mojo
+from warpxm.variable.phase_state_1d1v import PhaseState1D1V
+from warpxm.variable.phase_state_1d2v import PhaseState1D2V
+
+var f = PhaseState1D1V[P_x, P_v, VLASOV_NC](ctx, num_x, num_v)
+var g = PhaseState1D2V[P_x, P_v1, P_v2, VLASOV_NC](ctx, num_x, num_v1, num_v2)
+```
+
+Layout, with the x node index fastest inside a phase element:
+
+```text
+1D1V: buf[((phase_e * (P_v+1) + iv) * (P_x+1) + ix) * NC + c]
+      phase_e = ex * num_v + ev
+1D2V: buf[(phase_e * NPE + (iv2 * (P_v1+1) + iv1) * (P_x+1) + ix) * NC + c]
+      phase_e = (ex * num_v1 + ev1) * num_v2 + ev2
+      NPE = (P_x+1) * (P_v1+1) * (P_v2+1)
+```
+
+Members: `buf`, `buf_len`, `total_nodes`, `num_phase_elements`, `num_x`,
+`num_v` (or `num_v1`, `num_v2`). The phase meshes provide `fill` and
+`visit_nodes` for these states; there is no `index` helper. See
+[Vlasov-Maxwell](../physics/vlasov.md).

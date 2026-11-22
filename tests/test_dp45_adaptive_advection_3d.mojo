@@ -4,20 +4,16 @@
 # v = (1, 1, 1) on a triply-periodic [-0.5, 0.5]^3 mesh, returns exactly to
 # the IC at t = 1. Starts from a CFL-violating dt so the controller must
 # shrink it; then relax it once the smooth solution permits larger steps.
-# Validates the 3D port of DormandPrince45_3D.
+# Validates the 3D port of DormandPrince45.
 
+from std.collections import Array
 from std.math import cos, sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.advection import Advection
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, TWO_PI
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.spatial.dg_3d import DGSpatialSolver3D
-from warpxm.temporal.dormand_prince_3d import DormandPrince45_3D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.prelude import *
+from warpxm.physics.advection import *
 
 
 comptime P: Int = 2
@@ -29,54 +25,35 @@ comptime T_FINAL: Real = 1.0
 comptime DT_INIT: Real = 5.0e-2     # CFL-violating; controller must shrink
 comptime ATOL: Real = 1.0e-7
 comptime RTOL: Real = 1.0e-5
+comptime State = DGState[3, P, NC]
+
+
+def _wave(x: Real, y: Real, z: Real) -> Real:
+    return sin(TWO_PI * x) * cos(TWO_PI * y) * sin(TWO_PI * z)
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
-    var mesh = BlockMesh3D[P](
+    var mesh = BlockMesh[3, P](
         ctx, Real(-0.5), Real(0.5), Real(-0.5), Real(0.5), Real(-0.5), Real(0.5),
         nx=NX, ny=NY, nz=NZ,
     )
-    var q = DGState3D[P, NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1 * P1
+    def initial(x: Real, y: Real, z: Real) -> Array[Real, NC]:
+        return [_wave(x, y, z)]
+    mesh.fill(q, initial)
 
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for k in range(NZ):
-        var zl = mesh.z_min + Real(k) * mesh.dz
-        for j in range(NY):
-            var yl = mesh.y_min + Real(j) * mesh.dy
-            for i in range(NX):
-                var xl = mesh.x_min + Real(i) * mesh.dx
-                var e = k * NX * NY + j * NX + i
-                for kn in range(P1):
-                    var z = zl + (Real(1.0) + ref_nodes[kn]) * mesh.jacobian_z
-                    for jn in range(P1):
-                        var y = yl + (Real(1.0) + ref_nodes[jn]) * mesh.jacobian_y
-                        for in_ in range(P1):
-                            var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                            var n = kn * P1 * P1 + jn * P1 + in_
-                            host[(e * nodes_per_elem + n) * NC + 0] = (
-                                sin(TWO_PI * x) * cos(TWO_PI * y) * sin(TWO_PI * z)
-                            )
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
-
-    var spatial = DGSpatialSolver3D[P, NC](
+    var spatial = DGAdvectionSolver[3, P, NC](
         Advection[NC](
             velocity_x=Real(1.0), velocity_y=Real(1.0), velocity_z=Real(1.0),
             cfl_max=Real(1.0),
         )
     )
-    var stepper = DormandPrince45_3D[P, NC](ctx, mesh.num_elements)
+    var stepper = DormandPrince45[3, P, NC](ctx, mesh.num_elements)
 
-    def compute_rhs(
-        mut q_in: DGState3D[P, NC],
-        mut q_out: DGState3D[P, NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
     var t: Real = 0.0
@@ -118,28 +95,7 @@ def main() raises:
 
     ctx.synchronize()
 
-    var jv = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
-    var acc: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for k in range(NZ):
-            var zl = mesh.z_min + Real(k) * mesh.dz
-            for j in range(NY):
-                var yl = mesh.y_min + Real(j) * mesh.dy
-                for i in range(NX):
-                    var xl = mesh.x_min + Real(i) * mesh.dx
-                    var e = k * NX * NY + j * NX + i
-                    for kn in range(P1):
-                        var z = zl + (Real(1.0) + ref_nodes[kn]) * mesh.jacobian_z
-                        for jn in range(P1):
-                            var y = yl + (Real(1.0) + ref_nodes[jn]) * mesh.jacobian_y
-                            for in_ in range(P1):
-                                var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                                var n = kn * P1 * P1 + jn * P1 + in_
-                                var exact = sin(TWO_PI * x) * cos(TWO_PI * y) * sin(TWO_PI * z)
-                                var d = h[(e * nodes_per_elem + n) * NC + 0] - exact
-                                var jw = jv * weights[in_] * weights[jn] * weights[kn]
-                                acc += jw * d * d
-    var l2 = acc ** Real(0.5)
+    var l2 = mesh.l2_error(q, 0, _wave)
 
     print("Adaptive DP45 3D advection (P=2, N=12^3, atol=1e-7, rtol=1e-5):")
     print("  steps taken     :", num_steps)

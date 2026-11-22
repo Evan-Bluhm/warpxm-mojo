@@ -1,26 +1,19 @@
 # Adaptive DP45 on a 2D Maxwell plane wave.
 #
-# Same TM-mode IC as test_maxwell_2d_plane_wave.mojo (E_z = sin(2π(x+y)),
+# Same TM-mode IC as test_maxwell_plane_wave_2d.mojo (E_z = sin(2π(x+y)),
 # B propagates on the diagonal). The system is linear and perfectly
 # smooth, so DP45 should pull a much larger dt than the SSPRK3 baseline
 # (5e-4 fixed × ~1414 steps for t = 1/√2 ≈ 0.7071) and still return to
 # the IC within the SSPRK3 tolerances.
 
+from std.collections import Array
 from std.math import sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.maxwell import (
-    Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.math_compat import sqrt
-from warpxm.core.types import Real, TWO_PI
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.spatial.dg_maxwell_2d import DGMaxwellSolver2D
-from warpxm.temporal.dormand_prince_2d import DormandPrince45_2D
-from warpxm.variable.state_2d import DGState2D
+from warpxm.prelude import *
+from warpxm.physics.maxwell import *
 
 
 comptime P: Int = 2
@@ -30,55 +23,34 @@ comptime C_LIGHT: Real = 1.0
 comptime DT_INIT: Real = 1.0e-2     # CFL-violating; controller must shrink
 comptime ATOL: Real = 1.0e-8
 comptime RTOL: Real = 1.0e-6
+comptime State = DGState[2, P, MAXWELL_NC]
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh2D[P](
+    var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q = DGState2D[P, MAXWELL_NC](ctx, mesh.num_elements)
-
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1
+    var q = State(ctx, mesh.num_elements)
 
     var inv_sqrt2: Real = Real(1.0) / sqrt(Real(2.0))
 
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for j in range(NY):
-        var yl = mesh.y_min + Real(j) * mesh.dy
-        for i in range(NX):
-            var xl = mesh.x_min + Real(i) * mesh.dx
-            var e = j * NX + i
-            for jn in range(P1):
-                var y = yl + (Real(1.0) + ref_nodes[jn]) * mesh.jacobian_y
-                for in_ in range(P1):
-                    var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                    var s = sin(TWO_PI * (x + y))
-                    var n = jn * P1 + in_
-                    var b = (e * nodes_per_elem + n) * MAXWELL_NC
-                    host[b + IDX_EX] = Real(0.0)
-                    host[b + IDX_EY] = Real(0.0)
-                    host[b + IDX_EZ] = s
-                    host[b + IDX_BX] = inv_sqrt2 * s
-                    host[b + IDX_BY] = -inv_sqrt2 * s
-                    host[b + IDX_BZ] = Real(0.0)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real, y: Real) {imm} -> Array[Real, MAXWELL_NC]:
+        var s = sin(TWO_PI * (x + y))
+        return [
+            Real(0.0), Real(0.0), s, inv_sqrt2 * s, -inv_sqrt2 * s, Real(0.0),
+        ]
+    mesh.fill(q, initial)
 
-    var spatial = DGMaxwellSolver2D[P](Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5)))
-    var stepper = DormandPrince45_2D[P, MAXWELL_NC](ctx, mesh.num_elements)
+    var spatial = DGMaxwellSolver[2, P](Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5)))
+    var stepper = DormandPrince45[2, P, MAXWELL_NC](ctx, mesh.num_elements)
 
     var t_final: Real = inv_sqrt2
 
-    def compute_rhs(
-        mut q_in: DGState2D[P, MAXWELL_NC],
-        mut q_out: DGState2D[P, MAXWELL_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
     var t: Real = 0.0
@@ -119,33 +91,15 @@ def main() raises:
             break
     ctx.synchronize()
 
-    var err_ez: Real = 0.0
-    var err_bx: Real = 0.0
-    var err_by: Real = 0.0
-    var ja = mesh.jacobian_x * mesh.jacobian_y
-    with q.buf.map_to_host() as h:
-        for j in range(NY):
-            var yl = mesh.y_min + Real(j) * mesh.dy
-            for i in range(NX):
-                var xl = mesh.x_min + Real(i) * mesh.dx
-                var e = j * NX + i
-                for jn in range(P1):
-                    var y = yl + (Real(1.0) + ref_nodes[jn]) * mesh.jacobian_y
-                    for in_ in range(P1):
-                        var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                        var s = sin(TWO_PI * (x + y))
-                        var n = jn * P1 + in_
-                        var b = (e * nodes_per_elem + n) * MAXWELL_NC
-                        var d_ez = h[b + IDX_EZ] - s
-                        var d_bx = h[b + IDX_BX] - inv_sqrt2 * s
-                        var d_by = h[b + IDX_BY] - (-inv_sqrt2 * s)
-                        var jw = ja * weights[in_] * weights[jn]
-                        err_ez += jw * d_ez * d_ez
-                        err_bx += jw * d_bx * d_bx
-                        err_by += jw * d_by * d_by
-    var l2_ez = err_ez ** Real(0.5)
-    var l2_bx = err_bx ** Real(0.5)
-    var l2_by = err_by ** Real(0.5)
+    def exact_ez(x: Real, y: Real) -> Real:
+        return sin(TWO_PI * (x + y))
+    def exact_bx(x: Real, y: Real) {imm} -> Real:
+        return inv_sqrt2 * sin(TWO_PI * (x + y))
+    def exact_by(x: Real, y: Real) {imm} -> Real:
+        return -inv_sqrt2 * sin(TWO_PI * (x + y))
+    var l2_ez = mesh.l2_error(q, IDX_EZ, exact_ez)
+    var l2_bx = mesh.l2_error(q, IDX_BX, exact_bx)
+    var l2_by = mesh.l2_error(q, IDX_BY, exact_by)
 
     print("Adaptive DP45 2D Maxwell (P=2, 32x32, atol=1e-8, rtol=1e-6):")
     print("  steps taken     :", num_steps)

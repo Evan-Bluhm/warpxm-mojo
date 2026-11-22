@@ -34,31 +34,15 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_maxwell_uniform_oscillator_1d1v.mojo
 
-from std.math import exp, sqrt, pi
+from std.collections import Array
+from std.math import exp
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.maxwell import Maxwell, MAXWELL_NC, IDX_EX
-from warpxm.apps.vlasovmaxwell import (
-    VlasovMaxwell, VLASOV_NC, VLASOV_AUX_NC,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import BC_COPYOUT
-from warpxm.core.types import Real, PI
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.dg_maxwell_1d import DGMaxwellSolver1D
-from warpxm.spatial.dg_vlasov_1d1v import DGVlasovSolver1D1V
-from warpxm.spatial.vlasov_current_source_1d import (
-    apply_vlasov_current_source_1d,
-)
-from warpxm.spatial.vlasov_moments_1d1v import VlasovMoments1D1V
-from warpxm.temporal.ssprk3_vlasov_maxwell_1d1v import (
-    SSPRK3_VlasovMaxwell_1D1V,
-)
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
+from warpxm.physics.maxwell import *
 
 
 comptime P_X: Int = 2
@@ -78,6 +62,7 @@ comptime T_FINAL: Real = 2.0 * PI
 comptime STEPS_PER_QUARTER: Int = 80
 comptime DT: Real = T_FINAL / Real(4 * STEPS_PER_QUARTER)
 comptime E0: Real = 0.01  # initial uniform field perturbation
+comptime MaxwellState = DGState[1, P_X, MAXWELL_NC]
 
 
 def main() raises:
@@ -93,40 +78,27 @@ def main() raises:
         num_x=NX, num_v=NV,
         periodic_x=True,
     )
-    var x_mesh = BlockMesh1D[P_X](
+    var x_mesh = BlockMesh[1, P_X](
         ctx, Real(0.0), Real(1.0), NX, periodic=True,
     )
 
     # --- state ---
     var q_phase = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    var q_maxwell = DGState1D[P_X, MAXWELL_NC](ctx, NX)
+    var q_maxwell = MaxwellState(ctx, NX)
 
     # IC: f₀(v) = exp(-v²/σ²) / (σ√π) — normalised so ∫ f dv ≈ 1.
     var sigma = sqrt(SIGMA_SQ)
     var norm = Real(1.0) / (sigma * sqrt(PI))
-    var ref_v_nodes = NodalBasis1D[P_V].nodes()
-    var p_host = ctx.enqueue_create_host_buffer[Real.dtype](q_phase.buf_len)
-    for ex in range(NX):
-        for ev in range(NV):
-            var vl = Real(-3.0) + Real(ev) * phase_mesh.dv
-            for ix in range(P_X + 1):
-                for iv in range(P_V + 1):
-                    var v = vl + (Real(1.0) + ref_v_nodes[iv]) * phase_mesh.jacobian_v
-                    var phase_e = ex * NV + ev
-                    var idx = (
-                        (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                    ) * VLASOV_NC
-                    p_host[idx] = norm * exp(-v * v / SIGMA_SQ)
-    ctx.enqueue_copy(dst_buf=q_phase.buf, src_buf=p_host)
+    def maxwellian(x: Real, v: Real) {imm} -> Real:
+        return norm * exp(-v * v / SIGMA_SQ)
+    phase_mesh.fill(q_phase, maxwellian)
 
     # IC: uniform E_x = E0, all other Maxwell components zero.
-    var m_host = ctx.enqueue_create_host_buffer[Real.dtype](q_maxwell.buf_len)
-    for k in range(q_maxwell.buf_len):
-        m_host[k] = Real(0.0)
-    var node_count = NX * (P_X + 1)
-    for n in range(node_count):
-        m_host[n * MAXWELL_NC + IDX_EX] = E0
-    ctx.enqueue_copy(dst_buf=q_maxwell.buf, src_buf=m_host)
+    def uniform_field(x: Real) -> Array[Real, MAXWELL_NC]:
+        var v = Array[Real, MAXWELL_NC](fill=Real(0.0))
+        v[IDX_EX] = E0
+        return v^
+    x_mesh.fill(q_maxwell, uniform_field)
     ctx.synchronize()
 
     # --- solvers + stepper ---
@@ -137,18 +109,18 @@ def main() raises:
     )
     var maxwell_app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
     var spatial_vlasov = DGVlasovSolver1D1V[P_X, P_V](vlasov_app)
-    var spatial_maxwell = DGMaxwellSolver1D[P_X](maxwell_app)
+    var spatial_maxwell = DGMaxwellSolver[1, P_X](maxwell_app)
     var moments = VlasovMoments1D1V[P_X, P_V]()
     var stepper = SSPRK3_VlasovMaxwell_1D1V[P_X, P_V](ctx, NX, NV)
 
     # Scratch buffer for the species current at each RHS evaluation.
-    var j_current = DGState1D[P_X, 1](ctx, NX)
+    var j_current = DGState[1, P_X, 1](ctx, NX)
 
     def compute_joint_rhs(
         mut qp_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut qm_in: DGState1D[P_X, MAXWELL_NC],
+        mut qm_in: MaxwellState,
         mut qp_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut qm_out: DGState1D[P_X, MAXWELL_NC],
+        mut qm_out: MaxwellState,
     ) raises {mut j_current, imm}:
         # Vlasov reads E_x from qm_in (the Maxwell aux at this stage).
         spatial_vlasov.compute_rhs(ctx, phase_mesh, qp_in, qm_in, qp_out)
@@ -177,22 +149,19 @@ def main() raises:
         ctx.synchronize()
         var e_node0: Real
         with q_maxwell.buf.map_to_host() as h:
-            e_node0 = h[IDX_EX]
-            for n in range(node_count):
-                var ex_val = h[n * MAXWELL_NC + IDX_EX]
-                var e_err = abs(ex_val - E0 * e_exact[quarter])
-                if e_err > max_e_err:
-                    max_e_err = e_err
-                var spread = abs(ex_val - e_node0)
-                if spread > max_x_spread:
-                    max_x_spread = spread
+            e_node0 = h[MaxwellState.index(0, 0, IDX_EX)]
+        def check_e(
+            x: Real, w: Real, v: Array[Real, MAXWELL_NC],
+        ) {mut max_e_err, mut max_x_spread, imm}:
+            max_e_err = fmax(max_e_err, abs(v[IDX_EX] - E0 * e_exact[quarter]))
+            max_x_spread = fmax(max_x_spread, abs(v[IDX_EX] - e_node0))
+        x_mesh.visit_nodes(q_maxwell, check_e)
         var j_node0: Real
         with j_current.buf.map_to_host() as hj:
             j_node0 = hj[0]
-            for n in range(node_count):
-                var j_err = abs(hj[n] - E0 * j_exact[quarter])
-                if j_err > max_j_err:
-                    max_j_err = j_err
+        def check_j(x: Real, w: Real, v: Array[Real, 1]) {mut max_j_err, imm}:
+            max_j_err = fmax(max_j_err, abs(v[0] - E0 * j_exact[quarter]))
+        x_mesh.visit_nodes(j_current, check_j)
         print(
             "  t =", t, " E_x/E0 =", e_node0 / E0, " J/E0 =", j_node0 / E0,
         )

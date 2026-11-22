@@ -21,18 +21,13 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_bgk_relaxation_1d1v.mojo
 
-from std.math import exp, sqrt
+from std.math import exp
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.vlasovmaxwell import VLASOV_NC
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, PI
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.vlasov_bgk_source_1d1v import VlasovBGKSource1D1V
-from warpxm.temporal.ssprk3_1d1v import SSPRK3_1D1V
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
 
 
 comptime P_X: Int = 2
@@ -54,7 +49,6 @@ comptime DT: Real = 0.01
 
 
 def compute_three_moments(
-    var ctx: DeviceContext,
     mesh: PhaseMesh1D1V[P_X, P_V],
     mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
     mut m_out: Real,
@@ -63,31 +57,14 @@ def compute_three_moments(
 ) raises:
     """∫∫ (1, v, ½v²) · f dv dx via GLL quadrature; writes the three
     moments (M, P, E_kin) to the supplied mutable refs in one pass."""
-    var x_w = NodalBasis1D[P_X].weights()
-    var v_w = NodalBasis1D[P_V].weights()
-    var ref_v = NodalBasis1D[P_V].nodes()
     var m_acc: Real = 0.0
     var p_acc: Real = 0.0
     var e_acc: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for ex in range(NX):
-            for ev in range(NV):
-                var vl = V_MIN + Real(ev) * mesh.dv
-                for ix in range(P_X + 1):
-                    for iv in range(P_V + 1):
-                        var v = vl + (Real(1.0) + ref_v[iv]) * mesh.jacobian_v
-                        var phase_e = ex * NV + ev
-                        var idx = (
-                            (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                        ) * VLASOV_NC
-                        var f = h[idx]
-                        var w = (
-                            x_w[ix] * mesh.jacobian_x
-                            * v_w[iv] * mesh.jacobian_v
-                        )
-                        m_acc += w * f
-                        p_acc += w * v * f
-                        e_acc += w * Real(0.5) * v * v * f
+    def add(x: Real, v: Real, w: Real, f: Real) {mut m_acc, mut p_acc, mut e_acc}:
+        m_acc += w * f
+        p_acc += w * v * f
+        e_acc += w * Real(0.5) * v * v * f
+    mesh.visit_nodes(q, add)
     m_out = m_acc
     p_out = p_acc
     e_out = e_acc
@@ -106,33 +83,19 @@ def main() raises:
     var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
 
     # IC: bimodal counter-streaming Maxwellian.
-    var ref_v = NodalBasis1D[P_V].nodes()
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for ex in range(NX):
-        for ev in range(NV):
-            var vl = V_MIN + Real(ev) * mesh.dv
-            for ix in range(P_X + 1):
-                for iv in range(P_V + 1):
-                    var v = vl + (Real(1.0) + ref_v[iv]) * mesh.jacobian_v
-                    var phase_e = ex * NV + ev
-                    var idx = (
-                        (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                    ) * VLASOV_NC
-                    var d1 = v - U_STREAM
-                    var d2 = v + U_STREAM
-                    host[idx] = Real(0.5) * (
-                        exp(-d1 * d1 / SIGMA_SQ) + exp(-d2 * d2 / SIGMA_SQ)
-                    )
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
-    ctx.synchronize()
+    def bimodal(x: Real, v: Real) -> Real:
+        var d1 = v - U_STREAM
+        var d2 = v + U_STREAM
+        return Real(0.5) * (
+            exp(-d1 * d1 / SIGMA_SQ) + exp(-d2 * d2 / SIGMA_SQ)
+        )
+    mesh.fill(q, bimodal)
 
     # --- baseline moments (numerical from the IC) ---
     var m0_initial: Real = 0.0
     var p0_initial: Real = 0.0
     var e0_initial: Real = 0.0
-    compute_three_moments(
-        ctx, mesh, q, m0_initial, p0_initial, e0_initial,
-    )
+    compute_three_moments(mesh, q, m0_initial, p0_initial, e0_initial)
     print(
         "BGK relax IC: M =", m0_initial,
         " P =", p0_initial,
@@ -168,7 +131,7 @@ def main() raises:
     var m_final: Real = 0.0
     var p_final: Real = 0.0
     var e_final: Real = 0.0
-    compute_three_moments(ctx, mesh, q, m_final, p_final, e_final)
+    compute_three_moments(mesh, q, m_final, p_final, e_final)
 
     var dM = m_final - m0_initial
     var dP = p_final - p0_initial
@@ -190,35 +153,17 @@ def main() raises:
     var T_target = SIGMA_SQ / Real(2.0) + U_STREAM * U_STREAM
     var t_sigma_M_sq = Real(2.0) * T_target  # f_M ∝ exp(-(v-u)²/(2T))
 
-    var x_w = NodalBasis1D[P_X].weights()
-    var v_w = NodalBasis1D[P_V].weights()
     var l2: Real = 0.0
     var max_err: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for ex in range(NX):
-            for ev in range(NV):
-                var vl = V_MIN + Real(ev) * mesh.dv
-                for ix in range(P_X + 1):
-                    for iv in range(P_V + 1):
-                        var v = vl + (Real(1.0) + ref_v[iv]) * mesh.jacobian_v
-                        var phase_e = ex * NV + ev
-                        var idx = (
-                            (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                        ) * VLASOV_NC
-                        var f_num = h[idx]
-                        var f_M = n_per_x / sqrt(
-                            Real(2.0) * PI * T_target
-                        ) * exp(-v * v / t_sigma_M_sq)
-                        var d = f_num - f_M
-                        var ad = d if d >= 0.0 else -d
-                        if ad > max_err:
-                            max_err = ad
-                        var w = (
-                            x_w[ix] * mesh.jacobian_x
-                            * v_w[iv] * mesh.jacobian_v
-                        )
-                        l2 += w * d * d
-    l2 = l2 ** Real(0.5)
+    def compare(x: Real, v: Real, w: Real, f_num: Real) {mut l2, mut max_err, imm}:
+        var f_M = n_per_x / sqrt(
+            Real(2.0) * PI * T_target
+        ) * exp(-v * v / t_sigma_M_sq)
+        var d = f_num - f_M
+        max_err = fmax(max_err, fabs(d))
+        l2 += w * d * d
+    mesh.visit_nodes(q, compare)
+    l2 = sqrt(l2)
     print(
         "BGK relax convergence: L2 ‖f − f_M‖ =", l2,
         " max |err| =", max_err,

@@ -24,19 +24,8 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.adjusters.positivity_euler import (
-    PositivityEuler1D, PositivityEuler2D, PositivityEuler3D,
-)
-from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.math_compat import fabs
-from warpxm.core.types import Real
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.variable.state_1d import DGState1D
-from warpxm.variable.state_2d import DGState2D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
 
 
 comptime P: Int = 2
@@ -72,8 +61,10 @@ def _set_node(
     )
 
 
-def _build(npe: Int) -> List[Real]:
-    """Initial state on NUM_ELEMENTS elements of `npe` nodes each."""
+def _build[NDIM: Int]() -> List[Real]:
+    """Initial state on NUM_ELEMENTS elements, in `DGState` layout."""
+    comptime State = DGState[NDIM, P, EULER_NC]
+    comptime npe = State.num_nodes_per_elem
     var q = List[Real](length=NUM_ELEMENTS * npe * EULER_NC, fill=Real(0.0))
     for e in range(NUM_ELEMENTS):
         # Element 3 (and 7) sit at low pressure; the rest at P ≈ 1.
@@ -88,52 +79,50 @@ def _build(npe: Int) -> List[Real]:
         for n in range(npe):
             var s = sin(Real(1.7) * Real(n) + Real(0.9) * Real(e))
             _set_node(
-                q, (e * npe + n) * EULER_NC,
+                q, State.index(e, n, 0),
                 Real(1.0) + Real(0.1) * s,
                 moving * Real(0.3) * (Real(1.0) + Real(0.05) * s),
                 moving * Real(-0.2) * (Real(1.0) - Real(0.03) * s),
                 moving * Real(0.1) * (Real(1.0) + Real(0.02) * s),
                 p_base * (Real(1.0) + Real(0.2) * s),
             )
-        var b0 = e * npe * EULER_NC
         if e % 4 == 1:
             # Negative density at node 0.
-            _set_node(q, b0, Real(-0.5), Real(0.0), Real(0.0), Real(0.0), Real(1.0))
+            _set_node(q, State.index(e, 0, 0), Real(-0.5), Real(0.0), Real(0.0), Real(0.0), Real(1.0))
         elif e % 4 == 2:
             # Negative pressure at node 1, healthy density.
             _set_node(
-                q, b0 + EULER_NC,
+                q, State.index(e, 1, 0),
                 Real(1.0), Real(0.3), Real(-0.2), Real(0.1), Real(-0.3),
             )
         elif e % 4 == 3:
             # Slightly negative pressure at node 2 of a low-pressure element.
             _set_node(
-                q, b0 + 2 * EULER_NC,
+                q, State.index(e, 2, 0),
                 Real(1.0), Real(0.3), Real(-0.2), Real(0.1), Real(-1.0e-3),
             )
     return q^
 
 
-def _verify(
-    label: String, q0: List[Real], q1: List[Real], w: List[Real], npe: Int,
-) raises:
-    """Check `q1 = preserver(q0)` element by element. `w` are the node
-    weights of the cell mean (they sum to 1)."""
+def _verify[NDIM: Int](label: String, q0: List[Real], q1: List[Real]) raises:
+    """Check `q1 = preserver(q0)` element by element."""
+    comptime State = DGState[NDIM, P, EULER_NC]
+    comptime npe = State.num_nodes_per_elem
+    var w = _weights[NDIM]()
     var worst_mean: Real = 0.0
     var worst_theta: Real = 0.0
     var worst_rho_gap: Real = 0.0
     var worst_p_gap: Real = 0.0
     for e in range(NUM_ELEMENTS):
         var kind = e % 4
-        var b0 = e * npe * EULER_NC
 
         # Cell means before and after.
         var mean0 = List[Real](length=EULER_NC, fill=Real(0.0))
         var mean1 = List[Real](length=EULER_NC, fill=Real(0.0))
         for n in range(npe):
             for c in range(EULER_NC):
-                mean0[c] += w[n] * q0[b0 + n * EULER_NC + c]
-                mean1[c] += w[n] * q1[b0 + n * EULER_NC + c]
+                mean0[c] += w[n] * q0[State.index(e, n, c)]
+                mean1[c] += w[n] * q1[State.index(e, n, c)]
         for c in range(EULER_NC):
             var d = fabs(mean1[c] - mean0[c])
             if d > worst_mean: worst_mean = d
@@ -143,26 +132,26 @@ def _verify(
         var big: Real = 0.0
         for n in range(npe):
             for c in range(EULER_NC):
-                var dev = q0[b0 + n * EULER_NC + c] - mean0[c]
+                var dev = q0[State.index(e, n, c)] - mean0[c]
                 if fabs(dev) > big:
                     big = fabs(dev)
-                    theta = (q1[b0 + n * EULER_NC + c] - mean0[c]) / dev
+                    theta = (q1[State.index(e, n, c)] - mean0[c]) / dev
         for n in range(npe):
             for c in range(EULER_NC):
-                var i = b0 + n * EULER_NC + c
+                var i = State.index(e, n, c)
                 var d = fabs(q1[i] - (mean0[c] + theta * (q0[i] - mean0[c])))
                 if d > worst_theta: worst_theta = d
 
         var min_rho: Real = 1.0e30
         var min_p: Real = 1.0e30
         for n in range(npe):
-            var b = b0 + n * EULER_NC
+            var b = State.index(e, n, 0)
             if q1[b + IDX_RHO] < min_rho: min_rho = q1[b + IDX_RHO]
             var pp = _pressure(q1, b)
             if pp < min_p: min_p = pp
 
         if kind == 0:
-            for i in range(b0, b0 + npe * EULER_NC):
+            for i in range(State.index(e, 0, 0), State.index(e + 1, 0, 0)):
                 assert_true(q1[i] == q0[i], label + ": admissible element was modified")
         else:
             assert_true(theta > Real(0.0) and theta < Real(1.0), label + ": θ outside (0, 1)")
@@ -186,16 +175,31 @@ def _verify(
     assert_true(worst_p_gap < Real(1.0e-12), label + ": min P is not on the floor")
 
 
-def _weights(ndim: Int) -> List[Real]:
+def _weights[NDIM: Int]() -> List[Real]:
+    """Node weights of the cell mean (they sum to 1)."""
     var w1 = NodalBasis1D[P].weights()
-    var npe = P1 ** ndim
+    comptime npe = P1 ** NDIM
     var w = List[Real](length=npe, fill=Real(1.0))
     for n in range(npe):
         var rem = n
-        for _ in range(ndim):
+        for _ in range(NDIM):
             w[n] *= Real(0.5) * w1[rem % P1]
             rem //= P1
     return w^
+
+
+def _upload[NDIM: Int](
+    mut s: DGState[NDIM, P, EULER_NC], values: List[Real],
+) raises:
+    with s.buf.map_to_host() as h:
+        for i in range(s.buf_len): h[i] = values[i]
+
+
+def _download[NDIM: Int](mut s: DGState[NDIM, P, EULER_NC]) raises -> List[Real]:
+    var values = List[Real](length=s.buf_len, fill=Real(0.0))
+    with s.buf.map_to_host() as h:
+        for i in range(s.buf_len): values[i] = h[i]
+    return values^
 
 
 def main() raises:
@@ -203,64 +207,46 @@ def main() raises:
     var ctx = DeviceContext()
 
     # ---- 1D ----
-    var npe1 = P1
-    var mesh1 = BlockMesh1D[P](ctx, Real(0.0), Real(1.0), NUM_ELEMENTS, periodic=True)
-    var s1 = DGState1D[P, EULER_NC](ctx, mesh1.num_elements)
-    var init1 = _build(npe1)
-    var host1 = ctx.enqueue_create_host_buffer[Real.dtype](s1.buf_len)
-    for i in range(s1.buf_len): host1[i] = init1[i]
-    ctx.enqueue_copy(dst_buf=s1.buf, src_buf=host1)
-    var pos1 = PositivityEuler1D[P](
+    var mesh1 = BlockMesh[1, P](ctx, Real(0.0), Real(1.0), NUM_ELEMENTS, periodic=True)
+    var s1 = DGState[1, P, EULER_NC](ctx, mesh1.num_elements)
+    var init1 = _build[1]()
+    _upload(s1, init1)
+    var pos1 = PositivityEuler[1, P](
         num_elements=mesh1.num_elements, gamma=GAMMA, rho_eps=RHO_EPS, p_eps=P_EPS,
     )
     pos1.apply(ctx, mesh1, s1)
     ctx.synchronize()
-    var out1 = List[Real](length=s1.buf_len, fill=Real(0.0))
-    with s1.buf.map_to_host() as h:
-        for i in range(s1.buf_len): out1[i] = h[i]
-    _verify("1D", init1, out1, _weights(1), npe1)
+    _verify[1]("1D", init1, _download(s1))
 
     # ---- 2D ----
-    var npe2 = P1 * P1
-    var mesh2 = BlockMesh2D[P](
+    var mesh2 = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NUM_ELEMENTS // 2, ny=2, periodic_x=True, periodic_y=True,
     )
-    var s2 = DGState2D[P, EULER_NC](ctx, mesh2.num_elements)
-    var init2 = _build(npe2)
-    var host2 = ctx.enqueue_create_host_buffer[Real.dtype](s2.buf_len)
-    for i in range(s2.buf_len): host2[i] = init2[i]
-    ctx.enqueue_copy(dst_buf=s2.buf, src_buf=host2)
-    var pos2 = PositivityEuler2D[P](
+    var s2 = DGState[2, P, EULER_NC](ctx, mesh2.num_elements)
+    var init2 = _build[2]()
+    _upload(s2, init2)
+    var pos2 = PositivityEuler[2, P](
         num_elements=mesh2.num_elements, gamma=GAMMA, rho_eps=RHO_EPS, p_eps=P_EPS,
     )
     pos2.apply(ctx, mesh2, s2)
     ctx.synchronize()
-    var out2 = List[Real](length=s2.buf_len, fill=Real(0.0))
-    with s2.buf.map_to_host() as h:
-        for i in range(s2.buf_len): out2[i] = h[i]
-    _verify("2D", init2, out2, _weights(2), npe2)
+    _verify[2]("2D", init2, _download(s2))
 
     # ---- 3D ----
-    var npe3 = P1 * P1 * P1
-    var mesh3 = BlockMesh3D[P](
+    var mesh3 = BlockMesh[3, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NUM_ELEMENTS // 4, ny=2, nz=2,
         periodic_x=True, periodic_y=True, periodic_z=True,
     )
-    var s3 = DGState3D[P, EULER_NC](ctx, mesh3.num_elements)
-    var init3 = _build(npe3)
-    var host3 = ctx.enqueue_create_host_buffer[Real.dtype](s3.buf_len)
-    for i in range(s3.buf_len): host3[i] = init3[i]
-    ctx.enqueue_copy(dst_buf=s3.buf, src_buf=host3)
-    var pos3 = PositivityEuler3D[P](
+    var s3 = DGState[3, P, EULER_NC](ctx, mesh3.num_elements)
+    var init3 = _build[3]()
+    _upload(s3, init3)
+    var pos3 = PositivityEuler[3, P](
         num_elements=mesh3.num_elements, gamma=GAMMA, rho_eps=RHO_EPS, p_eps=P_EPS,
     )
     pos3.apply(ctx, mesh3, s3)
     ctx.synchronize()
-    var out3 = List[Real](length=s3.buf_len, fill=Real(0.0))
-    with s3.buf.map_to_host() as h:
-        for i in range(s3.buf_len): out3[i] = h[i]
-    _verify("3D", init3, out3, _weights(3), npe3)
+    _verify[3]("3D", init3, _download(s3))
 
     print("PASSED")

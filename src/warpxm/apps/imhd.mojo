@@ -238,6 +238,20 @@ struct IMHD(ImplicitlyCopyable, Movable):
     # ------------------------------------------------------------------
 
     @staticmethod
+    @always_inline
+    def max_signal_speed_static(
+        q: Array[Real, MHD_NC], gamma: Real, rho_min: Real, press_min: Real,
+    ) -> Real:
+        """`|u| + sqrt(c_s² + c_A²)`: flow speed plus the fast speed
+        perpendicular to B, which bounds the fast speed in every direction.
+        For CFL time-step selection."""
+        var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+        var p = _gas_pressure_from_inv_rho(q, inv_rho, gamma, press_min)
+        var msq = (q[IDX_MX] * q[IDX_MX] + q[IDX_MY] * q[IDX_MY]
+                   + q[IDX_MZ] * q[IDX_MZ])
+        return sqrt(msq) * inv_rho + sqrt((gamma * p + _bsq(q)) * inv_rho)
+
+    @staticmethod
     def numerical_flux_static(
         q_l: Array[Real, MHD_NC],
         q_r: Array[Real, MHD_NC],

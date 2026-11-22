@@ -1,9 +1,8 @@
 # API reference
 
 Module-by-module summary of the public types and functions in
-`src/warpxm/`. Hand-written — Mojo doesn't yet ship docstring
-extraction tooling, so this page set evolves manually as the library
-changes.
+`src/warpxm/`. The pages are written by hand, so check the source when
+a signature matters.
 
 ## Module map
 
@@ -12,35 +11,47 @@ The directory layout mirrors upstream WARPXM (see
 
 ```text
 src/warpxm/
-  core/        # Real-type alias, math helpers, BC enum
+  prelude.mojo # Re-exports everything not tied to one physics
+  physics/     # One re-export module per physics (app, constants,
+               # solvers, adjusters, sources, VTU preset)
+  core/        # Real-type alias, math helpers, BC kinds
   basis/       # GLL nodal basis tables (P = 1..4)
-  mesh/        # BlockMesh{1,2,3}D
-  variable/    # DGState{1,2,3}D[P, NC]
-  apps/        # Physics modules — one canonical file per physics
-               # (advection, euler, maxwell, imhd, imhd_glm). The struct
-               # is dimension-agnostic; the per-dim DG kernel supplies
-               # the right normal triples (e.g. 1D passes (±1, 0, 0)).
-  spatial/     # Shared dg_core_{1,2,3}d.mojo templates + thin per-physics
-               # dg_<phys>_<N>d.mojo wrappers. Plus source kernels.
-  temporal/    # SSPRK3 / Dormand-Prince steppers — all dimension-agnostic
-               # via the closure pattern.
-  adjusters/   # Moe-Rossmanith slope limiter (1D Euler-only + NC-parametric
-               # 2D/3D) and Zhang-Shu positivity preserver
-               # (Euler 1D/2D/3D, MHD 2D/3D — there's no 1D MHD).
-  driver/      # VTU writers + FrameWriter
+  mesh/        # BlockMesh[NDIM, P], PhaseMesh1D1V / 1D2V, and the host-side
+               # helpers (fill, visit_nodes, integrate, l2_error)
+  variable/    # DGState[NDIM, P, NC], PhaseState1D1V / 1D2V
+  apps/        # Physics modules, one file per physics (advection, euler,
+               # maxwell, imhd, imhd_glm, vlasovmaxwell). The struct is
+               # dimension-agnostic; the DG core supplies the normal
+               # triples (1D passes (±1, 0, 0)).
+  spatial/     # dg_core.mojo (the shared DG core), dg_launch.mojo (the
+               # host-side launcher), dg_<phys>.mojo wrappers, all generic
+               # over the dimension; wave_speed.mojo (CFL)
+    sources/   # Pointwise source kernels, generic over the dimension
+    kinetic/   # Vlasov phase-space DG, moments, BGK, current coupling
+  temporal/    # SSPRK3 and Dormand-Prince, generic over the dimension;
+               # coupled fluid + Maxwell and kinetic steppers
+  adjusters/   # Moe-Rossmanith slope limiter (NC-parametric) and Zhang-Shu
+               # positivity preservers (Euler, MHD), generic over the
+               # dimension
+  io/          # Generic VTU writer, per-physics presets, FrameWriter
+  testing/     # ExactRiemann, check_convergence (shared by the tests)
 ```
 
 ## Pages
 
-* [`core`](core.md) — types, math compatibility shims, BC constants
-* [`basis`](basis.md) — `NodalBasis1D[P]` (GLL nodes + weights, $P = 1..4$)
-* [`mesh`](mesh.md) — `BlockMesh{1,2,3}D[P]`
-* [`variable`](variable.md) — `DGState{1,2,3}D[P, NC]`
-* [`apps`](apps.md) — physics module structs and their static flux methods
-* [`spatial`](spatial.md) — DG spatial solvers and source kernels
-* [`temporal`](temporal.md) — explicit RK steppers
-* [`adjusters`](adjusters.md) — limiters and positivity preservers
-* [`driver`](driver.md) — output writers
+* [`prelude` and `physics`](prelude.md): the re-export modules a driver
+  imports
+* [`core`](core.md): types, math compatibility shims, BC constants
+* [`basis`](basis.md): `NodalBasis1D[P]` (GLL nodes + weights, $P = 1..4$)
+* [`mesh`](mesh.md): `BlockMesh[NDIM, P]` and the host-side helpers
+* [`variable`](variable.md): `DGState[NDIM, P, NC]`
+* [`apps`](apps.md): physics module structs and their static flux methods
+* [`spatial`](spatial.md): DG spatial solvers, the launcher, CFL, source
+  kernels
+* [`temporal`](temporal.md): explicit RK steppers
+* [`adjusters`](adjusters.md): limiters and positivity preservers
+* [`io`](io.md): output writers
+* [`testing`](testing.md): helpers shared by the regression tests
 
 ## Convention summary
 
@@ -49,7 +60,12 @@ src/warpxm/
   specialisation.
 * Static methods on `apps/*` structs: `internal_flux_*_static`,
   `numerical_flux_static` (Rusanov), `numerical_flux_hlld_static`
-  (MHD only). Used by DG kernels.
+  (MHD only), `max_signal_speed_static` (Euler, MHD, GLM-MHD; used by
+  `suggest_dt`). Used by the kernels.
+* `NDIM` is a `comptime` parameter, always first: `BlockMesh[2, P]`,
+  `DGState[2, P, NC]`, `DGEulerSolver[2, P]`,
+  `MoeRossmanith[2, P, NC]`, `SSPRK3[2, P, NC]`. Only the kinetic
+  (Vlasov) types carry a dimension suffix (`1D1V`, `1D2V`).
 * Index constants: each fixed-NC physics module (`euler`, `maxwell`,
   `imhd`, `imhd_glm`) exports `IDX_*` constants (e.g. `IDX_RHO`,
   `IDX_MX`, `IDX_BX`) and a `*_NC` constant. Single source of truth

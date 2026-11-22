@@ -25,3 +25,6 @@ site/
 *.nsys-rep
 *.sqlite
 *.ncu-rep
+
+# Example output (FrameWriter default: ./output/<name>)
+/output/

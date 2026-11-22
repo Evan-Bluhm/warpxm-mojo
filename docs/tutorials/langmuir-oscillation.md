@@ -9,7 +9,7 @@ exercises the bidirectional fluid ↔ Maxwell coupling:
 * The fluid feels the Lorentz force from Maxwell's E-field.
 * The fluid's current accumulates onto Maxwell's E-field RHS.
 
-So both source terms in `SSPRK3_TwoFluid_2D` are active and you can
+So both source terms in `SSPRK3_TwoFluid` are active and you can
 watch them swap energy back and forth.
 
 ## What's modelled
@@ -34,80 +34,126 @@ full periods (13 frames).
 ## Run it
 
 ```fish
-mkdir -p /tmp/langmuir
-pixi run mojo run -I src examples/langmuir_2d_vtu.mojo
+pixi run example langmuir_2d_vtu
 ```
 
-The driver prints integrated diagnostics each frame:
+The driver prints integrated diagnostics each frame (values rounded):
 
 ```text
-time         ∫ρ_e dV          ∫E_x² dV         rel Δmass
------------  ---------------  ---------------  ------------
-0.0          0.125            1.58e-7          0.0
-1.05         0.125            3.97e-8          −3.6e-14
-2.09         0.125            3.89e-8          −7.5e-14
-3.14         0.125            1.54e-7          −1.3e-13
-4.19         0.125            3.62e-8          −1.7e-13
+2D Langmuir oscillation, ω_pe = 1.0 , T = 6.283185307179586 , dt = 0.00078125
+time   ∫ρ_e dV   ∫E_x² dV   rel Δmass
+0.0     0.125  1.583e-7   0.0
+1.047   0.125  3.963e-8  -4.0e-14
+2.094   0.125  3.896e-8  -1.0e-13
+3.142   0.125  1.542e-7  -1.7e-13
 ...
+12.566  0.125  1.580e-7  -7.1e-13
 ```
 
-$\int E_x^2$ oscillates between $\sim 1.6 \times 10^{-7}$ (E-field
-peak — half-periods $\pi, 2\pi, 3\pi, ...$) and $\sim 4 \times 10^{-8}$
-(kinetic energy peak — quarter-periods between). Mass drift stays
-below $10^{-12}$ relative over the 12 500 SSPRK3 steps.
+$\int E_x^2$ oscillates between about $1.6 \times 10^{-7}$ (field
+energy peak, every half period) and about $4 \times 10^{-8}$ in between.
+After two periods it is back to 1.580e-7 from 1.583e-7. Mass drift stays
+below $10^{-12}$ relative over the roughly 16 000 SSPRK3 steps.
 
-Open `/tmp/langmuir/langmuir_fluid.pvd` and
-`/tmp/langmuir/langmuir_maxwell.pvd` in ParaView side-by-side. They
+Open `output/langmuir/langmuir_fluid.pvd` and
+`output/langmuir/langmuir_maxwell.pvd` in ParaView side by side. They
 share the same timeline, so scrubbing one moves both.
 
 ## Walkthrough
 
-### The closure-based plasma stepper
+### Initial condition
 
-The `SSPRK3_TwoFluid_2D` stepper takes a single comptime
-`compute_joint_rhs_fn` closure that, given the two current states
-(fluid + Maxwell), writes the combined hyperbolic + source RHS for
-each:
+Two states on the same mesh, each filled from its own closure:
 
 ```mojo
+comptime Fluid = DGState[2, P, EULER_NC]
+comptime Field = DGState[2, P, MAXWELL_NC]
+
+def fluid_initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
+    return [
+        Real(1.0) + DELTA * sin(TWO_PI * x), Real(0.0), Real(0.0), Real(0.0),
+        P0 / (GAMMA - Real(1.0)),
+    ]
+
+def field_initial(x: Real, y: Real) -> Array[Real, MAXWELL_NC]:
+    var v = Array[Real, MAXWELL_NC](fill=Real(0.0))
+    v[IDX_EX] = (DELTA / (TWO_PI * EPS0)) * cos(TWO_PI * x)
+    return v^
+mesh.fill(q_fluid, fluid_initial)
+mesh.fill(q_maxwell, field_initial)
+```
+
+`warpxm.physics.plasma` exports both apps, their solvers, the two
+coupling sources and the joint steppers.
+
+### The closure-based plasma stepper
+
+`SSPRK3_TwoFluid[NDIM, P]` takes one `compute_joint_rhs` closure that,
+given the two current states (fluid and Maxwell), writes the combined
+hyperbolic + source right-hand side for each:
+
+```mojo
+var stepper = SSPRK3_TwoFluid[2, P](ctx, mesh.num_elements)
+
 def compute_joint_rhs(
-    mut qf_in: DGState2D[P, EULER_NC],
-    mut qm_in: DGState2D[P, MAXWELL_NC],
-    mut qf_out: DGState2D[P, EULER_NC],
-    mut qm_out: DGState2D[P, MAXWELL_NC],
+    mut qf_in: Fluid, mut qm_in: Field, mut qf_out: Fluid, mut qm_out: Field,
 ) raises {imm}:
     fluid_spatial.compute_rhs(ctx, mesh, qf_in, qf_out)
     maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
-    apply_lorentz_source_2d[P](ctx, qf_in, qm_in, qf_out, ALPHA)
-    apply_current_source_2d[P](ctx, qf_in, qm_out, ALPHA, EPS0)
-
-stepper.step(ctx, q_fluid, q_maxwell, dt_use, compute_joint_rhs)
+    apply_lorentz_source(ctx, qf_in, qm_in, qf_out, ALPHA)
+    apply_current_source(ctx, qf_in, qm_out, ALPHA, EPS0)
 ```
 
-Inside the closure the driver picks **what** sources to apply and
+Inside the closure the driver picks **which** sources to apply and
 **in what order**. To turn off the back-reaction (Maxwell → fluid
-only), just drop the `apply_current_source_2d` call. To run with a
-much weaker α, change the constant. The stepper has no opinion on
-any of this.
+only), drop the `apply_current_source` call. The stepper has no opinion
+on any of this.
+
+### Time step
+
+```mojo
+var dt = fmin(
+    maxwell_spatial.suggest_dt(mesh),
+    fluid_spatial.suggest_dt(ctx, mesh, q_fluid),
+)
+...
+t = stepper.run_until(
+    ctx, q_fluid, q_maxwell,
+    t, t_final * Real(frame + 1) / Real(NUM_FRAMES - 1), dt,
+    compute_joint_rhs,
+)
+```
+
+The step is fixed for the run, taken as the smaller of the two CFL
+steps at $t = 0$. The coupled stepper has `run_until` but no CFL-driven
+variant, and nothing here changes the limit: light ($c = 1$) is far
+faster than the cold electron fluid, so the Maxwell step
+(`7.8125e-4` with `cfl_max = 0.5`) bounds the hyperbolic part, and it
+also resolves the plasma frequency that the source terms introduce
+($\omega_{pe}\,\Delta t \approx 10^{-3}$). For a denser plasma, check
+that $\omega_{pe}\,\Delta t$ stays well below 1: the source terms are
+explicit and the CFL estimate does not see them.
 
 ### Why two PVD files
 
-Maxwell and fluid live in different `DGState2D` types (different
-NCs — 6 for Maxwell, 5 for the fluid). The existing VTU writers
-each take one state, so the example uses two `FrameWriter`
-instances:
+Maxwell and fluid live in different `DGState` types (different
+NCs: 6 for Maxwell, 5 for the fluid). A VTU file holds one state, so
+the example uses two `FrameWriter` instances pointed at the same
+directory:
 
 ```mojo
+comptime OUTPUT_DIR: String = "output/langmuir"
+
 var fw_fluid = FrameWriter("langmuir_fluid", OUTPUT_DIR)
 var fw_maxwell = FrameWriter("langmuir_maxwell", OUTPUT_DIR)
 ...
-dump_euler_2d_frame[P](fw_fluid.next_path(t), ctx, mesh, q_fluid, GAMMA)
-dump_maxwell_2d_frame[P](fw_maxwell.next_path(t), ctx, mesh, q_maxwell)
+dump_euler_frame(fw_fluid.next_path(t), mesh, q_fluid, GAMMA)
+dump_maxwell_frame(fw_maxwell.next_path(t), mesh, q_maxwell)
 ```
 
 `FrameWriter.next_path(t)` returns the per-frame file path and
 records the timestamp; `write_pvd()` at the end emits the .pvd
-collection. Both writers see the same `t` sequence so the two
+collection. The directory is created by the first writer. Both writers see the same `t` sequence so the two
 collections are time-synchronised.
 
 ## What you'll see
@@ -136,9 +182,10 @@ shows where the kinetic energy sits at each phase.
 * **Larger amplitude**: bump $\delta$ to 0.1. The wave becomes
   weakly nonlinear; harmonics appear in ∫E_x². Beyond ~0.3 the
   fluid pressure floor activates and the wave breaks.
-* **Pair plasma**: see [Roadmap](../contributing/index.md#roadmap)
-  — pair plasma in 2D needs the three-state `SSPRK3_Plasma_2D`
-  stepper with antisymmetric perturbations on the two species.
+* **Pair plasma**: two mobile species need the three-state
+  `SSPRK3_Plasma[NDIM, P]` stepper with antisymmetric perturbations on
+  the two species; `tests/test_langmuir_pair_plasma_2d.mojo` is a
+  working setup.
 
 ## Related
 
@@ -146,5 +193,5 @@ shows where the kinetic energy sits at each phase.
   regression-test version of this same setup.
 * [`tests/test_langmuir_pair_plasma_2d.mojo`](../physics/plasma.md)
   — the two-species variant ($\omega = \sqrt{2}\omega_{pe}$).
-* [`tests/test_pair_plasma_asym_scaling.mojo`](../physics/plasma.md)
+* [`tests/test_pair_plasma_asym_scaling_2d.mojo`](../physics/plasma.md)
   — diagnoses the O(δ²) antisymmetry residual in pair plasma.

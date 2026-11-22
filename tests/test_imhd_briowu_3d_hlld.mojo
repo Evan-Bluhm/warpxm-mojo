@@ -1,27 +1,17 @@
 # 3D Brio-Wu MHD shock tube with HLLD (Miyoshi-Kusano).
 # 1D physics extruded along y and z; passes through DG kernel with
-# `DGImhdSolver3D[P, USE_HLLD=True]`. Same checks as the Rusanov test:
+# `DGImhdSolver[3, P, USE_HLLD=True]`. Same checks as the Rusanov test:
 # conservation / flux balance, constant B_x, isentropic fast
 # rarefactions, continuity across the contact, contact sharpness.
 
+from std.collections import Array
 from std.math import isnan
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.adjusters.moe_rossmanith import MoeRossmanith3D
-from warpxm.apps.imhd import IMHD
-from warpxm.apps.imhd import (
-    MHD_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import BC_COPYOUT
-from warpxm.core.math_compat import fabs
-from warpxm.core.types import Real
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.spatial.dg_imhd_3d import DGImhdSolver3D
-from warpxm.temporal.ssprk3_3d import SSPRK3_3D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.prelude import *
+from warpxm.physics.imhd import *
 
 
 comptime P: Int = 2
@@ -31,82 +21,58 @@ comptime NZ: Int = 2
 comptime GAMMA: Real = 2.0
 comptime T_FINAL: Real = 0.1
 comptime DT: Real = 1.0e-4
+comptime State = DGState[3, P, MHD_NC]
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh3D[P](
+    var mesh = BlockMesh[3, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(0.1), Real(0.0), Real(0.1),
         nx=NX, ny=NY, nz=NZ,
         periodic_x=False, periodic_y=True, periodic_z=True,
         bc_left=BC_COPYOUT, bc_right=BC_COPYOUT,
     )
-    var q = DGState3D[P, MHD_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var nodes_per_elem = P1 * P1 * P1
-
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for k in range(NZ):
-        for j in range(NY):
-            for i in range(NX):
-                var xl = mesh.x_min + Real(i) * mesh.dx
-                var e = k * NX * NY + j * NX + i
-                for kn in range(P1):
-                    for jn in range(P1):
-                        for in_ in range(P1):
-                            var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                            var rho: Real
-                            var pp: Real
-                            var By: Real
-                            if x < Real(0.5):
-                                rho = 1.0; pp = 1.0; By = 1.0
-                            else:
-                                rho = 0.125; pp = 0.1; By = -1.0
-                            var Bx_v: Real = 0.75
-                            var bsq = Bx_v * Bx_v + By * By
-                            var E_tot = pp / (GAMMA - Real(1.0)) + Real(0.5) * bsq
-                            var n = kn * P1 * P1 + jn * P1 + in_
-                            var b = (e * nodes_per_elem + n) * MHD_NC
-                            host[b + IDX_RHO] = rho
-                            host[b + IDX_MX] = Real(0.0)
-                            host[b + IDX_MY] = Real(0.0)
-                            host[b + IDX_MZ] = Real(0.0)
-                            host[b + IDX_E] = E_tot
-                            host[b + IDX_BX] = Bx_v
-                            host[b + IDX_BY] = By
-                            host[b + IDX_BZ] = Real(0.0)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real, y: Real, z: Real) -> Array[Real, MHD_NC]:
+        var left = x < Real(0.5)
+        var rho: Real = 1.0 if left else 0.125
+        var pp: Real = 1.0 if left else 0.1
+        var by: Real = 1.0 if left else -1.0
+        var bx: Real = 0.75
+        var v = Array[Real, MHD_NC](fill=Real(0.0))
+        v[IDX_RHO] = rho
+        v[IDX_E] = pp / (GAMMA - Real(1.0)) + Real(0.5) * (bx * bx + by * by)
+        v[IDX_BX] = bx
+        v[IDX_BY] = by
+        return v^
+    mesh.fill(q, initial)
+    var int0_rho = mesh.integrate(q, IDX_RHO)
+    var int0_E = mesh.integrate(q, IDX_E)
+    var int0_By = mesh.integrate(q, IDX_BY)
 
     var app = IMHD(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )
-    var spatial = DGImhdSolver3D[P, USE_HLLD=True](app)
-    var stepper = SSPRK3_3D[P, MHD_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith3D[P, MHD_NC](ctx, mesh.num_elements)
+    var spatial = DGImhdSolver[3, P, USE_HLLD=True](app)
+    var stepper = SSPRK3[3, P, MHD_NC](ctx, mesh.num_elements)
+    var limiter = MoeRossmanith[3, P, MHD_NC](ctx, mesh.num_elements)
 
-
-    def compute_rhs(
-        mut q_in: DGState3D[P, MHD_NC],
-        mut q_out: DGState3D[P, MHD_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def adjust(mut q_: DGState3D[P, MHD_NC]) raises {mut limiter, imm}:
+    def adjust(mut q_: State) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
-    var t: Real = 0.0
-    while t < T_FINAL - Real(0.5) * DT:
-        var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, adjust)
-        t += dt_use
+    var t = stepper.run_until(
+        ctx, q, Real(0.0), T_FINAL, DT, compute_rhs, adjust,
+    )
     ctx.synchronize()
 
-    var mid_node = nodes_per_elem // 2
+    var mid_node = State.num_nodes_per_elem // 2
     var any_nan = False
     var max_y_drift: Real = 0.0
     var max_z_drift: Real = 0.0
@@ -114,7 +80,7 @@ def main() raises:
     with q.buf.map_to_host() as h:
         for i in range(NX):
             var e = 0 * NX * NY + 0 * NX + i
-            var b = (e * nodes_per_elem + mid_node) * MHD_NC
+            var b = State.index(e, mid_node, 0)
             var rho_v = h[b + IDX_RHO]
             if isnan(rho_v): any_nan = True
             rho_row[i] = rho_v
@@ -123,7 +89,7 @@ def main() raises:
                 if k == 0 and j == 0: continue
                 for i in range(NX):
                     var e = k * NX * NY + j * NX + i
-                    var b = (e * nodes_per_elem + mid_node) * MHD_NC
+                    var b = State.index(e, mid_node, 0)
                     var d = fabs(h[b + IDX_RHO] - rho_row[i])
                     if j != 0 and d > max_y_drift: max_y_drift = d
                     if k != 0 and d > max_z_drift: max_z_drift = d
@@ -146,17 +112,12 @@ def main() raises:
     # ---- Quantitative checks ------------------------------------------
     # All of these follow from the ideal-MHD equations for this Riemann
     # problem; none is a recorded "golden" number.
-    var weights = NodalBasis1D[P].weights()
     var area = Real(4 * NY * NZ) * mesh.jacobian_y * mesh.jacobian_z               # transverse cross-section
-    var jac = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
     var int_rho: Real = 0.0
     var int_mx: Real = 0.0
     var int_my: Real = 0.0
     var int_E: Real = 0.0
     var int_By: Real = 0.0
-    var int0_rho: Real = 0.0        # initial integrals, from the IC buffer
-    var int0_E: Real = 0.0
-    var int0_By: Real = 0.0
     var max_dBx: Real = 0.0
     var max_z: Real = 0.0           # |m_z| and |B_z| must stay 0
     var u_row = Array[Real, NX](fill=Real(0.0))
@@ -164,30 +125,23 @@ def main() raises:
     var by_row = Array[Real, NX](fill=Real(0.0))
     var s_row = Array[Real, NX](fill=Real(0.0))    # entropy p / ρ^γ, γ = 2
     var rho_x = Array[Real, NX](fill=Real(0.0))
+    def totals(
+        x: Real, y: Real, z: Real, w: Real, v: Array[Real, MHD_NC],
+    ) {mut int_rho, mut int_mx, mut int_my, mut int_E, mut int_By, mut max_dBx, mut max_z}:
+        int_rho += w * v[IDX_RHO]
+        int_mx += w * v[IDX_MX]
+        int_my += w * v[IDX_MY]
+        int_E += w * v[IDX_E]
+        int_By += w * v[IDX_BY]
+        var dbx = fabs(v[IDX_BX] - Real(0.75))
+        if dbx > max_dBx: max_dBx = dbx
+        if fabs(v[IDX_MZ]) > max_z: max_z = fabs(v[IDX_MZ])
+        if fabs(v[IDX_BZ]) > max_z: max_z = fabs(v[IDX_BZ])
+    mesh.visit_nodes(q, totals)
     with q.buf.map_to_host() as h:
-        for e in range(mesh.num_elements):
-            for n in range(nodes_per_elem):
-                var w = jac
-                var rem = n
-                for _d in range(3):
-                    w *= weights[rem % P1]
-                    rem = rem // P1
-                var b = (e * nodes_per_elem + n) * MHD_NC
-                int_rho += w * h[b + IDX_RHO]
-                int_mx += w * h[b + IDX_MX]
-                int_my += w * h[b + IDX_MY]
-                int_E += w * h[b + IDX_E]
-                int_By += w * h[b + IDX_BY]
-                int0_rho += w * host[b + IDX_RHO]
-                int0_E += w * host[b + IDX_E]
-                int0_By += w * host[b + IDX_BY]
-                var dbx = fabs(h[b + IDX_BX] - Real(0.75))
-                if dbx > max_dBx: max_dBx = dbx
-                if fabs(h[b + IDX_MZ]) > max_z: max_z = fabs(h[b + IDX_MZ])
-                if fabs(h[b + IDX_BZ]) > max_z: max_z = fabs(h[b + IDX_BZ])
         # x-profile of primitives at the element mid-nodes of the first row.
         for i in range(NX):
-            var b = (i * nodes_per_elem + nodes_per_elem // 2) * MHD_NC
+            var b = State.index(i, mid_node, 0)
             var r = h[b + IDX_RHO]
             var ke = Real(0.5) * (
                 h[b + IDX_MX] * h[b + IDX_MX] + h[b + IDX_MY] * h[b + IDX_MY]

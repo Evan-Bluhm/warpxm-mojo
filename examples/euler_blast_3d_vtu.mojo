@@ -2,37 +2,25 @@
 #
 # A Gaussian pressure pulse at the center of a triply-periodic box drives
 # a spherical shock wave outward. Demonstrates the 3D pipeline end-to-end:
-#   * BlockMesh3D (periodic 3-axis)
+#   * BlockMesh[3, P] (periodic 3-axis)
 #   * Euler with γ-law EOS
-#   * DGEulerSolver3D + MoeRossmanith3D[P, EULER_NC] for shock capturing
-#   * SSPRK3_Euler_Limited_3D for time integration
-#   * FrameWriter + dump_euler_3d_frame for ParaView animation
+#   * DGEulerSolver[3, P] + MoeRossmanith[3, P, EULER_NC] for shock capturing
+#   * SSPRK3 with a CFL-driven time step (`run_until_cfl`)
+#   * FrameWriter + dump_euler_frame for ParaView animation
 #
 # Per frame the driver prints (∫ρ dV, ∫E dV, max ρ, min ρ) so the user
 # can watch conservation hold and the rarefaction at the centre grow.
 #
-# Build / run:
-#     mkdir -p /tmp/euler_blast_3d
-#     pixi run mojo run -I src examples/euler_blast_3d_vtu.mojo
-#     # Then open /tmp/euler_blast_3d/blast.pvd in ParaView.
+#     pixi run example euler_blast_3d_vtu
+#     # then open output/euler_blast_3d/blast.pvd in ParaView
 
+from std.collections import Array
 from std.math import exp
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 
-from warpxm.adjusters.moe_rossmanith import MoeRossmanith3D
-from warpxm.apps.euler import (
-    EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
-)
-from warpxm.apps.euler import Euler
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real
-from warpxm.driver.frame_writer import FrameWriter
-from warpxm.driver.vtu_3d import dump_euler_3d_frame
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.spatial.dg_euler_3d import DGEulerSolver3D
-from warpxm.temporal.ssprk3_3d import SSPRK3_3D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
 
 
 comptime P: Int = 2
@@ -44,112 +32,70 @@ comptime SIGMA: Real = 0.1
 comptime P_AMB: Real = 1.0
 comptime DELTA_P: Real = 5.0
 comptime T_FINAL: Real = 0.15
-comptime DT: Real = 5.0e-4
 comptime NUM_FRAMES: Int = 8
-comptime OUTPUT_DIR: String = "/tmp/euler_blast_3d"
-comptime BASENAME: String = "blast"
+comptime State = DGState[3, P, EULER_NC]
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh3D[P](
+    var mesh = BlockMesh[3, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, nz=NZ,
     )
-    var q = DGState3D[P, EULER_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1 * P1
-
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for k in range(NZ):
-        var zl = mesh.z_min + Real(k) * mesh.dz
-        for j in range(NY):
-            var yl = mesh.y_min + Real(j) * mesh.dy
-            for i in range(NX):
-                var xl = mesh.x_min + Real(i) * mesh.dx
-                var e = k * NX * NY + j * NX + i
-                for kn in range(P1):
-                    var z = zl + (Real(1.0) + ref_nodes[kn]) * mesh.jacobian_z
-                    for jn in range(P1):
-                        var y = yl + (Real(1.0) + ref_nodes[jn]) * mesh.jacobian_y
-                        for in_ in range(P1):
-                            var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                            var r2 = (x - Real(0.5)) * (x - Real(0.5))
-                            r2 += (y - Real(0.5)) * (y - Real(0.5))
-                            r2 += (z - Real(0.5)) * (z - Real(0.5))
-                            var pp = P_AMB + DELTA_P * exp(-r2 / (SIGMA * SIGMA))
-                            var n = kn * P1 * P1 + jn * P1 + in_
-                            var b = (e * nodes_per_elem + n) * EULER_NC
-                            host[b + IDX_RHO] = Real(1.0)
-                            host[b + IDX_MX] = Real(0.0)
-                            host[b + IDX_MY] = Real(0.0)
-                            host[b + IDX_MZ] = Real(0.0)
-                            host[b + IDX_E] = pp / (GAMMA - Real(1.0))
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real, y: Real, z: Real) -> Array[Real, EULER_NC]:
+        var r2 = (
+            (x - Real(0.5)) * (x - Real(0.5)) + (y - Real(0.5)) * (y - Real(0.5))
+            + (z - Real(0.5)) * (z - Real(0.5))
+        )
+        var pp = P_AMB + DELTA_P * exp(-r2 / (SIGMA * SIGMA))
+        return [Real(1.0), Real(0.0), Real(0.0), Real(0.0), pp / (GAMMA - Real(1.0))]
+    mesh.fill(q, initial)
 
     var app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )
-    var spatial = DGEulerSolver3D[P](app)
-    var stepper = SSPRK3_3D[P, EULER_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith3D[P, EULER_NC](ctx, mesh.num_elements)
-    var fw = FrameWriter(BASENAME, OUTPUT_DIR)
+    var spatial = DGEulerSolver[3, P](app)
+    var stepper = SSPRK3[3, P, EULER_NC](ctx, mesh.num_elements)
+    var limiter = MoeRossmanith[3, P, EULER_NC](ctx, mesh.num_elements)
+    var fw = FrameWriter("blast", "output/euler_blast_3d")
 
-    var jv = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
-    var frame_dt = T_FINAL / Real(NUM_FRAMES - 1)
-
-    print("frame    time          ∫ρ dV            ∫E dV            min ρ      max ρ")
-    print("-----  ------------  ----------------  ----------------  ---------  ---------")
-
-
-    def compute_rhs(
-        mut q_in: DGState3D[P, EULER_NC],
-        mut q_out: DGState3D[P, EULER_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def adjust(mut q_: DGState3D[P, EULER_NC]) raises {mut limiter, imm}:
+    def adjust(mut q_: State) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
+
+    def suggest_dt(mut q_: State) raises {imm} -> Real:
+        return spatial.suggest_dt(ctx, mesh, q_)
+
+    print("frame   time   ∫ρ dV   ∫E dV   min ρ   max ρ   CFL dt")
 
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
-        ctx.synchronize()
-        dump_euler_3d_frame[P](fw.next_path(t), ctx, mesh, q, GAMMA)
-        var mass: Real = 0.0
-        var energy: Real = 0.0
+        dump_euler_frame(fw.next_path(t), mesh, q, GAMMA)
         var min_rho: Real = 1.0e30
         var max_rho: Real = 0.0
-        with q.buf.map_to_host() as h:
-            for k in range(NZ):
-                for j in range(NY):
-                    for i in range(NX):
-                        var e = k * NX * NY + j * NX + i
-                        for kn in range(P1):
-                            for jn in range(P1):
-                                for in_ in range(P1):
-                                    var n = kn * P1 * P1 + jn * P1 + in_
-                                    var b = (e * nodes_per_elem + n) * EULER_NC
-                                    var jw = jv * weights[in_] * weights[jn] * weights[kn]
-                                    var rho = h[b + IDX_RHO]
-                                    mass += jw * rho
-                                    energy += jw * h[b + IDX_E]
-                                    if rho < min_rho: min_rho = rho
-                                    if rho > max_rho: max_rho = rho
-        print(frame, " ", t, " ", mass, " ", energy, " ", min_rho, " ", max_rho)
+        def extrema(
+            x: Real, y: Real, z: Real, w: Real, v: Array[Real, EULER_NC],
+        ) {mut min_rho, mut max_rho}:
+            min_rho = fmin(min_rho, v[IDX_RHO])
+            max_rho = fmax(max_rho, v[IDX_RHO])
+        mesh.visit_nodes(q, extrema)
+        print(
+            frame, t, mesh.integrate(q, IDX_RHO), mesh.integrate(q, IDX_E),
+            min_rho, max_rho, suggest_dt(q),
+        )
 
         if frame < NUM_FRAMES - 1:
-            var t_target = Real(frame + 1) * frame_dt
-            while t < t_target - Real(0.5) * DT:
-                var dt_use = DT if (t + DT) < t_target else (t_target - t)
-                stepper.step(ctx, q, dt_use, compute_rhs, adjust)
-                t += dt_use
+            t = stepper.run_until_cfl(
+                ctx, q, t, T_FINAL * Real(frame + 1) / Real(NUM_FRAMES - 1),
+                compute_rhs, adjust, suggest_dt, dt_interval=5,
+            )
 
     fw.write_pvd()
-    print("")
-    print("Wrote", NUM_FRAMES, "frames + PVD collection at", OUTPUT_DIR)
+    print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/blast.pvd")

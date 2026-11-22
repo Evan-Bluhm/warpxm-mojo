@@ -16,33 +16,22 @@
 # (`langmuir_maxwell_NNNN.vtu`). Both share the same time stamps so
 # ParaView can play them in sync.
 #
-# Build / run:
-#   mkdir -p /tmp/langmuir
-#   pixi run mojo run -I src examples/langmuir_2d_vtu.mojo
-#   # Then open /tmp/langmuir/langmuir_*.pvd in ParaView.
+# Time step: fixed for the run. The coupled (fluid, Maxwell) stepper has no
+# CFL-driven variant, and here nothing changes the limit anyway: light
+# (c = 1) is far faster than the cold electron fluid, so the Maxwell CFL
+# step bounds the hyperbolic part, and it also resolves the plasma
+# frequency that the source terms introduce (ω_pe · dt ≈ 1e-3).
+#
+#     pixi run example langmuir_2d_vtu
+#     # then open output/langmuir/langmuir_*.pvd in ParaView
 
+from std.collections import Array
 from std.math import cos, sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 
-from warpxm.apps.euler import (
-    Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
-)
-from warpxm.apps.maxwell import (
-    Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, TWO_PI
-from warpxm.driver.frame_writer import FrameWriter
-from warpxm.driver.vtu_2d import dump_euler_2d_frame
-from warpxm.driver.vtu_maxwell_2d import dump_maxwell_2d_frame
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
-from warpxm.spatial.dg_maxwell_2d import DGMaxwellSolver2D
-from warpxm.spatial.lorentz_source_2d import apply_lorentz_source_2d
-from warpxm.spatial.maxwell_current_source_2d import apply_current_source_2d
-from warpxm.temporal.ssprk3_twofluid_2d import SSPRK3_TwoFluid_2D
-from warpxm.variable.state_2d import DGState2D
+from warpxm.prelude import *
+from warpxm.physics.plasma import *
 
 
 comptime P: Int = 2
@@ -54,110 +43,44 @@ comptime EPS0: Real = 1.0
 comptime DELTA: Real = 0.01
 comptime P0: Real = 1.0e-4
 comptime NUM_PERIODS: Real = 2.0           # number of Langmuir periods to integrate
-comptime DT: Real = 1.0e-3
 comptime NUM_FRAMES: Int = 13              # frames 0 .. 12 — covers two periods
-comptime OUTPUT_DIR: String = "/tmp/langmuir"
-
-
-def _integrate_field[F: Int, NC: Int](
-    var ctx: DeviceContext,
-    mut q: DGState2D[P, NC],
-    mesh: BlockMesh2D[P],
-) raises -> Real:
-    var P1 = NodalBasis1D[P].num_nodes
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1
-    var ja = mesh.jacobian_x * mesh.jacobian_y
-    var s: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for j in range(NY):
-            for i in range(NX):
-                var e = j * NX + i
-                for jn in range(P1):
-                    for in_ in range(P1):
-                        var n = jn * P1 + in_
-                        var b = (e * nodes_per_elem + n) * NC
-                        s += ja * weights[in_] * weights[jn] * h[b + F]
-    return s
-
-
-def _integrate_squared_field[F: Int, NC: Int](
-    var ctx: DeviceContext,
-    mut q: DGState2D[P, NC],
-    mesh: BlockMesh2D[P],
-) raises -> Real:
-    var P1 = NodalBasis1D[P].num_nodes
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1
-    var ja = mesh.jacobian_x * mesh.jacobian_y
-    var s: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for j in range(NY):
-            for i in range(NX):
-                var e = j * NX + i
-                for jn in range(P1):
-                    for in_ in range(P1):
-                        var n = jn * P1 + in_
-                        var b = (e * nodes_per_elem + n) * NC
-                        var v = h[b + F]
-                        s += ja * weights[in_] * weights[jn] * v * v
-    return s
+comptime OUTPUT_DIR: String = "output/langmuir"
+comptime Fluid = DGState[2, P, EULER_NC]
+comptime Field = DGState[2, P, MAXWELL_NC]
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh2D[P](
+    var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0 / 8.0),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q_fluid = DGState2D[P, EULER_NC](ctx, mesh.num_elements)
-    var q_maxwell = DGState2D[P, MAXWELL_NC](ctx, mesh.num_elements)
+    var q_fluid = Fluid(ctx, mesh.num_elements)
+    var q_maxwell = Field(ctx, mesh.num_elements)
 
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var nodes_per_elem = P1 * P1
-    var k_wave = TWO_PI
+    def fluid_initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
+        return [
+            Real(1.0) + DELTA * sin(TWO_PI * x), Real(0.0), Real(0.0), Real(0.0),
+            P0 / (GAMMA - Real(1.0)),
+        ]
 
-    var fh = ctx.enqueue_create_host_buffer[Real.dtype](q_fluid.buf_len)
-    var mh = ctx.enqueue_create_host_buffer[Real.dtype](q_maxwell.buf_len)
-    for j in range(NY):
-        for i in range(NX):
-            var xl = mesh.x_min + Real(i) * mesh.dx
-            var e = j * NX + i
-            for jn in range(P1):
-                for in_ in range(P1):
-                    var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                    var s = sin(k_wave * x)
-                    var c_v = cos(k_wave * x)
-                    var n = jn * P1 + in_
-
-                    var fb = (e * nodes_per_elem + n) * EULER_NC
-                    fh[fb + IDX_RHO] = Real(1.0) + DELTA * s
-                    fh[fb + IDX_MX] = Real(0.0)
-                    fh[fb + IDX_MY] = Real(0.0)
-                    fh[fb + IDX_MZ] = Real(0.0)
-                    fh[fb + IDX_E] = P0 / (GAMMA - Real(1.0))
-
-                    var mb = (e * nodes_per_elem + n) * MAXWELL_NC
-                    mh[mb + IDX_EX] = (DELTA / (k_wave * EPS0)) * c_v
-                    mh[mb + IDX_EY] = Real(0.0)
-                    mh[mb + IDX_EZ] = Real(0.0)
-                    mh[mb + IDX_BX] = Real(0.0)
-                    mh[mb + IDX_BY] = Real(0.0)
-                    mh[mb + IDX_BZ] = Real(0.0)
-    ctx.enqueue_copy(dst_buf=q_fluid.buf, src_buf=fh)
-    ctx.enqueue_copy(dst_buf=q_maxwell.buf, src_buf=mh)
+    def field_initial(x: Real, y: Real) -> Array[Real, MAXWELL_NC]:
+        var v = Array[Real, MAXWELL_NC](fill=Real(0.0))
+        v[IDX_EX] = (DELTA / (TWO_PI * EPS0)) * cos(TWO_PI * x)
+        return v^
+    mesh.fill(q_fluid, fluid_initial)
+    mesh.fill(q_maxwell, field_initial)
 
     var fluid_app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-15), cfl_max=Real(0.5),
     )
     var maxwell_app = Maxwell(c_light=Real(1.0), cfl_max=Real(0.5))
-    var fluid_spatial = DGEulerSolver2D[P](fluid_app)
-    var maxwell_spatial = DGMaxwellSolver2D[P](maxwell_app)
-    var stepper = SSPRK3_TwoFluid_2D[P](ctx, mesh.num_elements)
+    var fluid_spatial = DGEulerSolver[2, P](fluid_app)
+    var maxwell_spatial = DGMaxwellSolver[2, P](maxwell_app)
+    var stepper = SSPRK3_TwoFluid[2, P](ctx, mesh.num_elements)
 
     var fw_fluid = FrameWriter("langmuir_fluid", OUTPUT_DIR)
     var fw_maxwell = FrameWriter("langmuir_maxwell", OUTPUT_DIR)
@@ -165,43 +88,44 @@ def main() raises:
     var omega_p: Real = 1.0       # √(α²·n_0/ε_0) = 1
     var T = TWO_PI / omega_p      # Langmuir period ≈ 6.283
     var t_final = NUM_PERIODS * T
-
-    var mass_0 = _integrate_field[IDX_RHO, EULER_NC](ctx, q_fluid, mesh)
-    print("2D Langmuir oscillation, ω_pe =", omega_p, ", T =", T)
-    print("time         ∫ρ_e dV          ∫E_x² dV         rel Δmass")
-    print("-----------  ---------------  ---------------  ------------")
+    var dt = fmin(
+        maxwell_spatial.suggest_dt(mesh),
+        fluid_spatial.suggest_dt(ctx, mesh, q_fluid),
+    )
 
     def compute_joint_rhs(
-        mut qf_in: DGState2D[P, EULER_NC],
-        mut qm_in: DGState2D[P, MAXWELL_NC],
-        mut qf_out: DGState2D[P, EULER_NC],
-        mut qm_out: DGState2D[P, MAXWELL_NC],
+        mut qf_in: Fluid, mut qm_in: Field, mut qf_out: Fluid, mut qm_out: Field,
     ) raises {imm}:
         fluid_spatial.compute_rhs(ctx, mesh, qf_in, qf_out)
         maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
-        apply_lorentz_source_2d[P](ctx, qf_in, qm_in, qf_out, ALPHA)
-        apply_current_source_2d[P](ctx, qf_in, qm_out, ALPHA, EPS0)
+        apply_lorentz_source(ctx, qf_in, qm_in, qf_out, ALPHA)
+        apply_current_source(ctx, qf_in, qm_out, ALPHA, EPS0)
 
-    var frame_dt = t_final / Real(NUM_FRAMES - 1)
+    def ex_squared(v: Array[Real, MAXWELL_NC]) -> Real:
+        return v[IDX_EX] * v[IDX_EX]
+
+    var mass_0 = mesh.integrate(q_fluid, IDX_RHO)
+    print("2D Langmuir oscillation, ω_pe =", omega_p, ", T =", T, ", dt =", dt)
+    print("time   ∫ρ_e dV   ∫E_x² dV   rel Δmass")
+
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
-        ctx.synchronize()
-        dump_euler_2d_frame[P](fw_fluid.next_path(t), ctx, mesh, q_fluid, GAMMA)
-        dump_maxwell_2d_frame[P](fw_maxwell.next_path(t), ctx, mesh, q_maxwell)
-        var mass = _integrate_field[IDX_RHO, EULER_NC](ctx, q_fluid, mesh)
-        var ex2 = _integrate_squared_field[IDX_EX, MAXWELL_NC](ctx, q_maxwell, mesh)
-        var dm = (mass - mass_0) / mass_0
-        print(t, " ", mass, " ", ex2, " ", dm)
+        dump_euler_frame(fw_fluid.next_path(t), mesh, q_fluid, GAMMA)
+        dump_maxwell_frame(fw_maxwell.next_path(t), mesh, q_maxwell)
+        var mass = mesh.integrate(q_fluid, IDX_RHO)
+        print(
+            t, mass, mesh.integrate_fn(q_maxwell, ex_squared),
+            (mass - mass_0) / mass_0,
+        )
 
         if frame < NUM_FRAMES - 1:
-            var t_target = Real(frame + 1) * frame_dt
-            while t < t_target - Real(0.5) * DT:
-                var dt_use = DT if (t + DT) < t_target else (t_target - t)
-                stepper.step(ctx, q_fluid, q_maxwell, dt_use, compute_joint_rhs)
-                t += dt_use
+            t = stepper.run_until(
+                ctx, q_fluid, q_maxwell,
+                t, t_final * Real(frame + 1) / Real(NUM_FRAMES - 1), dt,
+                compute_joint_rhs,
+            )
 
     fw_fluid.write_pvd()
     fw_maxwell.write_pvd()
-    print("")
     print("Wrote", NUM_FRAMES, "fluid +", NUM_FRAMES, "Maxwell frames at", OUTPUT_DIR)
     print("Open langmuir_fluid.pvd or langmuir_maxwell.pvd in ParaView.")

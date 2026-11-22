@@ -64,13 +64,20 @@ def numerical_flux_static(
     nx: Real, ny: Real, nz: Real,
     gamma: Real, rho_min: Real, press_min: Real,
 ) -> Array[Real, MHD_NC]:
-    ...
-    var c_max = fmax(fabs(u_n_l) + c_f_l, fabs(u_n_r) + c_f_r)
-    ...
+    var fs_l = _normal_flux_and_speed(q_l, nx, ny, nz, gamma, rho_min, press_min)
+    var fs_r = _normal_flux_and_speed(q_r, nx, ny, nz, gamma, rho_min, press_min)
+    var c_max = fmax(fs_l[MHD_NC], fs_r[MHD_NC])
+
+    var f: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
     comptime for c in range(MHD_NC):
-        f[c] = Real(0.5) * (f_n_l + f_n_r) - Real(0.5) * c_max * (q_r[c] - q_l[c])
-    return f
+        f[c] = Real(0.5) * (fs_l[c] + fs_r[c]) - Real(0.5) * c_max * (q_r[c] - q_l[c])
+    return f^
 ```
+
+`_normal_flux_and_speed` returns $\mathbf{F}\cdot\hat{n}$ in slots
+`0..NC-1` and the signal speed $|u_n| + c_f$ in slot `NC`. It forms the
+normal flux directly, one evaluation per side, instead of building the
+three axis fluxes and dotting them with the normal.
 
 1D callers pass `(±1, 0, 0)` for the normal; 2D callers pass `(nx, ny, 0)`.
 The unused lanes multiply by zero and the compiler folds them away.

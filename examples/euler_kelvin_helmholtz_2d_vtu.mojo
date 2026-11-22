@@ -20,26 +20,20 @@
 #
 # Multi-frame VTU output. Watch vortices form by frame 4-6.
 #
-# Build / run:
-#   mkdir -p /tmp/kh
-#   pixi run mojo run -I src examples/euler_kelvin_helmholtz_2d_vtu.mojo
+# The time step follows the CFL condition. The flow is subsonic and smooth
+# until the billows roll up, so `cfl_max = 1` is used rather than the 0.5
+# kept for strong shocks.
+#
+#     pixi run example euler_kelvin_helmholtz_2d_vtu
+#     # then open output/kh/kh.pvd in ParaView
 
+from std.collections import Array
 from std.math import exp, tanh, sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 
-from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
-from warpxm.apps.euler import (
-    Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, TWO_PI
-from warpxm.driver.frame_writer import FrameWriter
-from warpxm.driver.vtu_2d import dump_euler_2d_frame
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
-from warpxm.temporal.ssprk3_2d import SSPRK3_2D
-from warpxm.variable.state_2d import DGState2D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
 
 
 comptime P: Int = 2
@@ -54,10 +48,8 @@ comptime PRESSURE: Real = 2.5
 comptime SIGMA: Real = 0.025          # tanh / Gaussian width
 comptime DELTA_V: Real = 0.01         # v-perturbation amplitude
 comptime T_FINAL: Real = 2.0
-comptime DT: Real = 1.0e-3
 comptime NUM_FRAMES: Int = 11         # frames 0 .. 10 inclusive
-comptime OUTPUT_DIR: String = "/tmp/kh"
-comptime BASENAME: String = "kh"
+comptime State = DGState[2, P, EULER_NC]
 
 
 @always_inline
@@ -67,112 +59,68 @@ def _shape(y: Real) -> Real:
                         - tanh((y - Real(0.75)) / SIGMA))
 
 
-def _integrate_field[F: Int](
-    var ctx: DeviceContext,
-    mut q: DGState2D[P, EULER_NC],
-    mesh: BlockMesh2D[P],
-) raises -> Real:
-    var P1 = NodalBasis1D[P].num_nodes
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1
-    var ja = mesh.jacobian_x * mesh.jacobian_y
-    var s: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for j in range(NY):
-            for i in range(NX):
-                var e = j * NX + i
-                for jn in range(P1):
-                    for in_ in range(P1):
-                        var n = jn * P1 + in_
-                        var b = (e * nodes_per_elem + n) * EULER_NC
-                        s += ja * weights[in_] * weights[jn] * h[b + F]
-    return s
-
-
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh2D[P](
+    var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q = DGState2D[P, EULER_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var nodes_per_elem = P1 * P1
-
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for j in range(NY):
-        var yl = mesh.y_min + Real(j) * mesh.dy
-        for i in range(NX):
-            var xl = mesh.x_min + Real(i) * mesh.dx
-            var e = j * NX + i
-            for jn in range(P1):
-                var y = yl + (Real(1.0) + ref_nodes[jn]) * mesh.jacobian_y
-                for in_ in range(P1):
-                    var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                    var S = _shape(y)
-                    var rho = RHO_OUTER + (RHO_INNER - RHO_OUTER) * S
-                    var ux = U_OUTER + (U_INNER - U_OUTER) * S
-                    # v-perturbation localised near the two interfaces.
-                    var bump1 = exp(-(y - Real(0.25)) * (y - Real(0.25)) / (SIGMA * SIGMA))
-                    var bump2 = exp(-(y - Real(0.75)) * (y - Real(0.75)) / (SIGMA * SIGMA))
-                    var uy = DELTA_V * sin(Real(2.0) * TWO_PI * x) * (bump1 + bump2)
-                    var ke = Real(0.5) * rho * (ux * ux + uy * uy)
-                    var E_tot = PRESSURE / (GAMMA - Real(1.0)) + ke
-                    var n = jn * P1 + in_
-                    var b = (e * nodes_per_elem + n) * EULER_NC
-                    host[b + IDX_RHO] = rho
-                    host[b + IDX_MX] = rho * ux
-                    host[b + IDX_MY] = rho * uy
-                    host[b + IDX_MZ] = Real(0.0)
-                    host[b + IDX_E] = E_tot
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
+        var S = _shape(y)
+        var rho = RHO_OUTER + (RHO_INNER - RHO_OUTER) * S
+        var ux = U_OUTER + (U_INNER - U_OUTER) * S
+        # v-perturbation localised near the two interfaces.
+        var bump1 = exp(-(y - Real(0.25)) * (y - Real(0.25)) / (SIGMA * SIGMA))
+        var bump2 = exp(-(y - Real(0.75)) * (y - Real(0.75)) / (SIGMA * SIGMA))
+        var uy = DELTA_V * sin(Real(2.0) * TWO_PI * x) * (bump1 + bump2)
+        var ke = Real(0.5) * rho * (ux * ux + uy * uy)
+        return [
+            rho, rho * ux, rho * uy, Real(0.0),
+            PRESSURE / (GAMMA - Real(1.0)) + ke,
+        ]
+    mesh.fill(q, initial)
 
     var app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
-        min_pressure=Real(1e-12), cfl_max=Real(0.5),
+        min_pressure=Real(1e-12), cfl_max=Real(1.0),
     )
-    var spatial = DGEulerSolver2D[P](app)
-    var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)
-    var fw = FrameWriter(BASENAME, OUTPUT_DIR)
+    var spatial = DGEulerSolver[2, P](app)
+    var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements)
+    var limiter = MoeRossmanith[2, P, EULER_NC](ctx, mesh.num_elements)
+    var fw = FrameWriter("kh")
 
-    var mass_0 = _integrate_field[IDX_RHO](ctx, q, mesh)
-    var e_0 = _integrate_field[IDX_E](ctx, q, mesh)
-    print("Kelvin-Helmholtz instability, P=", P, ", N=", NX, "x", NY)
-    print("time         ∫ρ dV            ∫E dV            rel Δmass     rel ΔE")
-    print("-----------  ---------------  ---------------  ------------  ------------")
-
-    def compute_rhs(
-        mut q_in: DGState2D[P, EULER_NC],
-        mut q_out: DGState2D[P, EULER_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, imm}:
+    def adjust(mut q_: State) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
-    var frame_dt = T_FINAL / Real(NUM_FRAMES - 1)
+    def suggest_dt(mut q_: State) raises {imm} -> Real:
+        return spatial.suggest_dt(ctx, mesh, q_)
+
+    var mass_0 = mesh.integrate(q, IDX_RHO)
+    var e_0 = mesh.integrate(q, IDX_E)
+    print("Kelvin-Helmholtz instability, P=", P, ", N=", NX, "x", NY)
+    print("time   ∫ρ dV   ∫E dV   rel Δmass   rel ΔE   CFL dt")
+
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
-        ctx.synchronize()
-        dump_euler_2d_frame[P](fw.next_path(t), ctx, mesh, q, GAMMA)
-        var mass = _integrate_field[IDX_RHO](ctx, q, mesh)
-        var e_tot = _integrate_field[IDX_E](ctx, q, mesh)
-        var dm = (mass - mass_0) / mass_0
-        var dE = (e_tot - e_0) / e_0
-        print(t, " ", mass, " ", e_tot, " ", dm, " ", dE)
-
+        dump_euler_frame(fw.next_path(t), mesh, q, GAMMA)
+        var mass = mesh.integrate(q, IDX_RHO)
+        var e_tot = mesh.integrate(q, IDX_E)
+        print(
+            t, mass, e_tot, (mass - mass_0) / mass_0, (e_tot - e_0) / e_0,
+            suggest_dt(q),
+        )
         if frame < NUM_FRAMES - 1:
-            var t_target = Real(frame + 1) * frame_dt
-            while t < t_target - Real(0.5) * DT:
-                var dt_use = DT if (t + DT) < t_target else (t_target - t)
-                stepper.step(ctx, q, dt_use, compute_rhs, adjust)
-                t += dt_use
+            t = stepper.run_until_cfl(
+                ctx, q, t, T_FINAL * Real(frame + 1) / Real(NUM_FRAMES - 1),
+                compute_rhs, adjust, suggest_dt, dt_interval=10,
+            )
 
     fw.write_pvd()
-    print("")
-    print("Wrote", NUM_FRAMES, "frames + PVD collection at", OUTPUT_DIR)
+    print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/kh.pvd")

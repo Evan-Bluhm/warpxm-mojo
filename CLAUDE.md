@@ -20,30 +20,45 @@ reference C++ codebase lives at `~/GitHub/warpxm`.
 
 ```
 src/warpxm/
+  prelude.mojo # Re-exports everything not tied to one physics (Real, BC kinds,
+               # meshes, DGState, steppers, FrameWriter, write_vtu).
+  physics/     # One re-export module per physics (advection, euler, maxwell,
+               # imhd, imhd_glm, plasma, vlasov): app, index constants,
+               # solvers, adjusters, sources, VTU preset. A driver needs
+               # `from warpxm.prelude import *` and one of these.
   apps/        # One file per physics: advection, euler, maxwell, imhd,
-               # imhd_glm. Each exposes axis-parametric fluxes and a
-               # 3-component-normal numerical flux; the DG launcher owns
-               # dimensionality. See "Apps architecture" below.
-  adjusters/   # Moe-Rossmanith slope limiter (1D / 2D / 3D) and Zhang-Shu
-               # positivity preservers (Euler 1D/2D/3D, MHD 2D/3D).
+               # imhd_glm, vlasovmaxwell. Each exposes axis-parametric fluxes,
+               # a 3-component-normal numerical flux and a signal-speed bound;
+               # the DG launcher owns dimensionality. See "Apps architecture".
+  adjusters/   # MoeRossmanith[NDIM, P, NC] slope limiter and Zhang-Shu
+               # positivity preservers (PositivityEuler[NDIM, P],
+               # PositivityMHD[NDIM, P, NC]).
   basis/       # GLL nodal basis (P = 1..4)
-  core/        # real-type alias, math helpers, BC enum
-  driver/      # VTU writers (Euler 2D/3D, MHD 2D/3D, Maxwell 2D/3D) + FrameWriter for time series
-  mesh/        # BlockMesh{1,2,3}D with periodic + per-side BC catalog
-  spatial/     # dg_core_{1,2,3}d.mojo: shared DG cores. Per-physics dg_<phys>_<N>d.mojo
-               # wrappers supply flux/BC closures. Plus source kernels (gravity, Lorentz,
-               # current, GLM damping).
-  temporal/    # ssprk3_{1,2,3}d.mojo: one generic SSPRK3 stepper per dimension. Driver
-               # supplies compute_rhs and adjust closures. dormand_prince_{1,2,3}d.mojo
-               # for adaptive RK45. ssprk3_plasma_{1,2,3}d.mojo and
-               # ssprk3_twofluid_{1,2,3}d.mojo for two-species and single-fluid plasma
-               # (multi-state coupled steppers).
-  variable/    # DGState{1,2,3}D[P, NC] device buffers
+  core/        # real-type alias, math helpers, BC kinds
+  io/          # vtu.mojo: one generic appended-binary VTU writer (2D / 3D).
+               # vtu_presets.mojo: per-physics field lists. frame_writer.mojo:
+               # time series + .pvd.
+  mesh/        # block.mojo: BlockMesh[NDIM, P] (periodic + per-side BCs).
+               # phase_mesh_*.mojo: the phase meshes. Meshes own the
+               # host-side helpers: fill, visit_nodes, integrate,
+               # integrate_fn, l2_error.
+  spatial/     # dg_core.mojo: the DG core, generic over NDIM. dg_launch.mojo:
+               # the one host-side launcher. dg_<phys>.mojo: one wrapper per
+               # physics (flux closures + BC function + solver struct, e.g.
+               # DGEulerSolver[NDIM, P]). wave_speed.mojo: CFL.
+    sources/   # Pointwise source kernels, generic over NDIM: gravity,
+               # Lorentz, Maxwell current, GLM damping.
+    kinetic/   # Vlasov phase-space DG, moments, BGK, current coupling.
+  temporal/    # ssprk3.mojo, dormand_prince.mojo: generic over NDIM.
+               # ssprk3_plasma.mojo / ssprk3_twofluid.mojo: coupled fluid +
+               # Maxwell. ssprk3_1d{1,2}v.mojo, ssprk3_vlasov_maxwell_*.mojo:
+               # kinetic. Every stepper has `step` and `run_until`.
+  testing/     # ExactRiemann, check_convergence (shared by tests).
+  variable/    # DGState[NDIM, P, NC]; PhaseState1D{1,2}V.
 examples/      # polished driver programs (one .mojo per physics setup)
-tests/         # 86 regression tests covering every (physics, dimension) combination
-scripts/       # tooling: gll_tables.py (GLL basis table generator),
-               # run_tests.sh (pixi `test` task), build_examples.sh
-               # (pixi `build` task).
+tests/         # regression tests, named test_<physics>_<problem>_<dim>.mojo
+scripts/       # gll_tables.py (GLL table generator), run_tests.sh (pixi
+               # `test`), build_examples.sh (`build`), run_example.sh (`example`).
 ```
 
 The subtree organisation mirrors upstream's `src/apps/`,
@@ -56,174 +71,64 @@ Mojo + helpers are pinned via pixi:
 
 ```fish
 pixi install
-pixi run mojo run -I src tests/test_dg_convergence_1d.mojo
-pixi run mojo run -I src examples/imhd_orszag_tang_2d_vtu.mojo
+pixi run test                    # whole suite in parallel, about a minute
+pixi run test euler 3d           # only tests whose name contains "euler" or "3d"
+pixi run test -t                 # also list the ten slowest tests
+pixi run build                   # type-check every example
+pixi run example imhd_orszag_tang_2d_vtu   # run one (output in ./output/<name>/)
+pixi run mojo run -I src tests/test_advection_convergence_1d.mojo
 ```
 
 `pixi run mojo run -I src <file>` is the canonical incantation: `-I src` adds
-the `warpxm` package to the module search path. Every test and example uses
-the same form.
+the `warpxm` package to the module search path.
 
-## Feature matrix
+## Where the rest lives
 
-All cells with a check have an end-to-end regression test passing on the GPU.
+This file holds what you need while editing code: layout, style and
+performance rules, and the architecture conventions. Everything descriptive
+is in `docs/` and is not repeated here:
 
-|                            |  1D | 2D  | 3D  |
-| -------------------------- | :-: | :-: | :-: |
-| Advection                  | ✅  | ✅  | ✅  |
-| 5-moment Euler             | ✅  | ✅  | ✅  |
-| Maxwell                    | ✅  | ✅  | ✅  |
-| Single-fluid plasma        | ✅  | ✅  | ✅  |
-| Two-species plasma         | ✅  | ✅  | ✅  |
-| Ideal MHD                  | —   | ✅  | ✅  |
-| MHD + Dedner GLM cleaning  | —   | ✅  | ✅  |
-| Moe-Rossmanith limiter     | ✅  | ✅  | ✅  |
-| ParaView VTU + .pvd output | —   | ✅  | ✅  |
-| Non-periodic BCs           | ✅  | ✅  | ✅  |
+- `docs/features.md`: feature matrix (fluid and kinetic), BCs, capability
+  notes (limiter tolerance, DP45, HLLD), open work.
+- `docs/validation.md`: quantitative results of the regression suite.
+- `docs/api/`: per-package reference. `docs/tutorials/`: worked drivers.
+- `bench/BASELINE.md`: benchmark history and the `ncu` profiling notes
+  behind the kernel performance rules.
 
-Supporting infrastructure:
+## Driver conventions
 
-- **BCs**: `BC_PERIODIC` (implicit), `BC_COPYOUT`, `BC_WALL_FREESLIP`,
-  `BC_PEC_WALL` (Maxwell, ideal MHD 2D/3D), `BC_PMC_WALL` (Maxwell). GLM-MHD
-  treats every kind as copy-out; `BC_DIRICHLET` is a placeholder with no
-  implementation. Per-axis selection in
-  the mesh constructor.
-- **GLL polynomial orders**: P = 1, 2, 3, 4 tables; convergence rates of
-  P+1 verified for P=1, 2, 3 on the 1D advection convergence test.
-- **Time integration**: 3-stage Shu-Osher SSPRK3, device-resident, with
-  optional Moe-Rossmanith limiter inter-stage application.
-- **Sources**: gravity (Euler), Lorentz force (Maxwell → fluid), current
-  density (fluid → Maxwell), parabolic ψ damping (GLM-MHD). Reusable
-  generic-NC infrastructure.
+A driver (test or example) is a Mojo program. Write it against the helpers,
+not the buffer layout:
 
-## Notable validations
+```mojo
+from warpxm.prelude import *
+from warpxm.physics.euler import *
 
-| Test                            | Quantitative result                                     |
-| ------------------------------- | ------------------------------------------------------- |
-| 1D advection convergence        | observed rates 1.98 / 3.01 / 3.99 (theoretical P+1)     |
-| 2D advection convergence        | observed rates 1.90 / 3.03 / 4.00 (theoretical P+1)     |
-| 3D advection convergence        | observed rates 3.12 / 3.99 at P=2,3 (theoretical P+1)   |
-| 1D Maxwell plane-wave conv      | observed rates 1.98 / 3.01 / 4.00 (theoretical P+1)     |
-| 1D Euler entropy-wave conv      | observed rates 1.99 / 2.95 / 4.00 (theoretical P+1)     |
-| 2D MHD Alfvén-wave conv         | observed rates 1.98 / 2.99 / 4.00 (theoretical P+1)     |
-| 3D MHD Alfvén-wave conv         | observed rates 2.98 / 4.02 at P=2,3 (theoretical P+1)   |
-| 1D1V Vlasov free-streaming conv | observed rates 1.78 / 3.10 / 4.29 (theoretical P+1)     |
-| 1D2V Vlasov free-streaming conv | observed rates 1.97 / 3.00 / 3.99 (theoretical P+1)     |
-| 2D Euler hydrostatic balance    | \|v\| ~ 4e-16 after 50 steps (well-balanced source)     |
-| 2D Sod tube                     | analytic plateaus match to 3e-3                         |
-| 1D Langmuir (single-fluid)      | mass drift 2.73e-13, ρ at sample within 7e-6 of IC after period |
-| 1D pair-plasma Langmuir         | ρ values match 2D-extruded result to 14 sig figs; mass drift 1.9e-13 per species |
-| 2D pair-plasma Langmuir         | mass conserved per species to machine epsilon           |
-| Pair-plasma asym δ-scaling      | ratio 100.0 / 100.0 between δ ∈ {0.01, 0.001, 0.0001} — physical O(δ²) |
-| 2D Maxwell PEC cavity TM₁₁      | unexcited components stay at 0.0 exactly                |
-| 2D MHD Brio-Wu                  | flux balance of all conserved integrals to 2e-12; rarefactions isentropic to 3e-4 |
-| 2D Orszag-Tang (upstream WARPXM units) | mass drift 6e-14, ψ² bounded — domain [0, 2π]², ρ₀=γ², p₀=γ |
-| 2D Orszag-Tang (Athena units)   | ρ ∈ [0.047, 0.547] at t=0.3 (Athena ref), mass drift 8e-14, ψ² 6e-5 |
-| 3D Orszag-Tang (Athena, z-extruded) | z-drift 0.0 exactly; ρ + P + ψ² match 2D bit-for-bit, mass drift 1.7e-12 |
-| 2D GLM ψ-bump decay             | ~900× decay over 2 time units (45000× over 4)           |
-| 3D MHD blast                    | ∫B_x dV preserved to 4e-15 (Faraday's law)              |
-| 3D cyclotron orbit              | ΔE = 3e-13 (magnetic force does no work)                |
-| 1D Einfeldt 1-2-3 problem       | L1(ρ) 7.3e-3 vs exact; centre ρ 0.025 (exact 0.0219); flux balance 1e-14 |
-| 2D Einfeldt 1-2-3 problem       | y-extruded 1D; same L1(ρ) 7.3e-3; transverse momentum 4e-15; mass 1e-14 |
-| 3D Einfeldt 1-2-3 problem       | y/z-extruded; matches the 2D result to 12 digits        |
-| 2D strong MHD blast (ΔP=100)    | P_gas clamped to p_eps; mass / ∫B_x preserved 2e-13    |
-| 3D strong MHD blast (ΔP=100)    | P_gas clamped to p_eps; mass / ∫B_x preserved 2e-13    |
-| 2D Brio-Wu (HLLD)               | same flux-balance and isentropy checks as the Rusanov path |
-| 3D Brio-Wu (HLLD)               | exact y/z-extrusion (drifts 0), same checks as Rusanov  |
-| Adaptive DP45 (smooth advection)| 186 steps (vs ~2000 SSPRK3), L2 3.1e-7 at rtol 1e-5; error tracks tolerance |
-| Temporal order (1D Euler)       | SSPRK3 2.99, DP45 5.00 against a small-step reference  |
-| HLLD Alfvén-wave convergence    | rate 3.00 at P=2; x / y / z propagation agree to round-off |
-| MHD wall BCs (closed box)       | mass 6e-15; PEC conserves energy to 8e-15, free-slip does not |
-| Maxwell PMC cavity              | dual of the PEC cavity; identical errors in 1D/2D/3D   |
-| Sod / Lax shock tubes           | L1 vs exact Riemann solution 5e-3..1e-2; flux balance 1e-13 |
-| Euler positivity preserver      | cell means to 1e-15; worst node lands on the floor to 1e-12 |
-| Vlasov-Maxwell uniform oscillator | E and J match E0 cos t, −E0 sin t to 2e-6 each quarter period |
-| Vlasov-Maxwell Weibel growth    | fitted γ 0.36445 vs kinetic theory 0.36436             |
-| Vlasov-Maxwell Landau-damped EM wave | period within 5e-4, damping within 5e-3 of kinetic root |
-| Adaptive DP45 (2D entropy wave) | 200 steps for t=1, dt 5.3e-4..1e-2, ρ L2 6.6e-7        |
-| Adaptive DP45 (2D MHD Alfvén)   | 169 steps for t=1 (vs 1000 SSPRK3), L2 ~4.3e-6 on B/u  |
-| 1D Maxwell PEC cavity TM        | L2 E_z 8e-6 after one period, unexcited components 0.0 |
-| Adaptive DP45 (1D Maxwell)      | 52 steps for t=1 (vs ~2000 SSPRK3), L2 1e-4, transv 0.0 |
-| Adaptive DP45 (2D Maxwell)      | 76 steps for t=1/√2 (vs ~1414 SSPRK3), L2 ~1e-4 on E/B |
-| Adaptive DP45 (3D advection)    | 64 steps for t=1, dt 0.008..0.016, L2 1.76e-3          |
-| Adaptive DP45 (3D MHD Alfvén)   | 131 steps for t=1 (vs 1000 SSPRK3), L2 ~2.4e-5 on B/u  |
-| Adaptive DP45 (3D Maxwell)      | 50 steps for t=1 (vs ~2000 SSPRK3), L2 ~8e-4 on E/B    |
+comptime State = DGState[2, P, EULER_NC]
 
-**Two Orszag-Tang setups, on purpose.** `test_imhd_orszag_tang_2d`
-uses the upstream WARPXM convention (domain `[0, 2π]²`, `ρ₀ = γ²`,
-`p₀ = γ`) so any port-time regression shows up against the C++
-reference. `test_imhd_orszag_tang_2d_athena` uses the Athena
-convention (domain `[0, 1]²`, `ρ₀ = 25/(36π)`, `p₀ = 5/(12π)`,
-`v₀ = 1`, `B₀ = 1/√(4π)`) so results compare directly with the
-canonical reference at
-<https://www.astro.princeton.edu/~jstone/Athena/tests/orszag-tang/>
-and the broader MHD-code literature that adopts Athena's form. The
-3D variant only exists in Athena units (z-extrusion of the Athena
-2D IC).
+def initial(x: Real, y: Real) -> Array[Real, EULER_NC]: ...
+mesh.fill(q, initial)                       # never hand-roll the node loop
+var mass = mesh.integrate(q, IDX_RHO)       # also integrate_fn, l2_error
+mesh.visit_nodes(q, visit)                  # visit(x, y, w, q_node) for the rest
 
-Plus 40+ more in `tests/` (86 tests total). Run the suite via:
-```fish
-pixi run test               # whole suite in parallel, about a minute
-pixi run test euler 3d      # only tests whose name contains "euler" or "3d"
-pixi run test -t            # also list the ten slowest tests
-# or, for a single test:
-pixi run mojo run -I src tests/test_dg_convergence_1d.mojo
+def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}: ...
+def adjust(mut q_: State) raises {mut limiter, imm}: ...
+def suggest_dt(mut q_: State) raises {imm} -> Real:
+    return spatial.suggest_dt(ctx, mesh, q_)
+t = stepper.run_until_cfl(ctx, q, t, t_next, compute_rhs, adjust, suggest_dt)
+# or, with a fixed step: stepper.run_until(ctx, q, t, t_next, dt, compute_rhs, adjust)
 ```
 
-## Open work
-
-Feature-matrix-complete (modulo 1D MHD, an intentional physical gap).
-Remaining items are scale and performance:
-
-1. **Kinetic Vlasov-Maxwell solver** — different architecture
-   (phase-space DG instead of configuration-space DG). Sizeable port.
-2. **MPI halo exchange** — multi-GPU support. Sizeable engineering.
-
-## Capability inventory
-
-What's shipped (so it's easy to see at a glance):
-
-- **Primitive-bound limiting** — Zhang-Shu positivity preservers for
-  Euler (1D / 2D / 3D) and ideal MHD (2D / 3D). MHD preserver also
-  works with GLM-MHD (NC=9 ψ component shrunk along with the rest).
-- **Slope limiter tolerance** — the limiter only acts on deviations
-  larger than `α = alpha_coeff · dx^1.5`. The default `alpha_coeff = 1000`
-  (upstream's) gives α ≈ 0.35 on a 200-cell unit domain, so on problems
-  whose solution is much smaller than that (near-vacuum, coarse meshes)
-  it is a no-op and the positivity preserver is left to do all the work.
-  That is what made the Einfeldt 1-2-3 tests fail or pass on round-off;
-  they now pass `alpha_coeff=10`. Pick α below the smallest solution scale
-  you need limited.
-- **Slope limiter** — Moe-Rossmanith conserved-variable limiter,
-  NDIM-parametric (2D + 3D) and NC-parameterised. 1D variant
-  (Euler-only) lives in `adjusters/moe_rossmanith_1d.mojo`.
-- **Adaptive RK45 (Dormand-Prince)** — NC-parameterised generic
-  steppers for all three dimensions
-  (`DormandPrince45_{1,2,3}D[P, NC]`). Fixed-dt `step` and adaptive
-  `step_adaptive` (embedded 4th-order estimate, dt clipped to
-  [0.2·dt, 5·dt], atol/rtol scaled RMS norm). On smooth problems
-  takes 6–40× fewer steps than fixed-dt SSPRK3. Per-step error norm
-  is reduced fully on the GPU via a single-block tree-reduction
-  kernel (`_dp45_sum_sq_kernel` in `temporal/dormand_prince_1d.mojo`,
-  reused by 2D and 3D), so only one scalar lands on the host per
-  step — no `map_to_host` of the full state buffers.
-- **HLLD numerical flux** — shipped on `DGImhdSolver{2,3}D` and
-  `DGImhdGLMSolver{2,3}D` (`USE_HLLD=True`, Miyoshi-Kusano 2005
-  five-state solver). Permutation-based core
-  (`_hlld_core_3d` in `apps/imhd.mojo`) handles all three
-  axis-aligned face directions in ~215 lines. Default path stays
-  Rusanov (no regression). GLM-MHD path composes IMHD HLLD with the
-  exact (B_n, ψ) 2x2 Riemann block (Dedner et al. 2002 §3.2;
-  Mignone & Tzeferacos 2010 §4).
-- **Pair-plasma diagnostic** — the 1.85e-3 antisymmetry residual on
-  the 2D pair-plasma test was originally listed as a Strang-splitting
-  motivation. `tests/test_pair_plasma_asym_scaling.mojo` shows the
-  residual scales as δ² (ratio 100 between successive δ values),
-  confirming it's the *physical* O(δ²) coupling from the ρ-dependent
-  Lorentz force `F = α·ρ·E` — species 1 has ρ ≈ 1+δ·sin, species 2
-  has ρ ≈ 1−δ·sin, so their force amplitudes differ by 2·δ². No
-  operator-splitting fix can eliminate it; closed as "physical, not
-  algorithmic."
+- Sample a specific node with `State.index(elem, node, comp)` inside
+  `with q.buf.map_to_host() as h:`. Do not re-derive the flat index.
+- Do not hard-code a time step in examples: use `suggest_dt` with the app's
+  `cfl_max`. Tests that pin a step count may keep a fixed `dt`.
+- Output goes through `FrameWriter(name)` (default `./output/<name>/`,
+  created on demand) and `dump_<phys>_frame` or `write_vtu` with your own
+  field closure. No `/tmp` paths.
+- Tests print `PASSED` last and name themselves
+  `test_<physics>_<problem>_<dim>.mojo`. Shared test code (exact Riemann
+  solver, rate check) lives in `src/warpxm/testing/`.
 
 ## Key references in upstream
 
@@ -262,7 +167,9 @@ Mojo 1.2.0 specifics (toolchain is pinned to `mojo ==1.2.0` +
   passed as an ordinary trailing argument. `@parameter` / `@__parameter`
   and `capturing [_]` parameters are gone.
   - Host side: `def adjust(mut q: ...) raises {mut limiter, imm}:` then
-    `stepper.step(ctx, q, dt, compute_rhs, adjust)`. Capture `mut` only what
+    `stepper.step(ctx, q, dt, compute_rhs, adjust)`. A closure that reads
+    an outer runtime variable needs a capture list (`{imm}`); one that
+    reads only its arguments and comptime constants needs none. Capture `mut` only what
     the closure mutates; two closures passed to one call may not both
     capture the same object mutably (that is why solver / adjuster methods
     take `mesh` read-only).
@@ -275,6 +182,12 @@ Mojo 1.2.0 specifics (toolchain is pinned to `mojo ==1.2.0` +
 - `Int` is not `DevicePassable`. Kernel scalar arguments are `Int64`
   (`size_i64: Int64`, then `var size = Int(size_i64)` in the body) and
   launch sites pass `Int64(size)`.
+- A function cannot forward a variadic pack into `enqueue_function`
+  alongside fixed arguments, and user structs are not `DevicePassable`.
+  That is why DG kernels take their physics scalars as one `KernelParams`
+  vector (`spatial/dg_launch.mojo`) and unpack it by position.
+- A `comptime` alias of a `def(...) thin` type does not match as a kernel
+  parameter bound; spell the function type inline (see `launch_dg`).
 - `row_major(Idx(n))` → `row_major(Int(n))`.
 - Prefer `comptime match` over `comptime if / elif` chains on a parameter.
 - Inside kernels use `NodalBasis1D[P].diff_entry[col](row)` (a select over
@@ -306,9 +219,17 @@ of profiling with `ncu` (see `bench/BASELINE.md`):
   serial depth of the worst element. Keep iterative work (the MHD
   positivity bisection) conditional on the node actually violating.
 
+One correctness rule for any kernel that uses `barrier()`: every thread of
+a block must reach the same `barrier()` call site. A `barrier(); return`
+on a guard path deadlocks the warp when the block is only partly valid
+(the DG core's last block, when the element count is not a multiple of
+`DG_CORE_ELEMS_PER_BLOCK`). Clamp the index, do the work, and return
+after the barrier instead (see `past_end` in `spatial/dg_core.mojo`;
+`tests/test_advection_odd_mesh.mojo` covers it).
+
 ### Apps architecture
 
-Each of the five core physics packages (advection, euler, maxwell, imhd,
+Each of the five fluid physics packages (advection, euler, maxwell, imhd,
 imhd_glm) is a single file with a dimension-agnostic struct. The app
 exposes:
 
@@ -321,11 +242,15 @@ exposes:
 - Optionally `numerical_flux_hlld_static(...)` with the same shape (currently
   IMHD and GLM-MHD; uses axis-aligned permutation dispatch into
   `_hlld_core_3d`).
+- `max_signal_speed_static(q, ...)` where the speed depends on the state
+  (euler, imhd, imhd_glm): a direction-independent bound used by
+  `suggest_dt`.
 
 This mirrors upstream WARPXM's pattern: the *flux launcher* owns
-dimensionality; the *app* operates on local node values. Per-dim DG kernel
-wrappers (`dg_<phys>_<N>d.mojo`) still exist because mesh layouts are
-dimension-specific, but they call into the shared app file. Callers import
+dimensionality; the *app* operates on local node values. The DG core, the
+mesh, the per-physics wrappers (`dg_<phys>.mojo`) and the adjusters are all
+generic over `NDIM`; nothing in `src/warpxm` is written per dimension
+except the kinetic (1D1V / 1D2V) code. Callers import
 the canonical struct directly: `from warpxm.apps.euler import Euler`,
 `from warpxm.apps.imhd import IMHD`, etc.
 
@@ -336,23 +261,29 @@ the canonical struct directly: `from warpxm.apps.euler import Euler`,
    ...)` taking a 3-component unit normal. Module-level helpers
    (`_rho_floored`, `_gas_pressure_floored`, etc.) for the physics-specific
    conversions.
-2. **DG kernel**: write `spatial/dg_<phys>_<N>d.mojo` for each dimension you
-   need as a thin wrapper over the shared `_dg_<N>d_compute_rhs_core` (in
-   `spatial/dg_core_<N>d.mojo`). The wrapper declares `def ... {imm}`
-   closures that dispatch to the app's static methods and pass the right
-   normal triples (e.g. 2D passes `(nx, ny, 0)`):
-   - 1D: `flux_x`, `num_flux`, `apply_bc` (three closures);
-   - 2D: + `flux_y` (four closures);
-   - 3D: + `flux_z` (five closures).
-3. **Stepper**: nothing new. The generic `SSPRK3_<N>D[P, NC]` and
-   `DormandPrince45_<N>D[P, NC]` already handle any single-state problem.
+2. **DG kernel**: write one `spatial/dg_<phys>.mojo`, a thin wrapper over
+   the shared `_dg_compute_rhs_core` (`spatial/dg_core.mojo`), generic over
+   `NDIM`. The kernel `_<phys>_rhs_kernel[NDIM, P]` has the fixed signature
+   that `launch_dg` expects (see `spatial/dg_launch.mojo`): unpack the
+   physics scalars from `params`, then declare five `def ... {imm}`
+   closures that dispatch to the app's static methods: `flux_x`, `flux_y`,
+   `flux_z`, `num_flux(q_l, q_r, nx, ny, nz)` and
+   `apply_bc(q_interior, bc_kind, face_axis)`. The core calls only the
+   first `NDIM` flux closures and passes axis-aligned unit normals.
+   The solver struct `DG<Phys>Solver[NDIM, P]` has `compute_rhs`, which is
+   one `launch_dg[kernel](ctx, mesh, q, rhs, kernel_params(...))` call, and
+   `suggest_dt` (add a `max_signal_speed_static` on the app plus a case in
+   `spatial/wave_speed.mojo` if the speed depends on the state).
+3. **Stepper**: nothing new. The generic `SSPRK3[NDIM, P, NC]` and
+   `DormandPrince45[NDIM, P, NC]` already handle any single-state problem.
    Compose the limiter / positivity preserver / source kernels at the call
    site via the driver's `adjust` and `compute_rhs` closures.
 4. **BCs**: add a `_apply_bc_<phys>` helper in your DG-kernel wrapper. It
    takes interior `q_n`, `bc_kind`, and `face_axis`, returns the ghost-side
    state. The shared DG core invokes it at every boundary face.
-5. **Test**: clone an analogous (phys, N±1) test, adjust the IC, run.
+5. **Re-export**: add `physics/<phys>.mojo` listing the app, its constants,
+   solvers and adjusters, and a preset in `io/vtu_presets.mojo`.
+6. **Test**: clone an analogous test of another physics, adjust the IC, run.
 
-Source-term kernels (gravity, Lorentz, GLM damping, etc.) and the slope
-limiter are NC-parameterised — a new app reuses them with the right NC
-value.
+Source-term kernels (`spatial/sources/`) and the slope limiter are generic
+over `NDIM` and `NC`, so a new app reuses them as they are.

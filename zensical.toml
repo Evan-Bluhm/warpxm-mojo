@@ -14,6 +14,8 @@ site_dir = "site"
 # Navigation tree — sections in the order they appear in the sidebar.
 nav = [
   "index.md",
+  { "Features" = "features.md" },
+  { "Validation" = "validation.md" },
   { "Getting Started" = [
     "getting-started/index.md",
     { "Installation" = "getting-started/installation.md" },
@@ -34,6 +36,7 @@ nav = [
     { "Maxwell's equations" = "physics/maxwell.md" },
     { "Ideal MHD" = "physics/mhd.md" },
     { "Two-fluid plasma" = "physics/plasma.md" },
+    { "Vlasov-Maxwell (kinetic)" = "physics/vlasov.md" },
   ] },
   { "Numerical Methods" = [
     "numerical-methods/index.md",
@@ -51,6 +54,8 @@ nav = [
     { "Orszag-Tang vortex (MHD)" = "tutorials/orszag-tang.md" },
     { "TM cavity mode (Maxwell)" = "tutorials/cavity-mode.md" },
     { "Sedov blast with positivity" = "tutorials/sedov-blast.md" },
+    { "Kelvin-Helmholtz instability" = "tutorials/kelvin-helmholtz.md" },
+    { "Langmuir oscillation (plasma)" = "tutorials/langmuir-oscillation.md" },
   ] },
   { "API Reference" = [
     "api/index.md",
@@ -62,7 +67,9 @@ nav = [
     { "spatial (DG solvers)" = "api/spatial.md" },
     { "temporal (steppers)" = "api/temporal.md" },
     { "adjusters (limiters + positivity)" = "api/adjusters.md" },
-    { "driver (VTU + FrameWriter)" = "api/driver.md" },
+    { "io (VTU + FrameWriter)" = "api/io.md" },
+    { "prelude and physics (re-exports)" = "api/prelude.md" },
+    { "testing" = "api/testing.md" },
   ] },
   { "Contributing" = [
     "contributing/index.md",

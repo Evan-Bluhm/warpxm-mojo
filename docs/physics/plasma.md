@@ -32,32 +32,33 @@ A "single-fluid plasma" is just the two-fluid setup with one species.
 ## Stepper
 
 ```mojo
-from warpxm.temporal.ssprk3_plasma_2d import SSPRK3_Plasma_2D
-from warpxm.spatial.lorentz_source_2d import apply_lorentz_source_2d
-from warpxm.spatial.maxwell_current_source_2d import apply_current_source_2d
+from warpxm.prelude import *
+from warpxm.physics.plasma import *
 
-var stepper = SSPRK3_Plasma_2D[P](ctx, mesh.num_elements)
+comptime Fluid = DGState[2, P, EULER_NC]
+comptime Field = DGState[2, P, MAXWELL_NC]
+
+var stepper = SSPRK3_Plasma[2, P](ctx, mesh.num_elements)
 
 def compute_joint_rhs(
-    mut q1_in: DGState2D[P, EULER_NC],
-    mut q2_in: DGState2D[P, EULER_NC],
-    mut qm_in: DGState2D[P, MAXWELL_NC],
-    mut q1_out: DGState2D[P, EULER_NC],
-    mut q2_out: DGState2D[P, EULER_NC],
-    mut qm_out: DGState2D[P, MAXWELL_NC],
+    mut q1_in: Fluid, mut q2_in: Fluid, mut qm_in: Field,
+    mut q1_out: Fluid, mut q2_out: Fluid, mut qm_out: Field,
 ) raises {imm}:
     fluid_spatial.compute_rhs(ctx, mesh, q1_in, q1_out)
     fluid_spatial.compute_rhs(ctx, mesh, q2_in, q2_out)
     maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
-    apply_lorentz_source_2d[P](ctx, q1_in, qm_in, q1_out, ALPHA_1)
-    apply_lorentz_source_2d[P](ctx, q2_in, qm_in, q2_out, ALPHA_2)
-    apply_current_source_2d[P](ctx, q1_in, qm_out, ALPHA_1, EPS0)
-    apply_current_source_2d[P](ctx, q2_in, qm_out, ALPHA_2, EPS0)
+    apply_lorentz_source(ctx, q1_in, qm_in, q1_out, ALPHA_1)
+    apply_lorentz_source(ctx, q2_in, qm_in, q2_out, ALPHA_2)
+    apply_current_source(ctx, q1_in, qm_out, ALPHA_1, EPS0)
+    apply_current_source(ctx, q2_in, qm_out, ALPHA_2, EPS0)
 
 stepper.step(ctx, q_s1, q_s2, q_maxwell, dt, compute_joint_rhs)
+# or, to a target time:
+t = stepper.run_until(ctx, q_s1, q_s2, q_maxwell, t, t_end, dt, compute_joint_rhs)
 ```
 
-The plasma stepper takes a single comptime `compute_joint_rhs_fn`
+`SSPRK3_Plasma[NDIM, P]` is one struct for 1D, 2D and 3D. It takes a
+single `compute_joint_rhs_fn`
 closure that, given the three current states, writes the full
 hyperbolic + source RHS for each. The closure body is where the
 driver picks which sources to apply, in what order, and with what
@@ -65,19 +66,26 @@ driver picks which sources to apply, in what order, and with what
 state independently. See [Time integration](../concepts/time-integration.md)
 for the rationale.
 
-`SSPRK3_TwoFluid_{1,2,3}D` is the 2-state variant (one fluid + Maxwell)
-with the same closure pattern shrunk to four buffer args.
+`SSPRK3_TwoFluid[NDIM, P]` is the 2-state variant (one fluid + Maxwell)
+with the same closure pattern shrunk to four buffer arguments.
+
+There is no CFL-driven variant of these steppers: the time step is
+limited by the plasma frequency of the source terms as well as by the
+light and sound speeds, so the driver chooses a fixed `dt`.
 
 ## Source kernels
 
-* `apply_lorentz_source_2d/_3d` — $\alpha\rho(\mathbf{E} + \mathbf{u}\times\mathbf{B})$
+* `apply_lorentz_source` — $\alpha\rho(\mathbf{E} + \mathbf{u}\times\mathbf{B})$
   on the species momentum, $\alpha\rho\mathbf{u}\cdot\mathbf{E}$ on the
   species energy.
-* `apply_current_source_2d/_3d` — $-\alpha\rho\mathbf{u}/\varepsilon_0$
+* `apply_current_source` — $-\alpha\rho\mathbf{u}/\varepsilon_0$
   on Maxwell's E-field RHS.
 
-Both are NC-parameterised so they reuse the same kernel across plasma
-species.
+Both live in `spatial/sources/`, are pointwise on the flat state buffer
+and so serve every dimension, and are called once per species.
+
+For a kinetic rather than fluid species, see
+[Vlasov-Maxwell](vlasov.md).
 
 ## Examples and tests
 
@@ -115,5 +123,5 @@ operator-splitting them. The pair-plasma test's antisymmetry residual
 of 1.85e-3 is **physical** (O(δ²) Lorentz coupling between
 opposite-charge species with antisymmetric ρ perturbations), not
 algorithmic — confirmed by the δ-scaling diagnostic in
-`tests/test_pair_plasma_asym_scaling.mojo` (ratio 100.0 between
+`tests/test_pair_plasma_asym_scaling_2d.mojo` (ratio 100.0 between
 successive δ values).

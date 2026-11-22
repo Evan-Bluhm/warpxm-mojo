@@ -1,8 +1,10 @@
 # Physics
 
-warpxm-mojo implements seven physics modules across three dimensions.
-Every (physics, dimension) cell checked here has end-to-end regression
-tests passing on the GPU.
+warpxm-mojo implements seven fluid and field systems across three
+dimensions, plus a kinetic Vlasov-Maxwell solver in 1D1V and 1D2V. Every
+(physics, dimension) cell checked here has end-to-end regression tests
+passing on the GPU; the full matrix is on the [Features](../features.md)
+page.
 
 | Physics                       |  1D | 2D  | 3D  |
 | ----------------------------- | :-: | :-: | :-: |
@@ -29,13 +31,15 @@ Each page below covers, in the same order:
 * [Maxwell's equations](maxwell.md)
 * [Ideal MHD](mhd.md)
 * [Two-fluid plasma](plasma.md)
+* [Vlasov-Maxwell (kinetic)](vlasov.md)
 
 ## Conserved-variable conventions
 
-All multi-component physics use a fixed-order flat layout, so
-`q[node_index * NC + IDX_*]` gives you the component. The component
-indices are exported as `comptime` constants from each `apps/*.mojo`
-file:
+All multi-component physics store their components in a fixed order at
+each node. The component indices are exported as `comptime` constants
+from each `apps/*.mojo` file (and re-exported by the matching
+`warpxm.physics.*` module); use them with `mesh.integrate(q, IDX_RHO)`,
+inside a `mesh.fill` closure, or with `DGState.index`:
 
 ```mojo
 from warpxm.apps.imhd import (
@@ -44,9 +48,8 @@ from warpxm.apps.imhd import (
 )
 ```
 
-There is a **single** set of constants per physics, shared by the 2D
-and 3D solvers — no `IDX_RHO_2D` / `IDX_RHO_3D`. The same goes for
+There is a **single** set of constants per physics, shared by every
+dimension — no per-dimension copies. The same goes for
 Maxwell. This falls naturally out of the apps/ architecture: each
 physics is one canonical file (`apps/imhd.mojo`, `apps/maxwell.mojo`)
-exporting the constants once, and the dimension-specific DG launchers
-import them from there.
+exporting the constants once, and the DG wrappers import them from there.

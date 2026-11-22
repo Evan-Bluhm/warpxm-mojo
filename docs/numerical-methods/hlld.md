@@ -45,13 +45,15 @@ $s = 0$ falls in the wave fan.
 ## In code
 
 ```mojo
-var spatial = DGImhdSolver2D[P, USE_HLLD=True](app)
-var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)
+comptime State = DGState[2, P, MHD_NC]
 
-def compute_rhs(mut q_in, mut q_out) raises {imm}:
+var spatial = DGImhdSolver[2, P, USE_HLLD=True](app)
+var stepper = SSPRK3[2, P, MHD_NC](ctx, mesh.num_elements)
+
+def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-def adjust(mut q_) raises {mut limiter, imm}:
+def adjust(mut q_: State) raises {mut limiter, imm}:
     limiter.apply(ctx, mesh, q_)
 
 stepper.step(ctx, q, dt, compute_rhs, adjust)
@@ -64,9 +66,9 @@ stepper.step(ctx, q, dt, compute_rhs, adjust)
 `compute_rhs` closure, so the stepper doesn't need to know about it —
 zero runtime cost.
 
-The 3D version, `DGImhdSolver3D[P, USE_HLLD=True]`, uses a permutation-
-based core (`_hlld_core_3d` in `apps/imhd.mojo`) so all three axis-
-aligned face directions share one ~215-line implementation.
+In every dimension the flux goes through a permutation-based core
+(`_hlld_core_3d` in `apps/imhd.mojo`), so all three axis-aligned face
+directions share one ~215-line implementation.
 
 ## Algorithm sketch
 

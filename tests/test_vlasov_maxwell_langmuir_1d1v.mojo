@@ -46,29 +46,15 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_maxwell_langmuir_1d1v.mojo
 
-from std.collections import List
-from std.math import exp, sin, sqrt
+from std.collections import Array, List
+from std.math import exp, sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.maxwell import Maxwell, MAXWELL_NC, IDX_EX
-from warpxm.apps.vlasovmaxwell import VlasovMaxwell, VLASOV_NC
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, PI, TWO_PI
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.dg_maxwell_1d import DGMaxwellSolver1D
-from warpxm.spatial.dg_vlasov_1d1v import DGVlasovSolver1D1V
-from warpxm.spatial.vlasov_current_source_1d import (
-    apply_vlasov_current_source_1d,
-)
-from warpxm.spatial.vlasov_moments_1d1v import VlasovMoments1D1V
-from warpxm.temporal.ssprk3_vlasov_maxwell_1d1v import (
-    SSPRK3_VlasovMaxwell_1D1V,
-)
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
+from warpxm.physics.maxwell import *
 
 
 comptime P_X: Int = 2
@@ -82,76 +68,36 @@ comptime EPS0: Real = 1.0
 comptime C_LIGHT: Real = 1.0
 comptime T_FINAL: Real = 1.0
 comptime EPS: Real = 0.01  # amplitude of the E_x perturbation
+comptime PhaseState = PhaseState1D1V[P_X, P_V, VLASOV_NC]
+comptime MaxwellState = DGState[1, P_X, MAXWELL_NC]
 
 
 def compute_total_energy(
-    var ctx: DeviceContext,
-    mut phase_mesh: PhaseMesh1D1V[P_X, P_V],
-    mut x_mesh: BlockMesh1D[P_X],
-    mut q_phase: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-    mut q_maxwell: DGState1D[P_X, MAXWELL_NC],
+    phase_mesh: PhaseMesh1D1V[P_X, P_V],
+    x_mesh: BlockMesh[1, P_X],
+    mut q_phase: PhaseState,
+    mut q_maxwell: MaxwellState,
 ) raises -> Tuple[Real, Real]:
     """(W_E, W_K) = (½ ∫ E_x² dx, ½ ∫∫ v² f dv dx) via GLL quadrature."""
-    var x_weights = NodalBasis1D[P_X].weights()
-    var v_weights = NodalBasis1D[P_V].weights()
-    var ref_v_nodes = NodalBasis1D[P_V].nodes()
+    def field_energy(v: Array[Real, MAXWELL_NC]) -> Real:
+        return Real(0.5) * v[IDX_EX] * v[IDX_EX]
+    var w_E = x_mesh.integrate_fn(q_maxwell, field_energy)
 
-    # Electric energy.
-    var w_E: Real = 0.0
-    with q_maxwell.buf.map_to_host() as h_m:
-        for ex in range(NX):
-            for ix in range(P_X + 1):
-                var node_x = ex * (P_X + 1) + ix
-                var ex_val: Real = h_m[node_x * MAXWELL_NC + IDX_EX]
-                var w = x_weights[ix] * x_mesh.jacobian
-                w_E += w * Real(0.5) * ex_val * ex_val
-
-    # Kinetic energy: ½ ∫∫ v² f dv dx — full phase-space integral.
     var w_K: Real = 0.0
-    with q_phase.buf.map_to_host() as h_p:
-        for ex in range(NX):
-            for ev in range(NV):
-                var vl = Real(-3.0) + Real(ev) * phase_mesh.dv
-                for ix in range(P_X + 1):
-                    for iv in range(P_V + 1):
-                        var v = vl + (Real(1.0) + ref_v_nodes[iv]) * phase_mesh.jacobian_v
-                        var phase_e = ex * NV + ev
-                        var idx = (
-                            (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                        ) * VLASOV_NC
-                        var f: Real = h_p[idx]
-                        var w = (
-                            x_weights[ix] * phase_mesh.jacobian_x
-                            * v_weights[iv] * phase_mesh.jacobian_v
-                        )
-                        w_K += w * Real(0.5) * v * v * f
+    def add(x: Real, v: Real, w: Real, f: Real) {mut w_K}:
+        w_K += w * Real(0.5) * v * v * f
+    phase_mesh.visit_nodes(q_phase, add)
     return Tuple[Real, Real](w_E, w_K)
 
 
 def compute_total_mass(
-    var ctx: DeviceContext,
-    mut phase_mesh: PhaseMesh1D1V[P_X, P_V],
-    mut q_phase: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+    phase_mesh: PhaseMesh1D1V[P_X, P_V], mut q_phase: PhaseState,
 ) raises -> Real:
     """M = ∫∫ f dv dx."""
-    var x_weights = NodalBasis1D[P_X].weights()
-    var v_weights = NodalBasis1D[P_V].weights()
     var acc: Real = 0.0
-    with q_phase.buf.map_to_host() as h:
-        for ex in range(NX):
-            for ev in range(NV):
-                for ix in range(P_X + 1):
-                    for iv in range(P_V + 1):
-                        var phase_e = ex * NV + ev
-                        var idx = (
-                            (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                        ) * VLASOV_NC
-                        var f: Real = h[idx]
-                        var w = (
-                            x_weights[ix] * phase_mesh.jacobian_x
-                            * v_weights[iv] * phase_mesh.jacobian_v
-                        )
-                        acc += w * f
+    def add(x: Real, v: Real, w: Real, f: Real) {mut acc}:
+        acc += w * f
+    phase_mesh.visit_nodes(q_phase, add)
     return acc
 
 
@@ -163,50 +109,31 @@ def main() raises:
         ctx, Real(0.0), Real(1.0), Real(-3.0), Real(3.0),
         num_x=NX, num_v=NV, periodic_x=True,
     )
-    var x_mesh = BlockMesh1D[P_X](
+    var x_mesh = BlockMesh[1, P_X](
         ctx, Real(0.0), Real(1.0), NX, periodic=True,
     )
 
-    var q_phase = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    var q_maxwell = DGState1D[P_X, MAXWELL_NC](ctx, NX)
+    var q_phase = PhaseState(ctx, NX, NV)
+    var q_maxwell = MaxwellState(ctx, NX)
 
     # IC: f₀(v) = exp(-v²/σ²) / (σ√π) — x-independent, ∫f dv ≈ 1.
     var sigma = sqrt(SIGMA_SQ)
     var norm = Real(1.0) / (sigma * sqrt(PI))
-    var ref_x_nodes = NodalBasis1D[P_X].nodes()
-    var ref_v_nodes = NodalBasis1D[P_V].nodes()
-    var p_host = ctx.enqueue_create_host_buffer[Real.dtype](q_phase.buf_len)
-    for ex in range(NX):
-        for ev in range(NV):
-            var vl = Real(-3.0) + Real(ev) * phase_mesh.dv
-            for ix in range(P_X + 1):
-                for iv in range(P_V + 1):
-                    var v = vl + (Real(1.0) + ref_v_nodes[iv]) * phase_mesh.jacobian_v
-                    var phase_e = ex * NV + ev
-                    var idx = (
-                        (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                    ) * VLASOV_NC
-                    p_host[idx] = norm * exp(-v * v / SIGMA_SQ)
-    ctx.enqueue_copy(dst_buf=q_phase.buf, src_buf=p_host)
+    def maxwellian(x: Real, v: Real) {imm} -> Real:
+        return norm * exp(-v * v / SIGMA_SQ)
+    phase_mesh.fill(q_phase, maxwellian)
 
     # IC: E_x(x) = ε · sin(2π x / L), other components zero.
-    var m_host = ctx.enqueue_create_host_buffer[Real.dtype](q_maxwell.buf_len)
-    for k in range(q_maxwell.buf_len):
-        m_host[k] = Real(0.0)
-    for ex in range(NX):
-        var xl = Real(0.0) + Real(ex) * x_mesh.dx
-        for ix in range(P_X + 1):
-            var x = xl + (Real(1.0) + ref_x_nodes[ix]) * x_mesh.jacobian
-            var node_x = ex * (P_X + 1) + ix
-            m_host[node_x * MAXWELL_NC + IDX_EX] = EPS * sin(TWO_PI * x)
-    ctx.enqueue_copy(dst_buf=q_maxwell.buf, src_buf=m_host)
+    def field(x: Real) -> Array[Real, MAXWELL_NC]:
+        var v = Array[Real, MAXWELL_NC](fill=Real(0.0))
+        v[IDX_EX] = EPS * sin(TWO_PI * x)
+        return v^
+    x_mesh.fill(q_maxwell, field)
     ctx.synchronize()
 
     # Initial diagnostics.
-    var w0 = compute_total_energy(
-        ctx, phase_mesh, x_mesh, q_phase, q_maxwell,
-    )
-    var m0 = compute_total_mass(ctx, phase_mesh, q_phase)
+    var w0 = compute_total_energy(phase_mesh, x_mesh, q_phase, q_maxwell)
+    var m0 = compute_total_mass(phase_mesh, q_phase)
     print("Vlasov-Maxwell Langmuir IC: W_E =", w0[0], " W_K =", w0[1], " M =", m0)
 
     # --- solvers + stepper ---
@@ -217,16 +144,16 @@ def main() raises:
     )
     var maxwell_app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
     var spatial_vlasov = DGVlasovSolver1D1V[P_X, P_V](vlasov_app)
-    var spatial_maxwell = DGMaxwellSolver1D[P_X](maxwell_app)
+    var spatial_maxwell = DGMaxwellSolver[1, P_X](maxwell_app)
     var moments = VlasovMoments1D1V[P_X, P_V]()
     var stepper = SSPRK3_VlasovMaxwell_1D1V[P_X, P_V](ctx, NX, NV)
-    var j_current = DGState1D[P_X, 1](ctx, NX)
+    var j_current = DGState[1, P_X, 1](ctx, NX)
 
     def compute_joint_rhs(
-        mut qp_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut qm_in: DGState1D[P_X, MAXWELL_NC],
-        mut qp_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut qm_out: DGState1D[P_X, MAXWELL_NC],
+        mut qp_in: PhaseState,
+        mut qm_in: MaxwellState,
+        mut qp_out: PhaseState,
+        mut qm_out: MaxwellState,
     ) raises {mut j_current, imm}:
         spatial_vlasov.compute_rhs(ctx, phase_mesh, qp_in, qm_in, qp_out)
         spatial_maxwell.compute_rhs(ctx, x_mesh, qm_in, qm_out)
@@ -278,9 +205,7 @@ def main() raises:
             stepper.step(ctx, q_phase, q_maxwell, dt, compute_joint_rhs)
             t += dt
         ctx.synchronize()
-        w1 = compute_total_energy(
-            ctx, phase_mesh, x_mesh, q_phase, q_maxwell,
-        )
+        w1 = compute_total_energy(phase_mesh, x_mesh, q_phase, q_maxwell)
         var amp_obs = sqrt(w1[0] / w0[0])
         var amp_lin = e_lin[(half + 1) * (N_LIN // 2)]
         var amp_err = abs(amp_obs - amp_lin)
@@ -290,7 +215,7 @@ def main() raises:
             "  t =", t, " E/E0 observed =", amp_obs,
             " linear theory =", amp_lin, " diff =", amp_obs - amp_lin,
         )
-    var m1 = compute_total_mass(ctx, phase_mesh, q_phase)
+    var m1 = compute_total_mass(phase_mesh, q_phase)
 
     var dW = (w1[0] + w1[1]) - (w0[0] + w0[1])
     var dW_field_rel = abs(dW) / w0[0]

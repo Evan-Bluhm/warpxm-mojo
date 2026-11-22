@@ -5,7 +5,7 @@
 #     ∂q_c/∂t + ∇·(v q_c) = 0      for each component c ∈ 0..NC-1
 #
 # with a single constant 3-vector velocity. Each component evolves
-# independently. The DG launcher (per-dim DG kernel) supplies the face
+# independently. The DG core supplies the face
 # normal; the app dots velocity into the normal and applies the upwind
 # formula. 1D callers store `velocity_x` (with `velocity_y = velocity_z =
 # 0` defaults); 2D and 3D add the extra components.
@@ -13,7 +13,7 @@
 from std.collections import Array
 
 from warpxm.core.math_compat import fabs
-from warpxm.core.types import Real, WXM_INF, WXM_TINY
+from warpxm.core.types import Real
 
 
 struct Advection[NC: Int](ImplicitlyCopyable, Movable):
@@ -100,30 +100,3 @@ struct Advection[NC: Int](ImplicitlyCopyable, Movable):
         comptime for c in range(Self.NC):
             flux[c] = Real(0.5) * (q_r[c] * (vn - absc) + q_l[c] * (vn + absc))
         return flux^
-
-    # 1D-shaped wrappers retained for the existing 1D DG kernel.
-
-    @staticmethod
-    def numerical_flux(
-        q_l: Array[Real, Self.NC],
-        q_r: Array[Real, Self.NC],
-        normal: Real,
-        velocity: Real,
-    ) -> Array[Real, Self.NC]:
-        return Self.numerical_flux_static(
-            q_l, q_r, normal, Real(0.0), Real(0.0),
-            velocity, Real(0.0), Real(0.0),
-        )
-
-    @staticmethod
-    def internal_flux(
-        q: Array[Real, Self.NC], velocity: Real,
-    ) -> Array[Real, Self.NC]:
-        return Self.internal_flux_x_static(q, velocity)
-
-    @staticmethod
-    def suggested_dt(normal: Real, dxn: Real, cfl_max: Real, velocity: Real) -> Real:
-        """CFL-limited timestep contribution from one face (1D shape)."""
-        var nc = velocity * normal
-        var absc = fabs(nc)
-        return (cfl_max * dxn / absc) if absc > WXM_TINY else WXM_INF

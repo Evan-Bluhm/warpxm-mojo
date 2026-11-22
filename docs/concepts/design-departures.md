@@ -50,15 +50,13 @@ warpxm-mojo replaces that entirely. An "input file" is now a Mojo
 program that imports the solver modules and calls into them:
 
 ```mojo
-from warpxm.apps.euler import Euler, EULER_NC
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
-from warpxm.temporal.ssprk3_2d import SSPRK3_2D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
 ...
 def main() raises:
-    var mesh = BlockMesh2D[P](ctx, ...)
+    var mesh = BlockMesh[2, P](ctx, ...)
     var app = Euler(gas_gamma=1.4, ...)
-    var spatial = DGEulerSolver2D[P](app)
+    var spatial = DGEulerSolver[2, P](app)
     ...
 ```
 
@@ -83,7 +81,7 @@ a few seconds on the second build (Mojo caches aggressively).
   Dedner GLM cleaning, Rusanov / HLLD numerical fluxes, source-
   coupled stepper for plasma. All match upstream.
 * **Module organisation.** `apps/`, `spatial/`, `temporal/`,
-  `variable/`, `adjusters/`, `driver/` mirror the upstream subtrees of
+  `variable/`, `adjusters/`, `io/` mirror the upstream subtrees of
   the same names (under `src/apps`, `src/dfem/spatial_solvers/`,
   `src/dfem/temporal_solvers/`, `src/dfem/variable_adjusters/`).
 * **Test problems.** Sod tube, Brio-Wu, Orszag-Tang, cavity TM modes,

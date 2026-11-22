@@ -138,7 +138,7 @@ struct NodalBasis1D[P: Int](Copyable, Movable):
     # back as uninitialised memory. PhaseMesh1D1V / 1D2V hit exactly that
     # (seven Vlasov tests failed with wrong velocity-node coordinates).
     # Drop the decorator once the compiler bug is fixed and
-    # `tests/test_vlasov_1d1v_scaffolding.mojo` still passes without it.
+    # `tests/test_vlasov_scaffolding_1d1v.mojo` still passes without it.
 
     @staticmethod
     @inline(.never)

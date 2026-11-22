@@ -5,20 +5,14 @@
 # Starts with a CFL-violating initial dt; controller must shrink it and
 # then relax it. Validates the 2D port of `step_adaptive`.
 
+from std.collections import Array
 from std.math import sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.euler import (
-    Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, TWO_PI
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.spatial.dg_euler_2d import DGEulerSolver2D
-from warpxm.temporal.dormand_prince_2d import DormandPrince45_2D
-from warpxm.variable.state_2d import DGState2D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
 
 
 comptime P: Int = 2
@@ -31,52 +25,39 @@ comptime T_FINAL: Real = 1.0
 comptime DT_INIT: Real = 1.0e-2     # CFL-violating; controller will shrink
 comptime ATOL: Real = 1.0e-8
 comptime RTOL: Real = 1.0e-6
+comptime State = DGState[2, P, EULER_NC]
+
+
+def _exact_rho(x: Real, y: Real) -> Real:
+    return Real(1.0) + EPS * sin(TWO_PI * x)
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
-    var mesh = BlockMesh2D[P](
+    var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(0.125),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q = DGState2D[P, EULER_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1
-
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for j in range(NY):
-        for i in range(NX):
-            var xl = mesh.x_min + Real(i) * mesh.dx
-            var e = j * NX + i
-            for jn in range(P1):
-                for in_ in range(P1):
-                    var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                    var rho = Real(1.0) + EPS * sin(TWO_PI * x)
-                    var ke = Real(0.5) * rho * U * U
-                    var n = jn * P1 + in_
-                    var b = (e * nodes_per_elem + n) * EULER_NC
-                    host[b + IDX_RHO] = rho
-                    host[b + IDX_MX] = rho * U
-                    host[b + IDX_MY] = Real(0.0)
-                    host[b + IDX_MZ] = Real(0.0)
-                    host[b + IDX_E] = Real(1.0) / (GAMMA - Real(1.0)) + ke
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
+        var rho = _exact_rho(x, y)
+        var ke = Real(0.5) * rho * U * U
+        return [
+            rho, rho * U, Real(0.0), Real(0.0),
+            Real(1.0) / (GAMMA - Real(1.0)) + ke,
+        ]
+    mesh.fill(q, initial)
 
     var app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )
-    var spatial = DGEulerSolver2D[P](app)
-    var stepper = DormandPrince45_2D[P, EULER_NC](ctx, mesh.num_elements)
+    var spatial = DGEulerSolver[2, P](app)
+    var stepper = DormandPrince45[2, P, EULER_NC](ctx, mesh.num_elements)
 
-    def compute_rhs(
-        mut q_in: DGState2D[P, EULER_NC],
-        mut q_out: DGState2D[P, EULER_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
     var t: Real = 0.0
@@ -119,22 +100,7 @@ def main() raises:
     ctx.synchronize()
 
     # L2 error in ρ vs analytic IC (it returns to IC at t=1 since U=1, L=1).
-    var rho_err: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for j in range(NY):
-            for i in range(NX):
-                var xl = mesh.x_min + Real(i) * mesh.dx
-                var e = j * NX + i
-                for jn in range(P1):
-                    for in_ in range(P1):
-                        var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                        var n = jn * P1 + in_
-                        var b = (e * nodes_per_elem + n) * EULER_NC
-                        var exact_rho = Real(1.0) + EPS * sin(TWO_PI * x)
-                        var d = h[b + IDX_RHO] - exact_rho
-                        var jw = mesh.jacobian_x * mesh.jacobian_y * weights[in_] * weights[jn]
-                        rho_err += jw * d * d
-    var l2 = rho_err ** Real(0.5)
+    var l2 = mesh.l2_error(q, IDX_RHO, _exact_rho)
 
     print("Adaptive DP45 2D entropy wave (P=2, NX=32, NY=4, atol=1e-8, rtol=1e-6):")
     print("  steps taken     :", num_steps)

@@ -8,9 +8,9 @@ $$
 \partial_t \mathbf{B} = -\nabla\times\mathbf{E}.
 $$
 
-We carry both 3-vectors as 8 scalars (E_x, E_y, E_z, B_x, B_y, B_z;
-plus two spares) so the same state layout matches both 2D (TE / TM)
-and 3D problems.
+All six field components (E_x, E_y, E_z, B_x, B_y, B_z) are carried in
+every dimension, so the same state layout serves 1D, 2D (TE / TM) and 3D
+problems.
 
 ## Module
 
@@ -24,8 +24,9 @@ Constructor:
 var app = Maxwell(c_light=Real(1.0), cfl_max=Real(0.5))
 ```
 
-`c_light` is the speed of light in whatever units you choose. The
-CFL limit is on $c\,\Delta t / \Delta x$.
+`c_light` is the speed of light in whatever units you choose. The wave
+speed is constant, so `spatial.suggest_dt(mesh)` needs no state: it
+returns `cfl_max / ((2P + 1) c Σ_d 1/Δx_d)`.
 
 ## State layout
 
@@ -50,7 +51,7 @@ The 3D module re-uses these constants.
 PEC walls are how the TM₁₁ cavity mode example is set up:
 
 ```mojo
-var mesh = BlockMesh2D[P](
+var mesh = BlockMesh[2, P](
     ctx, 0.0, 1.0, 0.0, 1.0, nx=NX, ny=NY,
     periodic_x=False, periodic_y=False,
     bc_left=BC_PEC_WALL, bc_right=BC_PEC_WALL,
@@ -67,17 +68,17 @@ upwinding.
 ## Coupling to fluids
 
 Maxwell receives a current source from each charged fluid via
-`apply_current_source_2d` / `_3d`:
+`apply_current_source` (one function for every dimension):
 
 ```mojo
-apply_current_source_2d[P](ctx, fluid_state, maxwell_rhs, alpha, eps0)
+apply_current_source(ctx, fluid_state, maxwell_rhs, alpha, eps0)
 ```
 
 `alpha` is the species' charge-to-mass ratio. For the symmetric pair-
 plasma test we set `alpha_1 = -1, alpha_2 = +1`.
 
 The reverse coupling (Lorentz force on fluid momentum) is in
-`apply_lorentz_source_2d` — see [Plasma](plasma.md).
+`apply_lorentz_source` — see [Plasma](plasma.md).
 
 ## Examples and tests
 
@@ -88,19 +89,25 @@ The reverse coupling (Lorentz force on fluid momentum) is in
 
 Tests:
 
-* `tests/test_maxwell_1d_cavity.mojo` — 1D TM cavity (E_z + B_y on $x$),
+* `tests/test_maxwell_cavity_1d.mojo` — 1D TM cavity (E_z + B_y on $x$),
   one period; L2 E_z ~ 8e-6.
 * `tests/test_maxwell_convergence_1d.mojo` — 1D transverse plane wave
   propagating along $\hat{x}$ with E_z / B_y; one period returns to IC.
   Checks the P+1 rate, the absolute L2 error and that unexcited
   components stay at zero.
-* `tests/test_maxwell_2d_cavity.mojo` — TM₁₁ standing wave; unexcited
+* `tests/test_maxwell_cavity_2d.mojo` — TM₁₁ standing wave; unexcited
   components stay at 0.0 exactly.
-* `tests/test_maxwell_2d_plane_wave.mojo` — vacuum plane wave.
-* `tests/test_maxwell_3d_cavity.mojo`, `tests/test_maxwell_3d_plane_wave.mojo`.
+* `tests/test_maxwell_plane_wave_2d.mojo` — vacuum plane wave.
+* `tests/test_maxwell_cavity_3d.mojo`, `tests/test_maxwell_plane_wave_3d.mojo`.
+* The cavity tests also run with `BC_PMC_WALL` (the dual problem).
+* `tests/test_dp45_adaptive_maxwell_{1,2,3}d.mojo` — adaptive RK45 on
+  the same problems.
 
-The 1D Maxwell solver lives in `spatial/dg_maxwell_1d.mojo` and uses
-the canonical `Maxwell` app from `apps/maxwell.mojo` — the 1D DG kernel
-just passes the normal $(\pm 1, 0, 0)$ into the same numerical flux
-the 2D and 3D solvers use. A TM wave with E_z and B_y propagating
+For output, `dump_maxwell_frame(path, mesh, q)` writes the six
+components and the two energy densities (see [`io`](../api/io.md)).
+
+The 1D solver is the same `DGMaxwellSolver[NDIM, P]`
+(`spatial/dg_maxwell.mojo`) with `NDIM = 1`: the DG core passes the
+normal $(\pm 1, 0, 0)$ into the same numerical flux the 2D and 3D
+solvers use. A TM wave with E_z and B_y propagating
 along $\hat{x}$ is a perfectly valid 1D Maxwell problem.

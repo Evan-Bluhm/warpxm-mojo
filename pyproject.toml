@@ -44,3 +44,4 @@ docs = { features = ["docs"], solve-group = "default" }
 mojo-version = "mojo --version"
 test = "./scripts/run_tests.sh"
 build = "./scripts/build_examples.sh"
+example = "./scripts/run_example.sh"

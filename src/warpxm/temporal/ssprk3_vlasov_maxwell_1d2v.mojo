@@ -16,7 +16,7 @@ from warpxm.apps.vlasovmaxwell import VLASOV_NC
 from warpxm.core.types import Real
 from warpxm.temporal.ssprk3 import _euler_step_kernel, _ssprk3_combine_kernel
 from warpxm.variable.phase_state_1d2v import PhaseState1D2V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.variable.state import DGState
 
 
 struct SSPRK3_VlasovMaxwell_1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
@@ -26,10 +26,10 @@ struct SSPRK3_VlasovMaxwell_1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
     var qp_stage1: PhaseState1D2V[Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC]
     var qp_stage2: PhaseState1D2V[Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC]
     var qp_rhs: PhaseState1D2V[Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC]
-    var qm_save: DGState1D[Self.P_x, MAXWELL_NC]
-    var qm_stage1: DGState1D[Self.P_x, MAXWELL_NC]
-    var qm_stage2: DGState1D[Self.P_x, MAXWELL_NC]
-    var qm_rhs: DGState1D[Self.P_x, MAXWELL_NC]
+    var qm_save: DGState[1, Self.P_x, MAXWELL_NC]
+    var qm_stage1: DGState[1, Self.P_x, MAXWELL_NC]
+    var qm_stage2: DGState[1, Self.P_x, MAXWELL_NC]
+    var qm_rhs: DGState[1, Self.P_x, MAXWELL_NC]
 
     def __init__(
         out self,
@@ -48,21 +48,21 @@ struct SSPRK3_VlasovMaxwell_1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         self.qp_rhs = PhaseState1D2V[
             Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
         ](ctx, num_x, num_v1, num_v2)
-        self.qm_save = DGState1D[Self.P_x, MAXWELL_NC](ctx, num_x)
-        self.qm_stage1 = DGState1D[Self.P_x, MAXWELL_NC](ctx, num_x)
-        self.qm_stage2 = DGState1D[Self.P_x, MAXWELL_NC](ctx, num_x)
-        self.qm_rhs = DGState1D[Self.P_x, MAXWELL_NC](ctx, num_x)
+        self.qm_save = DGState[1, Self.P_x, MAXWELL_NC](ctx, num_x)
+        self.qm_stage1 = DGState[1, Self.P_x, MAXWELL_NC](ctx, num_x)
+        self.qm_stage2 = DGState[1, Self.P_x, MAXWELL_NC](ctx, num_x)
+        self.qm_rhs = DGState[1, Self.P_x, MAXWELL_NC](ctx, num_x)
 
     def step[
         ComputeJointRhs: def(
             mut PhaseState1D2V[
                 Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
             ],
-            mut DGState1D[Self.P_x, MAXWELL_NC],
+            mut DGState[1, Self.P_x, MAXWELL_NC],
             mut PhaseState1D2V[
                 Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
             ],
-            mut DGState1D[Self.P_x, MAXWELL_NC],
+            mut DGState[1, Self.P_x, MAXWELL_NC],
         ) raises -> None,
     ](
         mut self,
@@ -70,7 +70,7 @@ struct SSPRK3_VlasovMaxwell_1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         mut q_phase: PhaseState1D2V[
             Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
         ],
-        mut q_maxwell: DGState1D[Self.P_x, MAXWELL_NC],
+        mut q_maxwell: DGState[1, Self.P_x, MAXWELL_NC],
         dt: Real,
         compute_joint_rhs_fn: ComputeJointRhs,
     ) raises:
@@ -159,3 +159,38 @@ struct SSPRK3_VlasovMaxwell_1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
             Real(1.0) / Real(3.0), Real(2.0) / Real(3.0), dt, Int64(m_size),
             grid_dim=m_grid, block_dim=BLOCK,
         )
+
+    def run_until[
+        ComputeJointRhs: def(
+            mut PhaseState1D2V[
+                Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
+            ],
+            mut DGState[1, Self.P_x, MAXWELL_NC],
+            mut PhaseState1D2V[
+                Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
+            ],
+            mut DGState[1, Self.P_x, MAXWELL_NC],
+        ) raises -> None,
+    ](
+        mut self,
+        var ctx: DeviceContext,
+        mut q_phase: PhaseState1D2V[
+            Self.P_x, Self.P_v1, Self.P_v2, VLASOV_NC,
+        ],
+        mut q_maxwell: DGState[1, Self.P_x, MAXWELL_NC],
+        t: Real,
+        t_target: Real,
+        dt: Real,
+        compute_joint_rhs_fn: ComputeJointRhs,
+    ) raises -> Real:
+        """Advance from time `t` to `t_target` in steps of `dt`, shortening
+        the last step to land on `t_target` exactly. Returns the time
+        reached, so a frame loop is `t = stepper.run_until(..., t, t_next,
+        dt, ...)`."""
+        var time = t
+        # The tolerance stops round-off in `time` from adding a ~1e-16 step.
+        while time < t_target - Real(1.0e-9) * dt:
+            var dt_use = dt if (time + dt) < t_target else (t_target - time)
+            self.step(ctx, q_phase, q_maxwell, dt_use, compute_joint_rhs_fn)
+            time += dt_use
+        return time

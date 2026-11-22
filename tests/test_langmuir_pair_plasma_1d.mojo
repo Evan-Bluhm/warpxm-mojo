@@ -18,27 +18,14 @@
 # After one period the perturbations return to IC. Mass conservation
 # per species to machine epsilon.
 
+from std.collections import Array
 from std.math import cos, sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.euler import (
-    Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
-)
-from warpxm.apps.maxwell import (
-    Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.math_compat import fabs, sqrt
-from warpxm.core.types import Real, TWO_PI
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.spatial.dg_euler_1d import DGEulerSolver1D
-from warpxm.spatial.dg_maxwell_1d import DGMaxwellSolver1D
-from warpxm.spatial.lorentz_source_1d import apply_lorentz_source_1d
-from warpxm.spatial.maxwell_current_source_1d import apply_current_source_1d
-from warpxm.temporal.ssprk3_plasma_1d import SSPRK3_Plasma_1D
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.plasma import *
 
 
 comptime P: Int = 2
@@ -50,93 +37,74 @@ comptime EPS0: Real = 1.0
 comptime DELTA: Real = 0.01
 comptime P0: Real = 1.0e-4
 comptime DT: Real = 2.5e-3
+comptime FluidState = DGState[1, P, EULER_NC]
+comptime MaxwellState = DGState[1, P, MAXWELL_NC]
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh1D[P](ctx, Real(0.0), Real(1.0), NX, periodic=True)
-    var q_s1 = DGState1D[P, EULER_NC](ctx, mesh.num_elements)
-    var q_s2 = DGState1D[P, EULER_NC](ctx, mesh.num_elements)
-    var q_maxwell = DGState1D[P, MAXWELL_NC](ctx, mesh.num_elements)
+    var mesh = BlockMesh[1, P](ctx, Real(0.0), Real(1.0), NX, periodic=True)
+    var q_s1 = FluidState(ctx, mesh.num_elements)
+    var q_s2 = FluidState(ctx, mesh.num_elements)
+    var q_maxwell = MaxwellState(ctx, mesh.num_elements)
 
-    var nodes_per_elem = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
     var k_wave = TWO_PI
     var omega = sqrt(Real(2.0))
     var t_final = TWO_PI / omega
 
-    var f1h = ctx.enqueue_create_host_buffer[Real.dtype](q_s1.buf_len)
-    var f2h = ctx.enqueue_create_host_buffer[Real.dtype](q_s2.buf_len)
-    var mh = ctx.enqueue_create_host_buffer[Real.dtype](q_maxwell.buf_len)
-    for e in range(mesh.num_elements):
-        var xl = mesh.x_min + Real(e) * mesh.dx
-        for i in range(nodes_per_elem):
-            var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
-            var s = sin(k_wave * x)
-            var c_v = cos(k_wave * x)
+    # Opposite density perturbations on the two species, both at rest.
+    def species_1(x: Real) {imm} -> Array[Real, EULER_NC]:
+        return [
+            Real(1.0) + DELTA * sin(k_wave * x),
+            Real(0.0), Real(0.0), Real(0.0),
+            P0 / (GAMMA - Real(1.0)),
+        ]
+    def species_2(x: Real) {imm} -> Array[Real, EULER_NC]:
+        return [
+            Real(1.0) - DELTA * sin(k_wave * x),
+            Real(0.0), Real(0.0), Real(0.0),
+            P0 / (GAMMA - Real(1.0)),
+        ]
+    def maxwell_ic(x: Real) {imm} -> Array[Real, MAXWELL_NC]:
+        var v = Array[Real, MAXWELL_NC](fill=Real(0.0))
+        v[IDX_EX] = (Real(2.0) * DELTA / k_wave) * cos(k_wave * x)
+        return v^
+    mesh.fill(q_s1, species_1)
+    mesh.fill(q_s2, species_2)
+    mesh.fill(q_maxwell, maxwell_ic)
 
-            var f1b = (e * nodes_per_elem + i) * EULER_NC
-            f1h[f1b + IDX_RHO] = Real(1.0) + DELTA * s
-            f1h[f1b + IDX_MX] = Real(0.0)
-            f1h[f1b + IDX_MY] = Real(0.0)
-            f1h[f1b + IDX_MZ] = Real(0.0)
-            f1h[f1b + IDX_E] = P0 / (GAMMA - Real(1.0))
-
-            var f2b = (e * nodes_per_elem + i) * EULER_NC
-            f2h[f2b + IDX_RHO] = Real(1.0) - DELTA * s
-            f2h[f2b + IDX_MX] = Real(0.0)
-            f2h[f2b + IDX_MY] = Real(0.0)
-            f2h[f2b + IDX_MZ] = Real(0.0)
-            f2h[f2b + IDX_E] = P0 / (GAMMA - Real(1.0))
-
-            var mb = (e * nodes_per_elem + i) * MAXWELL_NC
-            mh[mb + IDX_EX] = (Real(2.0) * DELTA / k_wave) * c_v
-            mh[mb + IDX_EY] = Real(0.0)
-            mh[mb + IDX_EZ] = Real(0.0)
-            mh[mb + IDX_BX] = Real(0.0)
-            mh[mb + IDX_BY] = Real(0.0)
-            mh[mb + IDX_BZ] = Real(0.0)
-    ctx.enqueue_copy(dst_buf=q_s1.buf, src_buf=f1h)
-    ctx.enqueue_copy(dst_buf=q_s2.buf, src_buf=f2h)
-    ctx.enqueue_copy(dst_buf=q_maxwell.buf, src_buf=mh)
-
-    var mass1_0: Real = 0.0
-    var mass2_0: Real = 0.0
-    for e in range(mesh.num_elements):
-        for i in range(nodes_per_elem):
-            var b = (e * nodes_per_elem + i) * EULER_NC
-            var jw = mesh.jacobian * weights[i]
-            mass1_0 += jw * f1h[b + IDX_RHO]
-            mass2_0 += jw * f2h[b + IDX_RHO]
+    var mass1_0 = mesh.integrate(q_s1, IDX_RHO)
+    var mass2_0 = mesh.integrate(q_s2, IDX_RHO)
 
     var fluid_app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-15), cfl_max=Real(0.5),
     )
     var maxwell_app = Maxwell(c_light=Real(1.0), cfl_max=Real(0.5))
-    var fluid_spatial = DGEulerSolver1D[P](fluid_app)
-    var maxwell_spatial = DGMaxwellSolver1D[P](maxwell_app)
-    var stepper = SSPRK3_Plasma_1D[P](ctx, mesh.num_elements)
+    var fluid_spatial = DGEulerSolver[1, P](fluid_app)
+    var maxwell_spatial = DGMaxwellSolver[1, P](maxwell_app)
+    var stepper = SSPRK3_Plasma[1, P](ctx, mesh.num_elements)
 
     def compute_joint_rhs(
-        mut q1_in: DGState1D[P, EULER_NC],
-        mut q2_in: DGState1D[P, EULER_NC],
-        mut qm_in: DGState1D[P, MAXWELL_NC],
-        mut q1_out: DGState1D[P, EULER_NC],
-        mut q2_out: DGState1D[P, EULER_NC],
-        mut qm_out: DGState1D[P, MAXWELL_NC],
+        mut q1_in: FluidState,
+        mut q2_in: FluidState,
+        mut qm_in: MaxwellState,
+        mut q1_out: FluidState,
+        mut q2_out: FluidState,
+        mut qm_out: MaxwellState,
     ) raises {imm}:
         fluid_spatial.compute_rhs(ctx, mesh, q1_in, q1_out)
         fluid_spatial.compute_rhs(ctx, mesh, q2_in, q2_out)
         maxwell_spatial.compute_rhs(ctx, mesh, qm_in, qm_out)
-        apply_lorentz_source_1d[P](ctx, q1_in, qm_in, q1_out, ALPHA_1)
-        apply_lorentz_source_1d[P](ctx, q2_in, qm_in, q2_out, ALPHA_2)
-        apply_current_source_1d[P](ctx, q1_in, qm_out, ALPHA_1, EPS0)
-        apply_current_source_1d[P](ctx, q2_in, qm_out, ALPHA_2, EPS0)
+        apply_lorentz_source(ctx, q1_in, qm_in, q1_out, ALPHA_1)
+        apply_lorentz_source(ctx, q2_in, qm_in, q2_out, ALPHA_2)
+        apply_current_source(ctx, q1_in, qm_out, ALPHA_1, EPS0)
+        apply_current_source(ctx, q2_in, qm_out, ALPHA_2, EPS0)
 
+    # T / DT is not an integer; the run stops at the last whole step
+    # before T (within half a step of it).
     var t: Real = 0.0
     while t < t_final - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < t_final else (t_final - t)
@@ -144,25 +112,16 @@ def main() raises:
         t += dt_use
     ctx.synchronize()
 
-    var sample_e = NX // 4
-    var b_sample = (sample_e * nodes_per_elem + 0) * EULER_NC
-
+    # First node of the element at x ≈ 0.25, the peak of the perturbation.
+    var sample = FluidState.index(NX // 4, 0, IDX_RHO)
     var rho1_T: Real
     var rho2_T: Real
-    var mass1_T: Real = 0.0
-    var mass2_T: Real = 0.0
     with q_s1.buf.map_to_host() as h:
-        rho1_T = h[b_sample + IDX_RHO]
-        for e in range(mesh.num_elements):
-            for i in range(nodes_per_elem):
-                var b = (e * nodes_per_elem + i) * EULER_NC
-                mass1_T += mesh.jacobian * weights[i] * h[b + IDX_RHO]
+        rho1_T = h[sample]
     with q_s2.buf.map_to_host() as h:
-        rho2_T = h[b_sample + IDX_RHO]
-        for e in range(mesh.num_elements):
-            for i in range(nodes_per_elem):
-                var b = (e * nodes_per_elem + i) * EULER_NC
-                mass2_T += mesh.jacobian * weights[i] * h[b + IDX_RHO]
+        rho2_T = h[sample]
+    var mass1_T = mesh.integrate(q_s1, IDX_RHO)
+    var mass2_T = mesh.integrate(q_s2, IDX_RHO)
 
     var dmass1 = fabs(mass1_T - mass1_0)
     var dmass2 = fabs(mass2_T - mass2_0)

@@ -11,7 +11,7 @@
 #
 # Phase elements are paired velocity-inner: `phase_e = ex * num_v + ev`.
 # Within a phase element, GLL nodes follow the convention used by
-# `spatial/dg_core_2d.mojo` (axis-1 outer, axis-0 inner): the velocity
+# `spatial/dg_core.mojo` in 2D (axis-1 outer, axis-0 inner): the velocity
 # node varies slowest, the x-node varies fastest. That keeps the
 # tensor-product DG kernel local-node indexing identical between the
 # generic 2D core and the Vlasov 1D1V kernel.
@@ -21,7 +21,7 @@
 #       = f at physical element ex, velocity element ev,
 #         v-node iv, x-node ix, component c
 #
-# Mirrors configuration-space `DGState1D[P, NC]` in `state_1d.mojo`.
+# Mirrors configuration-space `DGState[1, P, NC]` in `state_1d.mojo`.
 
 from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.core.types import Real

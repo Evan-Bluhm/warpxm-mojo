@@ -17,18 +17,13 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_first_moment_1d1v.mojo
 
-from std.math import exp, sqrt, erf
+from std.math import exp, erf
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.vlasovmaxwell import VLASOV_NC
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, PI
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.vlasov_moments_1d1v import VlasovMoments1D1V
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
 
 
 comptime P_X: Int = 2
@@ -43,28 +38,15 @@ comptime SIGMA_SQ: Real = 0.5
 
 
 def fill_shifted_maxwellian(
-    var ctx: DeviceContext,
     mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
     mesh: PhaseMesh1D1V[P_X, P_V],
     u: Real,
 ) raises:
     """Fill `q` with `f(x, v) = exp(-(v - u)² / σ²)` (x-independent)."""
-    var ref_v_nodes = NodalBasis1D[P_V].nodes()
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for ex in range(NX):
-        for ev in range(NV):
-            var vl = V_MIN + Real(ev) * mesh.dv
-            for ix in range(P_X + 1):
-                for iv in range(P_V + 1):
-                    var v = vl + (Real(1.0) + ref_v_nodes[iv]) * mesh.jacobian_v
-                    var phase_e = ex * NV + ev
-                    var idx = (
-                        (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                    ) * VLASOV_NC
-                    var dv_shift = v - u
-                    host[idx] = exp(-dv_shift * dv_shift / SIGMA_SQ)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
-    ctx.synchronize()
+    def shifted(x: Real, v: Real) {imm} -> Real:
+        var dv_shift = v - u
+        return exp(-dv_shift * dv_shift / SIGMA_SQ)
+    mesh.fill(q, shifted)
 
 
 def first_moment_max_err(
@@ -74,7 +56,7 @@ def first_moment_max_err(
     mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
     j_analytic: Real,
 ) raises -> Real:
-    var j = DGState1D[P_X, 1](ctx, NX)
+    var j = DGState[1, P_X, 1](ctx, NX)
     moments.first_moment(ctx, mesh, q, j)
     ctx.synchronize()
     var worst: Real = 0.0
@@ -103,14 +85,14 @@ def main() raises:
     var sigma = sqrt(SIGMA_SQ)
 
     # --- (a) symmetric Maxwellian: J = 0 exactly ---
-    fill_shifted_maxwellian(ctx, q, mesh, Real(0.0))
+    fill_shifted_maxwellian(q, mesh, Real(0.0))
     var err_sym = first_moment_max_err(ctx, moments, mesh, q, Real(0.0))
     print("first-moment 1D1V (u=0): max |J - 0| =", err_sym)
     assert_true(err_sym < Real(1.0e-15), "symmetric J should be machine zero")
 
     # --- (b) shifted Maxwellian: J = u · σ√π (modulo tail residue) ---
     var u_shift: Real = 0.5
-    fill_shifted_maxwellian(ctx, q, mesh, u_shift)
+    fill_shifted_maxwellian(q, mesh, u_shift)
     # Account for the asymmetric-tail correction on the first moment.
     var dvmax_lo = V_MAX - u_shift
     var dvmax_hi = V_MAX + u_shift

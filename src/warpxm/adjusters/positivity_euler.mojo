@@ -1,5 +1,5 @@
-# Zhang-Shu positivity-preserving limiter for 5-moment Euler — single
-# NDIM-parametric version covering 1D / 2D / 3D.
+# Zhang-Shu positivity-preserving limiter for 5-moment Euler, generic
+# over the dimension.
 #
 # Runs after the Moe-Rossmanith conserved-variable limiter and reduces
 # each element's deviation from the cell mean (linearly, with a per-
@@ -12,11 +12,8 @@
 #   Step 1 (density): pick θ_n so ρ(u_n(θ_n)) = ρ_eps; θ_ρ = min over n.
 #   Step 2 (pressure): P is quadratic in θ — closed-form root.
 #
-# The dim-specific bits are (1) the cell-mean weight at node n (a
-# tensor-product GLL weight scaled by 1 / 2^NDIM, i.e. the [-1,1]^NDIM
-# reference-element measure normalised to [0,1]^NDIM), and (2) the
-# per-dim DGState type used at the host-side API. The kernel body is
-# identical across dimensions and runs flat over `(P+1)^NDIM` nodes.
+# The kernel runs flat over the `(P+1)^NDIM` nodes of an element; the only
+# dimension-specific piece is the cell-mean weight (`adjusters/cell_mean.mojo`).
 
 from max.gpu import global_idx
 from max.gpu.host import DeviceContext
@@ -24,15 +21,11 @@ from std.math import ceildiv
 from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
+from warpxm.adjusters.cell_mean import gll_cell_weight
 from warpxm.core.math_compat import sqrt
 from warpxm.core.types import Real, WXM_DTYPE
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.variable.state_1d import DGState1D
-from warpxm.variable.state_2d import DGState2D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.mesh.block import BlockMesh
+from warpxm.variable.state import DGState
 
 
 @always_inline
@@ -43,29 +36,6 @@ def _pressure(
 ) -> Scalar[WXM_DTYPE]:
     var ke = Real(0.5) * (mx * mx + my * my + mz * mz) / rho
     return (gamma - Real(1.0)) * (E - ke)
-
-
-@always_inline
-def _gll_cell_weight[P: Int, NDIM: Int](n: Int) -> Scalar[WXM_DTYPE]:
-    """Tensor-product GLL weight for node `n` on the reference
-    [-1, 1]^NDIM element, normalised by 1 / 2^NDIM so the unit-cell
-    integral of 1 is 1. Replicates the per-dim cell-mean weights used
-    in the legacy positivity preservers exactly.
-    """
-    comptime P1 = P + 1
-    var weights = NodalBasis1D[P].weights()
-    comptime if NDIM == 1:
-        return weights[n] * Real(0.5)
-    comptime if NDIM == 2:
-        var jn = n // P1
-        var in_ = n % P1
-        return weights[in_] * weights[jn] * Real(0.25)
-    # NDIM == 3
-    var kn = n // (P1 * P1)
-    var rem = n % (P1 * P1)
-    var jn = rem // P1
-    var in_ = rem % P1
-    return weights[in_] * weights[jn] * weights[kn] * Real(0.125)
 
 
 def _positivity_kernel_euler[
@@ -94,7 +64,7 @@ def _positivity_kernel_euler[
     var E_bar: Scalar[WXM_DTYPE] = 0.0
     comptime for n in range(nodes_per_elem):
         var base = (e * nodes_per_elem + n) * NC
-        var w = _gll_cell_weight[P, NDIM](n)
+        var w = gll_cell_weight[P, NDIM](n)
         rho_bar += w * rebind[Scalar[WXM_DTYPE]](q[base + IDX_RHO])
         mx_bar += w * rebind[Scalar[WXM_DTYPE]](q[base + IDX_MX])
         my_bar += w * rebind[Scalar[WXM_DTYPE]](q[base + IDX_MY])
@@ -196,12 +166,8 @@ def _positivity_kernel_euler[
             q[base + IDX_E] = rebind[q.ElementType](E_bar + theta_p * d_E)
 
 
-# ---------------------------------------------------------------------------
-# Per-dim host-side launchers.
-# ---------------------------------------------------------------------------
-
-struct PositivityEuler1D[P: Int]:
-    """Device-resident Zhang-Shu positivity preserver for 1D Euler."""
+struct PositivityEuler[NDIM: Int, P: Int]:
+    """Device-resident Zhang-Shu positivity preserver for Euler."""
 
     var rho_eps: Real
     var p_eps: Real
@@ -220,83 +186,18 @@ struct PositivityEuler1D[P: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mesh: BlockMesh1D[Self.P],
-        mut q: DGState1D[Self.P, EULER_NC],
+        mesh: BlockMesh[Self.NDIM, Self.P],
+        mut q: DGState[Self.NDIM, Self.P, EULER_NC],
     ) raises:
+        """Restore ρ ≥ ρ_eps and P ≥ P_eps at every node of `q`, in place."""
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
         var q_layout = row_major(Int(q.buf_len))
-        var q_view = TileTensor(q.buf, q_layout)
-        comptime k_fn = _positivity_kernel_euler[Self.P, 1, type_of(q_layout)]
+        comptime k_fn = _positivity_kernel_euler[
+            Self.P, Self.NDIM, type_of(q_layout),
+        ]
         ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
-            grid_dim=grid, block_dim=BLOCK,
-        )
-
-
-struct PositivityEuler2D[P: Int]:
-    """Device-resident Zhang-Shu positivity preserver for 2D Euler."""
-
-    var rho_eps: Real
-    var p_eps: Real
-    var gamma: Real
-    var num_elements: Int
-
-    def __init__(
-        out self, num_elements: Int, gamma: Real,
-        rho_eps: Real = Real(1.0e-10), p_eps: Real = Real(1.0e-10),
-    ):
-        self.rho_eps = rho_eps
-        self.p_eps = p_eps
-        self.gamma = gamma
-        self.num_elements = num_elements
-
-    def apply(
-        mut self,
-        var ctx: DeviceContext,
-        mesh: BlockMesh2D[Self.P],
-        mut q: DGState2D[Self.P, EULER_NC],
-    ) raises:
-        comptime BLOCK = 256
-        var grid = ceildiv(self.num_elements, BLOCK)
-        var q_layout = row_major(Int(q.buf_len))
-        var q_view = TileTensor(q.buf, q_layout)
-        comptime k_fn = _positivity_kernel_euler[Self.P, 2, type_of(q_layout)]
-        ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
-            grid_dim=grid, block_dim=BLOCK,
-        )
-
-
-struct PositivityEuler3D[P: Int]:
-    """Device-resident Zhang-Shu positivity preserver for 3D Euler."""
-
-    var rho_eps: Real
-    var p_eps: Real
-    var gamma: Real
-    var num_elements: Int
-
-    def __init__(
-        out self, num_elements: Int, gamma: Real,
-        rho_eps: Real = Real(1.0e-10), p_eps: Real = Real(1.0e-10),
-    ):
-        self.rho_eps = rho_eps
-        self.p_eps = p_eps
-        self.gamma = gamma
-        self.num_elements = num_elements
-
-    def apply(
-        mut self,
-        var ctx: DeviceContext,
-        mesh: BlockMesh3D[Self.P],
-        mut q: DGState3D[Self.P, EULER_NC],
-    ) raises:
-        comptime BLOCK = 256
-        var grid = ceildiv(self.num_elements, BLOCK)
-        var q_layout = row_major(Int(q.buf_len))
-        var q_view = TileTensor(q.buf, q_layout)
-        comptime k_fn = _positivity_kernel_euler[Self.P, 3, type_of(q_layout)]
-        ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
+            TileTensor(q.buf, q_layout),
+            self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )

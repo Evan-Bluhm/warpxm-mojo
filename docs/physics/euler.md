@@ -55,8 +55,8 @@ from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 | `q[IDX_MZ]`  | 3 | $\rho u_z$ |
 | `q[IDX_E]`   | 4 | Total energy $E = P/(\gamma-1) + \tfrac{1}{2}\rho|\mathbf{u}|^{2}$ |
 
-The 3D Euler module re-uses the 2D constants — there is no
-`IDX_*_3D`. Same for the 1D module.
+The same constants serve every dimension: there are no per-dimension
+copies.
 
 ## Boundary conditions
 
@@ -77,25 +77,33 @@ but isn't shipped here yet.
 
 ## Sources
 
-* **Gravity** — `src/warpxm/spatial/euler_2d_sources.mojo` provides
-  `apply_gravity_source_2d` for vertical gravity in a 2D Euler state.
-  Used in the 2D hydrostatic-balance regression test where the
-  source is exactly balanced to within 4 × 10⁻¹⁶.
+* **Gravity** — `apply_gravity_source(ctx, q, rhs, gx, gy, gz=0)` in
+  `src/warpxm/spatial/sources/euler_gravity_source.mojo` adds a uniform
+  body force in any dimension. Used in the 2D hydrostatic-balance
+  regression test, where the source is balanced to within 4 × 10⁻¹⁶.
 * **Lorentz force** — when Euler is coupled to Maxwell as a charged
   fluid; see [Plasma](plasma.md).
+
+## Time step
+
+`spatial.suggest_dt(ctx, mesh, q)` returns
+`cfl_max / ((2P + 1) λ Σ_d 1/Δx_d)` with
+$\lambda = \max(|\mathbf{u}| + c_s)$ reduced over all nodes on the GPU.
+Pass it to `SSPRK3.run_until_cfl` through a closure; see
+[`temporal`](../api/temporal.md#run_until_cfl).
 
 ## Limiter and positivity
 
 For shock problems, wrap with the Moe-Rossmanith slope limiter:
 
 ```mojo
-from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
-from warpxm.temporal.ssprk3_2d import SSPRK3_2D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
 
-var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
-var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)
+var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements)
+var limiter = MoeRossmanith[2, P, EULER_NC](ctx, mesh.num_elements)
 
-def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, imm}:
+def adjust(mut q_: DGState[2, P, EULER_NC]) raises {mut limiter, imm}:
     limiter.apply(ctx, mesh, q_)
 ```
 
@@ -103,11 +111,9 @@ For strong shocks where the limiter alone can't keep ρ, P positive,
 add the Zhang-Shu positivity preserver into the same `adjust` closure:
 
 ```mojo
-from warpxm.adjusters.positivity_euler import PositivityEuler2D
+var positivity = PositivityEuler[2, P](mesh.num_elements, gamma=GAMMA)
 
-var positivity = PositivityEuler2D[P](mesh.num_elements, gamma=GAMMA)
-
-def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, mut positivity, imm}:
+def adjust(mut q_: DGState[2, P, EULER_NC]) raises {mut limiter, mut positivity, imm}:
     limiter.apply(ctx, mesh, q_)
     positivity.apply(ctx, mesh, q_)
 ```
@@ -129,6 +135,8 @@ algorithms.
 
 Regression tests cover Sod 1D / 2D / 3D, the 1D and 3D entropy waves,
 hydrostatic balance, free-slip walls, the Einfeldt 1-2-3 problem
-(1D / 2D / 3D) and the Lax shock tube. See
+(1D / 2D / 3D) and the Lax shock tube. The shock-tube tests compare with
+the exact Riemann solution from `warpxm.testing.riemann`
+([`testing`](../api/testing.md)). See
 [Numerical Methods → Positivity preserver](../numerical-methods/positivity.md)
 for the 1-2-3 results.

@@ -55,20 +55,21 @@ A standard PI-free controller:
 ## API
 
 ```mojo
-from warpxm.temporal.dormand_prince_2d import DormandPrince45_2D
-# or DormandPrince45_1D / DormandPrince45_3D for other dimensions
+from warpxm.temporal.dormand_prince import DormandPrince45
 
-var stepper = DormandPrince45_2D[P, NC](ctx, mesh.num_elements)
+# One struct for every dimension: the first parameter is NDIM.
+var stepper = DormandPrince45[2, P, NC](ctx, mesh.num_elements)
 
 def compute_rhs(
-    mut q_in: DGState2D[P, NC],
-    mut q_out: DGState2D[P, NC],
+    mut q_in: DGState[2, P, NC],
+    mut q_out: DGState[2, P, NC],
 ) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
     # add source kernels here if needed
 
 # Fixed-step (same dt every call):
 stepper.step(ctx, q, dt, compute_rhs)
+t = stepper.run_until(ctx, q, t, t_end, dt, compute_rhs)   # fixed dt to a target time
 
 # Adaptive (dt floats):
 var ret = stepper.step_adaptive(
@@ -79,12 +80,15 @@ var dt_used = ret[0]
 var dt_next = ret[1]
 ```
 
+Defaults are `atol=1e-6`, `rtol=1e-3`, `max_attempts=10`. There is no
+adjuster argument, so DP45 is for smooth problems that need no limiter.
+
 A typical adaptive loop:
 
 ```mojo
 var t: Real = 0.0
 var dt = DT_INIT
-while t < T_FINAL - 1e-12:
+while t < T_FINAL - Real(1.0e-12):
     var dt_try = dt if (t + dt) < T_FINAL else (T_FINAL - t)
     var ret = stepper.step_adaptive(ctx, q, dt_try, compute_rhs,
                                     atol=ATOL, rtol=RTOL)
@@ -112,20 +116,19 @@ are smaller but you don't have to hand-tune $\Delta t$.
 
 ## Coverage
 
-| Module | Status |
-| ------ | ------ |
-| `dormand_prince_1d.mojo` — `DormandPrince45_1D[P, NC]` | ✅ fixed + adaptive |
-| `dormand_prince_2d.mojo` — `DormandPrince45_2D[P, NC]` | ✅ fixed + adaptive |
-| `dormand_prince_3d.mojo` — `DormandPrince45_3D[P, NC]` | ✅ fixed + adaptive |
-| Plasma (3 coupled states) | Not in scope — plasma steppers use SSPRK3 only |
+`temporal/dormand_prince.mojo` holds one stepper,
+`DormandPrince45[NDIM, P, NC]`, with fixed (`step`, `run_until`) and
+adaptive (`step_adaptive`) entry points, for any single-state problem in
+1D, 2D or 3D. The combine kernels `_combine1`–`_combine5`, the per-cell
+error kernel `_dp45_error_kernel` and the error-norm reduction
+`_dp45_sum_sq_kernel` operate on the flat state buffer, so nothing in the
+stepper depends on the dimension.
 
-All three steppers use the same two-closure pattern
-(`step(..., compute_rhs_fn)`, `step_adaptive(..., compute_rhs_fn)`). The combine
-kernels `_combine1`–`_combine5`, the per-cell error kernel
-`_dp45_error_kernel`, and the single-block error-norm reduction
-`_dp45_sum_sq_kernel` all live in `dormand_prince_1d.mojo` and are
-imported unchanged by the 2D and 3D variants — they operate on flat
-buffers and don't care about dimension.
+The coupled plasma and kinetic steppers are SSPRK3 only.
+
+The adaptive controller is exercised by `tests/test_dp45_adaptive_*`
+(advection 1D/3D, Euler 2D, MHD Alfvén 2D/3D, Maxwell 1D/2D/3D), and the
+fifth-order rate by `tests/test_temporal_order_1d.mojo`.
 
 ## Implementation notes
 
@@ -137,12 +140,8 @@ buffers and don't care about dimension.
   (once for k6, once for the final u^{n+1}); the other four are
   called exactly once.
 * The RMS scaled error norm is computed fully on the GPU.
-  `_dp45_sum_sq_kernel` (in `dormand_prince_1d.mojo`, shared by the
-  2D and 3D wrappers) launches one block of 256 threads that
+  `_dp45_sum_sq_kernel` launches one block of 256 threads that
   stride-loops over the flat buffer, tree-reduces `(err/sc)²` in
   shared memory, and writes the total to a one-element device
   buffer. The host then maps one scalar — no `map_to_host` of the
-  full state, err, or u_save buffers. On large meshes this is
-  several × faster than the original three-buffer host-side loop;
-  on small meshes (~10⁴ DOFs) the controller is fast enough either
-  way and the win is mainly in cleaner architecture.
+  full state, err, or u_save buffers.

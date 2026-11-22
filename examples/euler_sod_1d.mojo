@@ -14,38 +14,33 @@
 #     4) Constant right state
 #     5) Right-moving shock
 #
-# Now using the Moe-Rossmanith slope limiter (conserved-variable cut) to
-# damp Gibbs oscillations near the discontinuities. The post-shock plateau,
-# the contact, and the rarefaction structure should appear at the correct
-# locations at `t = 0.2`.
+# The Moe-Rossmanith slope limiter (conserved-variable cut) damps Gibbs
+# oscillations near the discontinuities, and the time step follows the CFL
+# condition. The post-shock plateau, the contact, and the rarefaction
+# structure should appear at the correct locations at `t = 0.2`.
+#
+#     pixi run example euler_sod_1d
 
+from std.collections import Array
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 
-from warpxm.apps.euler import Euler
-from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import BC_COPYOUT
-from warpxm.core.types import Real
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.adjusters.moe_rossmanith_1d import MoeRossmanith1D
-from warpxm.spatial.dg_euler_1d import DGEulerSolver1D
-from warpxm.temporal.ssprk3_1d import SSPRK3_1D
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
 
 
 comptime P: Int = 2
 comptime NUM_ELEMENTS: Int = 200
 comptime GAMMA: Real = 1.4
 comptime T_FINAL: Real = 0.2
-comptime DT: Real = 2.0e-4
+comptime State = DGState[1, P, EULER_NC]
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh1D[P](
+    var mesh = BlockMesh[1, P](
         ctx,
         Real(0.0),
         Real(1.0),
@@ -54,31 +49,13 @@ def main() raises:
         bc_left=BC_COPYOUT,
         bc_right=BC_COPYOUT,
     )
-    var q = DGState1D[P, EULER_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var nodes_per_elem = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for e in range(mesh.num_elements):
-        var xl = mesh.x_min + Real(e) * mesh.dx
-        for i in range(nodes_per_elem):
-            var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
-            var rho: Real
-            var pp: Real
-            if x < Real(0.5):
-                rho = 1.0
-                pp = 1.0
-            else:
-                rho = 0.125
-                pp = 0.1
-            var b = (e * nodes_per_elem + i) * EULER_NC
-            host[b + IDX_RHO] = rho
-            host[b + IDX_MX] = Real(0.0)
-            host[b + IDX_MY] = Real(0.0)
-            host[b + IDX_MZ] = Real(0.0)
-            host[b + IDX_E] = pp / (GAMMA - Real(1.0))
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real) -> Array[Real, EULER_NC]:
+        var rho: Real = 1.0 if x < Real(0.5) else 0.125
+        var pp: Real = 1.0 if x < Real(0.5) else 0.1
+        return [rho, Real(0.0), Real(0.0), Real(0.0), pp / (GAMMA - Real(1.0))]
+    mesh.fill(q, initial)
 
     var app = Euler(
         gas_gamma=GAMMA,
@@ -86,42 +63,34 @@ def main() raises:
         min_pressure=Real(1e-12),
         cfl_max=Real(0.5),
     )
-    var spatial = DGEulerSolver1D[P](app)
-    var stepper = SSPRK3_1D[P, EULER_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith1D[P](ctx, mesh.num_elements)
+    var spatial = DGEulerSolver[1, P](app)
+    var stepper = SSPRK3[1, P, EULER_NC](ctx, mesh.num_elements)
+    var limiter = MoeRossmanith[1, P, EULER_NC](ctx, mesh.num_elements)
 
-
-    def compute_rhs(
-        mut q_in: DGState1D[P, EULER_NC],
-        mut q_out: DGState1D[P, EULER_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def adjust(mut q_: DGState1D[P, EULER_NC]) raises {mut limiter, imm}:
+    def adjust(mut q_: State) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
-    var t: Real = 0.0
-    var step: Int = 0
-    while t < T_FINAL - Real(0.5) * DT:
-        var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, adjust)
-        t += dt_use
-        step += 1
-    ctx.synchronize()
+    def suggest_dt(mut q_: State) raises {imm} -> Real:
+        return spatial.suggest_dt(ctx, mesh, q_)
 
-    # Print rho, u, P at element centroids for a quick text view.
-    print("# Sod shock tube at t =", t, " after", step, "steps")
+    var t = stepper.run_until_cfl(
+        ctx, q, Real(0.0), T_FINAL, compute_rhs, adjust, suggest_dt,
+        dt_interval=5,
+    )
+
+    # Print rho, u, P at element centroids (the P = 2 mid node) for a quick
+    # text view.
+    print("# Sod shock tube at t =", t, " final CFL dt =", suggest_dt(q))
     print("# x, rho, u, P")
-    var mid_node = NodalBasis1D[P].num_nodes // 2
+    var mid_node = State.num_nodes_per_elem // 2
     with q.buf.map_to_host() as h:
         for e in range(mesh.num_elements):
-            var xl = mesh.x_min + Real(e) * mesh.dx
-            var x = xl + (Real(1.0) + ref_nodes[mid_node]) * mesh.jacobian
-            var b = (e * nodes_per_elem + mid_node) * EULER_NC
-            var rho = h[b + IDX_RHO]
-            var mx = h[b + IDX_MX]
-            var e_t = h[b + IDX_E]
-            var u = mx / rho
+            var x = mesh.x_min + (Real(e) + Real(0.5)) * mesh.dx
+            var rho = h[State.index(e, mid_node, IDX_RHO)]
+            var u = h[State.index(e, mid_node, IDX_MX)] / rho
             var ke = Real(0.5) * rho * u * u
-            var p_local = (GAMMA - Real(1.0)) * (e_t - ke)
+            var p_local = (GAMMA - Real(1.0)) * (h[State.index(e, mid_node, IDX_E)] - ke)
             print(x, ",", rho, ",", u, ",", p_local)

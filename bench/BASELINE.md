@@ -206,3 +206,28 @@ Launching on a (num_v2, num_v1, num_x) grid to avoid unpacking the block
 index removed instructions but did not change the time. The 1D1V RHS got
 the same treatment; the 1D1V moment kernels are still one thread per
 x-node (their velocity loop is two orders of magnitude shorter).
+
+## Dimension-generic core (2026-11-22)
+
+`dg_core_{1,2,3}d.mojo` were merged into one `dg_core.mojo`, generic over
+`NDIM` with `comptime for` over the axes. The 3D single-accumulator and the
+1D / 2D per-axis derivative arrays are kept as they were (`SINGLE_ACCUMULATOR`
+in the core), and the right-hand side is bit-identical to the old cores in
+all three dimensions. Interleaved A/B on the same machine state, old vs new
+(steps/s, three runs each):
+
+| Bench         | old                 | new                 |
+| ------------- | ------------------- | ------------------- |
+| advection_3d  | 915 / 939 / 835     | 902 / 899 / 917     |
+| euler_2d      | 668 / 658 / 650     | 668 / 664 / 665     |
+| imhd_2d       | 354 / 341 / 361     | 356 / 359 / 347     |
+| imhd_3d       | 56.9 / 55.1 / 57.3  | 55.7 / 57.3 / 56.6  |
+
+The merge also found a deadlock in the element packing from Task 1: the
+guard for a partly filled last block was `barrier(); return`, which puts
+the barrier on a divergent path and hangs the launch whenever the element
+count is not a multiple of `ELEMS_PER_BLOCK`. Every mesh in the suite
+happened to have a multiple of 4 elements. This is very likely what the
+"codegen hangs" at EB = 8 and 16 noted above were (meshes whose element
+count was a multiple of 4 but not of 8), so larger EB values are worth
+re-measuring now that the guard is fixed.

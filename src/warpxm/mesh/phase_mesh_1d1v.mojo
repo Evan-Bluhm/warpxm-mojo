@@ -1,6 +1,6 @@
 # Uniform 1D1V phase-space block mesh on the GPU.
 #
-# Mirrors the configuration-space `BlockMesh1D[P]` but carries both a
+# Mirrors the configuration-space `BlockMesh[1, P]` but carries both a
 # physical-space axis `x ∈ [x_min, x_max]` and a velocity-space axis
 # `v ∈ [v_min, v_max]`. Each phase-space cell is a tensor product of one
 # physical-space cell and one velocity-space cell.
@@ -8,7 +8,7 @@
 # Phase elements are indexed row-major with velocity inner:
 #     phase_e = ex * num_v + ev    for (ex, ev) ∈ [0, num_x) × [0, num_v).
 #
-# Per-element local face directions follow the upstream / `BlockMesh2D`
+# Per-element local face directions follow the upstream / `BlockMesh[2, P]`
 # layout — left/right along x, bottom/top along v:
 #     elem_face_dir[phase_e * 4 + FACE_DIR_LEFT]   → x-negative face
 #     elem_face_dir[phase_e * 4 + FACE_DIR_RIGHT]  → x-positive face
@@ -23,7 +23,8 @@ from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_VLASOV_OUTFLOW
 from warpxm.core.types import Real, INDEX_DTYPE
-from warpxm.mesh.block_2d import (
+from warpxm.variable.phase_state_1d1v import PhaseState1D1V
+from warpxm.mesh.block import (
     GHOST_NEG, GHOST_POS,
     FACE_DIR_LEFT, FACE_DIR_RIGHT, FACE_DIR_BOTTOM, FACE_DIR_TOP,
 )
@@ -251,3 +252,56 @@ struct PhaseMesh1D1V[P_x: Int, P_v: Int]:
             face_bc_host[self.num_x_faces + num_v * num_x + ex] = Int32(BC_VLASOV_OUTFLOW)
         self.face_bc_buf = ctx.enqueue_create_buffer[INDEX_DTYPE](self.num_faces)
         ctx.enqueue_copy(dst_buf=self.face_bc_buf, src_buf=face_bc_host)
+
+    # -----------------------------------------------------------------
+    # Host-side helpers: initial conditions and diagnostics. They own the
+    # phase-node ordering and the buffer layout; component 0 (the
+    # distribution function) is the one read and written.
+    # -----------------------------------------------------------------
+
+    def fill[NC: Int, IC: def(Real, Real) -> Real](
+        self, mut f: PhaseState1D1V[Self.P_x, Self.P_v, NC], ic: IC,
+    ) raises:
+        """Set the distribution function to `ic(x, v)` at every phase node."""
+        var ref_x = NodalBasis1D[Self.P_x].nodes()
+        var ref_v = NodalBasis1D[Self.P_v].nodes()
+        comptime PX1 = Self.P_x + 1
+        comptime PV1 = Self.P_v + 1
+        with f.buf.map_to_host() as h:
+            for ex in range(self.num_x):
+                var xl = self.x_min + Real(ex) * self.dx
+                for ev in range(self.num_v):
+                    var vl = self.v_min + Real(ev) * self.dv
+                    var phase_e = ex * self.num_v + ev
+                    for iv in range(PV1):
+                        var v = vl + (Real(1.0) + ref_v[iv]) * self.jacobian_v
+                        for ix in range(PX1):
+                            var x = xl + (Real(1.0) + ref_x[ix]) * self.jacobian_x
+                            h[((phase_e * PV1 + iv) * PX1 + ix) * NC] = ic(x, v)
+
+    def visit_nodes[NC: Int, Visit: def(Real, Real, Real, Real) -> None](
+        self, mut f: PhaseState1D1V[Self.P_x, Self.P_v, NC], visit: Visit,
+    ) raises:
+        """Call `visit(x, v, w, f_node)` at every phase node. `w` is the
+        phase-space quadrature weight, so `Σ w·g` is `∫∫ g dx dv`."""
+        var ref_x = NodalBasis1D[Self.P_x].nodes()
+        var ref_v = NodalBasis1D[Self.P_v].nodes()
+        var w_x = NodalBasis1D[Self.P_x].weights()
+        var w_v = NodalBasis1D[Self.P_v].weights()
+        comptime PX1 = Self.P_x + 1
+        comptime PV1 = Self.P_v + 1
+        var w_jac = self.jacobian_x * self.jacobian_v
+        with f.buf.map_to_host() as h:
+            for ex in range(self.num_x):
+                var xl = self.x_min + Real(ex) * self.dx
+                for ev in range(self.num_v):
+                    var vl = self.v_min + Real(ev) * self.dv
+                    var phase_e = ex * self.num_v + ev
+                    for iv in range(PV1):
+                        var v = vl + (Real(1.0) + ref_v[iv]) * self.jacobian_v
+                        for ix in range(PX1):
+                            var x = xl + (Real(1.0) + ref_x[ix]) * self.jacobian_x
+                            visit(
+                                x, v, w_x[ix] * w_v[iv] * w_jac,
+                                h[((phase_e * PV1 + iv) * PX1 + ix) * NC],
+                            )

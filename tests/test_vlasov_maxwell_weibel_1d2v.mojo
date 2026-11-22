@@ -50,31 +50,15 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_maxwell_weibel_1d2v.mojo
 
-from std.collections import List
-from std.math import exp, sin, sqrt
+from std.collections import Array, List
+from std.math import exp, sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.maxwell import (
-    Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_BZ,
-)
-from warpxm.apps.vlasovmaxwell import VlasovMaxwell, VLASOV_NC
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, PI, TWO_PI
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.mesh.phase_mesh_1d2v import PhaseMesh1D2V
-from warpxm.spatial.dg_maxwell_1d import DGMaxwellSolver1D
-from warpxm.spatial.dg_vlasov_1d2v import DGVlasovSolver1D2V
-from warpxm.spatial.vlasov_current_source_1d2v import (
-    apply_vlasov_current_source_1d2v,
-)
-from warpxm.spatial.vlasov_moments_1d2v import VlasovMoments1D2V
-from warpxm.temporal.ssprk3_vlasov_maxwell_1d2v import (
-    SSPRK3_VlasovMaxwell_1D2V,
-)
-from warpxm.variable.phase_state_1d2v import PhaseState1D2V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
+from warpxm.physics.maxwell import *
 
 
 comptime P_X: Int = 2
@@ -103,60 +87,30 @@ comptime DT: Real = T_FINAL / Real(N_STEPS)
 comptime SAMPLE_EVERY: Int = 5
 comptime DELTA_BZ: Real = 1.0e-3   # B_z seed amplitude
 
+comptime PhaseState = PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC]
+comptime MaxwellState = DGState[1, P_X, MAXWELL_NC]
+
 
 def compute_total_mass(
-    var ctx: DeviceContext,
-    mut phase_mesh: PhaseMesh1D2V[P_X, P_V1, P_V2],
-    mut q_phase: PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC],
+    phase_mesh: PhaseMesh1D2V[P_X, P_V1, P_V2], mut q_phase: PhaseState,
 ) raises -> Real:
     """M = ∫∫∫ f dv1 dv2 dx via GLL quadrature over the full phase mesh."""
-    var x_weights = NodalBasis1D[P_X].weights()
-    var v1_weights = NodalBasis1D[P_V1].weights()
-    var v2_weights = NodalBasis1D[P_V2].weights()
-    var nodes_per_phase = (P_X + 1) * (P_V1 + 1) * (P_V2 + 1)
     var acc: Real = 0.0
-    with q_phase.buf.map_to_host() as h:
-        for ex in range(NX):
-            for ev1 in range(NV1):
-                for ev2 in range(NV2):
-                    var phase_e = (ex * NV1 + ev1) * NV2 + ev2
-                    for iv2 in range(P_V2 + 1):
-                        for iv1 in range(P_V1 + 1):
-                            for ix in range(P_X + 1):
-                                var local_n = (
-                                    (iv2 * (P_V1 + 1) + iv1) * (P_X + 1) + ix
-                                )
-                                var idx = (
-                                    phase_e * nodes_per_phase + local_n
-                                ) * VLASOV_NC
-                                var f: Real = h[idx]
-                                var w = (
-                                    x_weights[ix] * phase_mesh.jacobian_x
-                                    * v1_weights[iv1] * phase_mesh.jacobian_v1
-                                    * v2_weights[iv2] * phase_mesh.jacobian_v2
-                                )
-                                acc += w * f
+    def add(x: Real, v1: Real, v2: Real, w: Real, f: Real) {mut acc}:
+        acc += w * f
+    phase_mesh.visit_nodes(q_phase, add)
     return acc
 
 
 def bz_sin_amplitude(
-    var ctx: DeviceContext,
-    mut x_mesh: BlockMesh1D[P_X],
-    mut q_maxwell: DGState1D[P_X, MAXWELL_NC],
+    x_mesh: BlockMesh[1, P_X], mut q_maxwell: MaxwellState,
 ) raises -> Real:
     """Amplitude of the sin(kx) Fourier mode of B_z: (2/L) ∫ B_z sin(kx) dx."""
-    var x_weights = NodalBasis1D[P_X].weights()
-    var x_nodes = NodalBasis1D[P_X].nodes()
     var k_wave = TWO_PI / (X_MAX - X_MIN)
     var acc: Real = 0.0
-    with q_maxwell.buf.map_to_host() as h:
-        for ex in range(NX):
-            var xl = X_MIN + Real(ex) * x_mesh.dx
-            for ix in range(P_X + 1):
-                var x = xl + (Real(1.0) + x_nodes[ix]) * x_mesh.jacobian
-                var node_x = ex * (P_X + 1) + ix
-                var bz: Real = h[node_x * MAXWELL_NC + IDX_BZ]
-                acc += x_weights[ix] * x_mesh.jacobian * bz * sin(k_wave * x)
+    def add(x: Real, w: Real, v: Array[Real, MAXWELL_NC]) {mut acc, imm}:
+        acc += w * v[IDX_BZ] * sin(k_wave * x)
+    x_mesh.visit_nodes(q_maxwell, add)
     return Real(2.0) * acc / (X_MAX - X_MIN)
 
 
@@ -172,14 +126,12 @@ def main() raises:
         num_x=NX, num_v1=NV1, num_v2=NV2,
         periodic_x=True,
     )
-    var x_mesh = BlockMesh1D[P_X](
+    var x_mesh = BlockMesh[1, P_X](
         ctx, X_MIN, X_MAX, NX, periodic=True,
     )
 
-    var q_phase = PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC](
-        ctx, NX, NV1, NV2,
-    )
-    var q_maxwell = DGState1D[P_X, MAXWELL_NC](ctx, NX)
+    var q_phase = PhaseState(ctx, NX, NV1, NV2)
+    var q_maxwell = MaxwellState(ctx, NX)
 
     # IC: f₀(v1, v2) = norm · exp(-v1²/σ_par² - v2²/σ_perp²), uniform in x.
     # Normalisation chosen so ∫∫ f dv1 dv2 = 1 ⇒ ω_p² = n α² / ε₀ = 1.
@@ -187,58 +139,24 @@ def main() raises:
     var sigma_perp = sqrt(SIGMA_PERP_SQ)
     var norm = Real(1.0) / (PI * sigma_par * sigma_perp)
 
-    var ref_x_nodes = NodalBasis1D[P_X].nodes()
-    var ref_v1_nodes = NodalBasis1D[P_V1].nodes()
-    var ref_v2_nodes = NodalBasis1D[P_V2].nodes()
-    var p_host = ctx.enqueue_create_host_buffer[Real.dtype](q_phase.buf_len)
-    var nodes_per_phase = (P_X + 1) * (P_V1 + 1) * (P_V2 + 1)
-    for ex in range(NX):
-        for ev1 in range(NV1):
-            var v1l = -V_MAX + Real(ev1) * phase_mesh.dv1
-            for ev2 in range(NV2):
-                var v2l = -V_MAX + Real(ev2) * phase_mesh.dv2
-                var phase_e = (ex * NV1 + ev1) * NV2 + ev2
-                for iv2 in range(P_V2 + 1):
-                    var v2 = (
-                        v2l
-                        + (Real(1.0) + ref_v2_nodes[iv2])
-                          * phase_mesh.jacobian_v2
-                    )
-                    for iv1 in range(P_V1 + 1):
-                        var v1 = (
-                            v1l
-                            + (Real(1.0) + ref_v1_nodes[iv1])
-                              * phase_mesh.jacobian_v1
-                        )
-                        for ix in range(P_X + 1):
-                            var local_n = (
-                                (iv2 * (P_V1 + 1) + iv1) * (P_X + 1) + ix
-                            )
-                            var idx = (
-                                phase_e * nodes_per_phase + local_n
-                            ) * VLASOV_NC
-                            p_host[idx] = norm * exp(
-                                -v1 * v1 / SIGMA_PAR_SQ
-                                - v2 * v2 / SIGMA_PERP_SQ
-                            )
-    ctx.enqueue_copy(dst_buf=q_phase.buf, src_buf=p_host)
+    def maxwellian(x: Real, v1: Real, v2: Real) {imm} -> Real:
+        return norm * exp(
+            -v1 * v1 / SIGMA_PAR_SQ
+            - v2 * v2 / SIGMA_PERP_SQ
+        )
+    phase_mesh.fill(q_phase, maxwellian)
 
-    # IC: B_z(x, 0) = δ · sin(2π x); other Maxwell components zero.
-    var m_host = ctx.enqueue_create_host_buffer[Real.dtype](q_maxwell.buf_len)
-    for k in range(q_maxwell.buf_len):
-        m_host[k] = Real(0.0)
-    for ex in range(NX):
-        var xl = X_MIN + Real(ex) * x_mesh.dx
-        for ix in range(P_X + 1):
-            var x = xl + (Real(1.0) + ref_x_nodes[ix]) * x_mesh.jacobian
-            var node_x = ex * (P_X + 1) + ix
-            m_host[node_x * MAXWELL_NC + IDX_BZ] = DELTA_BZ * sin(TWO_PI * x)
-    ctx.enqueue_copy(dst_buf=q_maxwell.buf, src_buf=m_host)
+    # IC: B_z(x, 0) = δ sin(kx), all other field components zero.
+    def seed(x: Real) -> Array[Real, MAXWELL_NC]:
+        var v = Array[Real, MAXWELL_NC](fill=Real(0.0))
+        v[IDX_BZ] = DELTA_BZ * sin(TWO_PI * x)
+        return v^
+    x_mesh.fill(q_maxwell, seed)
     ctx.synchronize()
 
     # Initial diagnostics.
-    var m0 = compute_total_mass(ctx, phase_mesh, q_phase)
-    var bz0 = bz_sin_amplitude(ctx, x_mesh, q_maxwell)
+    var m0 = compute_total_mass(phase_mesh, q_phase)
+    var bz0 = bz_sin_amplitude(x_mesh, q_maxwell)
     print("Weibel IC: M =", m0, " B_z sin(kx) amplitude =", bz0)
 
     # --- solvers + stepper ---
@@ -249,19 +167,19 @@ def main() raises:
     )
     var maxwell_app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
     var spatial_vlasov = DGVlasovSolver1D2V[P_X, P_V1, P_V2](vlasov_app)
-    var spatial_maxwell = DGMaxwellSolver1D[P_X](maxwell_app)
+    var spatial_maxwell = DGMaxwellSolver[1, P_X](maxwell_app)
     var moments = VlasovMoments1D2V[P_X, P_V1, P_V2]()
     var stepper = SSPRK3_VlasovMaxwell_1D2V[P_X, P_V1, P_V2](
         ctx, NX, NV1, NV2,
     )
-    var jx_current = DGState1D[P_X, 1](ctx, NX)
-    var jy_current = DGState1D[P_X, 1](ctx, NX)
+    var jx_current = DGState[1, P_X, 1](ctx, NX)
+    var jy_current = DGState[1, P_X, 1](ctx, NX)
 
     def compute_joint_rhs(
-        mut qp_in: PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC],
-        mut qm_in: DGState1D[P_X, MAXWELL_NC],
-        mut qp_out: PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC],
-        mut qm_out: DGState1D[P_X, MAXWELL_NC],
+        mut qp_in: PhaseState,
+        mut qm_in: MaxwellState,
+        mut qp_out: PhaseState,
+        mut qm_out: MaxwellState,
     ) raises {mut jx_current, mut jy_current, imm}:
         spatial_vlasov.compute_rhs(ctx, phase_mesh, qp_in, qm_in, qp_out)
         spatial_maxwell.compute_rhs(ctx, x_mesh, qm_in, qm_out)
@@ -283,7 +201,7 @@ def main() raises:
         t += DT
         if (step + 1) % SAMPLE_EVERY == 0:
             ctx.synchronize()
-            var b_now = bz_sin_amplitude(ctx, x_mesh, q_maxwell)
+            var b_now = bz_sin_amplitude(x_mesh, q_maxwell)
             if b_prev * b_now < 0.0:
                 # Linear interpolation of the zero crossing.
                 crossings.append(
@@ -292,7 +210,7 @@ def main() raises:
             b_prev = b_now
             t_prev = t
             b_final = b_now
-    var m1 = compute_total_mass(ctx, phase_mesh, q_phase)
+    var m1 = compute_total_mass(phase_mesh, q_phase)
 
     # Successive zero crossings are half a period apart.
     assert_true(len(crossings) == 4, "expected four zero crossings of B_z")

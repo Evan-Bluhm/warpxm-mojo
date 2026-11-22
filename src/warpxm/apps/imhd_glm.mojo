@@ -120,6 +120,21 @@ struct ImhdGLM(ImplicitlyCopyable, Movable):
     # ------------------------------------------------------------------
 
     @staticmethod
+    @always_inline
+    def max_signal_speed_static(
+        q: Array[Real, MHD_GLM_NC],
+        gamma: Real, rho_min: Real, press_min: Real, c_h: Real,
+    ) -> Real:
+        """The ideal-MHD bound or the cleaning speed `c_h`, whichever is
+        larger. For CFL time-step selection."""
+        var q_mhd: Array[Real, MHD_NC] = Array[Real, MHD_NC](fill=Real(0.0))
+        comptime for k in range(MHD_NC):
+            q_mhd[k] = q[k]
+        return fmax(
+            IMHD.max_signal_speed_static(q_mhd, gamma, rho_min, press_min), c_h,
+        )
+
+    @staticmethod
     def numerical_flux_static(
         q_l: Array[Real, MHD_GLM_NC],
         q_r: Array[Real, MHD_GLM_NC],

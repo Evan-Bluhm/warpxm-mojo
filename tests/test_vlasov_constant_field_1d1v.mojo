@@ -22,16 +22,9 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.vlasovmaxwell import (
-    VlasovMaxwell, VLASOV_NC, VLASOV_AUX_NC, AUX_EX,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.dg_vlasov_1d1v import DGVlasovSolver1D1V
-from warpxm.temporal.ssprk3_1d1v import SSPRK3_1D1V
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
+from warpxm.apps.vlasovmaxwell import VLASOV_AUX_NC, AUX_EX
 
 
 comptime P_X: Int = 2
@@ -69,23 +62,12 @@ def main() raises:
     )
 
     var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    var aux = DGState1D[P_X, VLASOV_AUX_NC](ctx, NX)
+    var aux = DGState[1, P_X, VLASOV_AUX_NC](ctx, NX)
 
     # --- IC: f₀(x, v) = exp(-v²/σ²) — x-independent Maxwellian ---
-    var ref_v_nodes = NodalBasis1D[P_V].nodes()
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for ex in range(NX):
-        for ev in range(NV):
-            var vl = V_MIN + Real(ev) * mesh.dv
-            for ix in range(P_X + 1):
-                for iv in range(P_V + 1):
-                    var v = vl + (Real(1.0) + ref_v_nodes[iv]) * mesh.jacobian_v
-                    var phase_e = ex * NV + ev
-                    var idx = (
-                        (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                    ) * VLASOV_NC
-                    host[idx] = f_maxwellian(v)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real, v: Real) -> Real:
+        return f_maxwellian(v)
+    mesh.fill(q, initial)
 
     # --- aux: E_x = E0 everywhere, other components zero ---
     var aux_host = ctx.enqueue_create_host_buffer[Real.dtype](aux.buf_len)
@@ -129,46 +111,31 @@ def main() raises:
     # --- error analysis: f(x, v, T) = f₀(v - a_v · T) ---
     var a_v = CHARGE_MASS_RATIO / SKIN_DEPTH_NORM * E0
     var v_shift = a_v * T_FINAL
-    var x_weights = NodalBasis1D[P_X].weights()
-    var v_weights = NodalBasis1D[P_V].weights()
     var acc: Real = 0.0
     var max_abs_err: Real = 0.0
-    # Also check x-independence: compute L_∞ of f(x, v, T) − f(x=x₀, v, T) over
-    # x at every (ev, iv); should be ~ kernel-truncation noise.
+    def compare(x: Real, v: Real, w: Real, f_num: Real) {mut acc, mut max_abs_err, imm}:
+        var d = f_num - f_maxwellian(v - v_shift)
+        max_abs_err = fmax(max_abs_err, fabs(d))
+        acc += w * d * d
+    mesh.visit_nodes(q, compare)
+    var l2 = sqrt(acc)
+
+    # Also check x-independence: L_∞ of f(x, v, T) − f(x=x₀, v, T) over x at
+    # every (ev, iv), with (ex, ix) = (0, 0) as the reference; should be
+    # ~ kernel-truncation noise.
     var max_x_variation: Real = 0.0
     with q.buf.map_to_host() as h:
         for ev in range(NV):
-            var vl = V_MIN + Real(ev) * mesh.dv
             for iv in range(P_V + 1):
-                var v = vl + (Real(1.0) + ref_v_nodes[iv]) * mesh.jacobian_v
-                var f_exact = f_maxwellian(v - v_shift)
-                # Sample at ex=0, ix=0 as the reference for x-comparison.
-                var phase_e_ref = 0 * NV + ev
-                var idx_ref = (
-                    (phase_e_ref * (P_V + 1) + iv) * (P_X + 1) + 0
-                ) * VLASOV_NC
-                var f_ref = h[idx_ref]
+                var f_ref = h[((ev * (P_V + 1) + iv) * (P_X + 1)) * VLASOV_NC]
                 for ex in range(NX):
                     for ix in range(P_X + 1):
-                        var phase_e = ex * NV + ev
                         var idx = (
-                            (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
+                            ((ex * NV + ev) * (P_V + 1) + iv) * (P_X + 1) + ix
                         ) * VLASOV_NC
-                        var f_num = h[idx]
-                        var d = f_num - f_exact
-                        var ad = d if d >= 0.0 else -d
-                        if ad > max_abs_err:
-                            max_abs_err = ad
-                        var dvar = f_num - f_ref
-                        var advar = dvar if dvar >= 0.0 else -dvar
-                        if advar > max_x_variation:
-                            max_x_variation = advar
-                        var w = (
-                            x_weights[ix] * mesh.jacobian_x
-                            * v_weights[iv] * mesh.jacobian_v
+                        max_x_variation = fmax(
+                            max_x_variation, fabs(h[idx] - f_ref),
                         )
-                        acc += w * d * d
-    var l2 = acc ** Real(0.5)
 
     print(
         "constant-field 1D1V: steps =", nsteps,

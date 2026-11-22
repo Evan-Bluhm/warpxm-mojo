@@ -18,18 +18,13 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_moments_1d2v.mojo
 
-from std.math import exp, sqrt, erf
+from std.math import exp, erf
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.vlasovmaxwell import VLASOV_NC
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, PI
-from warpxm.mesh.phase_mesh_1d2v import PhaseMesh1D2V
-from warpxm.spatial.vlasov_moments_1d2v import VlasovMoments1D2V
-from warpxm.variable.phase_state_1d2v import PhaseState1D2V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
 
 
 comptime P_X: Int = 1
@@ -63,42 +58,14 @@ def main() raises:
     var q = PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC](ctx, NX, NV1, NV2)
 
     # IC: f(x, v1, v2) = exp(-(v1² + v2²) / σ²), x-independent.
-    var ref_v1_nodes = NodalBasis1D[P_V1].nodes()
-    var ref_v2_nodes = NodalBasis1D[P_V2].nodes()
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    var nodes_per_phase = (P_X + 1) * (P_V1 + 1) * (P_V2 + 1)
-    for ex in range(NX):
-        for ev1 in range(NV1):
-            var v1l = V1_MIN + Real(ev1) * mesh.dv1
-            for ev2 in range(NV2):
-                var v2l = V2_MIN + Real(ev2) * mesh.dv2
-                var phase_e = (ex * NV1 + ev1) * NV2 + ev2
-                for iv2 in range(P_V2 + 1):
-                    var v2 = (
-                        v2l
-                        + (Real(1.0) + ref_v2_nodes[iv2]) * mesh.jacobian_v2
-                    )
-                    for iv1 in range(P_V1 + 1):
-                        var v1 = (
-                            v1l
-                            + (Real(1.0) + ref_v1_nodes[iv1])
-                              * mesh.jacobian_v1
-                        )
-                        for ix in range(P_X + 1):
-                            var local_n = (
-                                (iv2 * (P_V1 + 1) + iv1) * (P_X + 1) + ix
-                            )
-                            var idx = (
-                                phase_e * nodes_per_phase + local_n
-                            ) * VLASOV_NC
-                            host[idx] = exp(-(v1 * v1 + v2 * v2) / SIGMA_SQ)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
-    ctx.synchronize()
+    def maxwellian(x: Real, v1: Real, v2: Real) -> Real:
+        return exp(-(v1 * v1 + v2 * v2) / SIGMA_SQ)
+    mesh.fill(q, maxwellian)
 
-    var rho = DGState1D[P_X, 1](ctx, NX)
-    var jx = DGState1D[P_X, 1](ctx, NX)
-    var jy = DGState1D[P_X, 1](ctx, NX)
-    var e_dens = DGState1D[P_X, 1](ctx, NX)
+    var rho = DGState[1, P_X, 1](ctx, NX)
+    var jx = DGState[1, P_X, 1](ctx, NX)
+    var jy = DGState[1, P_X, 1](ctx, NX)
+    var e_dens = DGState[1, P_X, 1](ctx, NX)
     var moments = VlasovMoments1D2V[P_X, P_V1, P_V2]()
     moments.zeroth_moment(ctx, mesh, q, rho)
     moments.first_moment_v1(ctx, mesh, q, jx)

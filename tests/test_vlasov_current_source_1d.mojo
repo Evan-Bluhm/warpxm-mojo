@@ -8,22 +8,14 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_current_source_1d.mojo
 
-from std.math import exp, sqrt, erf
+from std.math import exp
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.maxwell import MAXWELL_NC, IDX_EX
-from warpxm.apps.vlasovmaxwell import VLASOV_NC
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, PI
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.vlasov_current_source_1d import (
-    apply_vlasov_current_source_1d,
-)
-from warpxm.spatial.vlasov_moments_1d1v import VlasovMoments1D1V
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
+from warpxm.physics.maxwell import *
 
 
 comptime P_X: Int = 2
@@ -49,26 +41,14 @@ def main() raises:
     var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
 
     # IC: v-shifted Maxwellian, x-independent ⇒ J is the same at every x-node.
-    var ref_v_nodes = NodalBasis1D[P_V].nodes()
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for ex in range(NX):
-        for ev in range(NV):
-            var vl = Real(-3.0) + Real(ev) * mesh.dv
-            for ix in range(P_X + 1):
-                for iv in range(P_V + 1):
-                    var v = vl + (Real(1.0) + ref_v_nodes[iv]) * mesh.jacobian_v
-                    var phase_e = ex * NV + ev
-                    var idx = (
-                        (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                    ) * VLASOV_NC
-                    var dv_shift = v - U_SHIFT
-                    host[idx] = exp(-dv_shift * dv_shift / SIGMA_SQ)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
-    ctx.synchronize()
+    def shifted(x: Real, v: Real) -> Real:
+        var dv_shift = v - U_SHIFT
+        return exp(-dv_shift * dv_shift / SIGMA_SQ)
+    mesh.fill(q, shifted)
 
     # Build J via first-moment kernel.
     var moments = VlasovMoments1D1V[P_X, P_V]()
-    var j = DGState1D[P_X, 1](ctx, NX)
+    var j = DGState[1, P_X, 1](ctx, NX)
     moments.first_moment(ctx, mesh, q, j)
     ctx.synchronize()
 
@@ -79,7 +59,7 @@ def main() raises:
 
     # Build a Maxwell RHS scratch buffer with a known starting pattern,
     # so we can verify the source is *added* (not overwritten).
-    var rhs_maxwell = DGState1D[P_X, MAXWELL_NC](ctx, NX)
+    var rhs_maxwell = DGState[1, P_X, MAXWELL_NC](ctx, NX)
     var rhs_host = ctx.enqueue_create_host_buffer[Real.dtype](rhs_maxwell.buf_len)
     var node_count = NX * (P_X + 1)
     for n in range(node_count):

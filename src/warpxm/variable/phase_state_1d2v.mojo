@@ -7,7 +7,7 @@
 #     phase_e = (ex · num_v1 + ev1) · num_v2 + ev2.
 #
 # Within a phase element, GLL nodes follow the axis-2 outer / axis-1
-# middle / axis-0 inner convention used by `spatial/dg_core_3d.mojo`,
+# middle / axis-0 inner convention used by `spatial/dg_core.mojo` in 3D,
 # so the eventual 1D2V DG kernel can mirror the 3D pattern closely.
 # Adopting it now keeps the indexing consistent across the port.
 #

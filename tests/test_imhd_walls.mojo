@@ -27,25 +27,13 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_imhd_walls.mojo
 
+from std.collections import Array
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.imhd import (
-    IMHD, MHD_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
-    IDX_BX, IDX_BY, IDX_BZ,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import BC_WALL_FREESLIP, BC_PEC_WALL
-from warpxm.core.types import Real
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.spatial.dg_imhd_2d import DGImhdSolver2D
-from warpxm.spatial.dg_imhd_3d import DGImhdSolver3D
-from warpxm.temporal.ssprk3_2d import SSPRK3_2D
-from warpxm.temporal.ssprk3_3d import SSPRK3_3D
-from warpxm.variable.state_2d import DGState2D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.prelude import *
+from warpxm.physics.imhd import *
 
 
 comptime P: Int = 2
@@ -64,19 +52,21 @@ comptime N_STEPS: Int = 100
 comptime DT: Real = 2.0e-3     # t_final = 0.2
 
 
-def _fill_uniform(mut host: Array[Real, MHD_NC]):
-    host[IDX_RHO] = RHO0
-    host[IDX_MX] = RHO0 * UX
-    host[IDX_MY] = RHO0 * UY
-    host[IDX_MZ] = RHO0 * UZ
-    host[IDX_E] = (
+def _uniform() -> Array[Real, MHD_NC]:
+    var v = Array[Real, MHD_NC](fill=Real(0.0))
+    v[IDX_RHO] = RHO0
+    v[IDX_MX] = RHO0 * UX
+    v[IDX_MY] = RHO0 * UY
+    v[IDX_MZ] = RHO0 * UZ
+    v[IDX_E] = (
         P0 / (GAMMA - Real(1.0))
         + Real(0.5) * RHO0 * (UX * UX + UY * UY + UZ * UZ)
         + Real(0.5) * (BX * BX + BY * BY + BZ * BZ)
     )
-    host[IDX_BX] = BX
-    host[IDX_BY] = BY
-    host[IDX_BZ] = BZ
+    v[IDX_BX] = BX
+    v[IDX_BY] = BY
+    v[IDX_BZ] = BZ
+    return v^
 
 
 def _check(
@@ -124,133 +114,86 @@ def _check(
 
 
 def _run_2d(var ctx: DeviceContext, bc: Int) raises:
-    var mesh = BlockMesh2D[P](
+    comptime State = DGState[2, P, MHD_NC]
+    var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=N2, ny=N2, periodic_x=False, periodic_y=False,
         bc_left=bc, bc_right=bc, bc_bottom=bc, bc_top=bc,
     )
-    var q = DGState2D[P, MHD_NC](ctx, mesh.num_elements)
-    var P1 = NodalBasis1D[P].num_nodes
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1
+    var q = State(ctx, mesh.num_elements)
 
-    var uniform = Array[Real, MHD_NC](fill=Real(0.0))
-    _fill_uniform(uniform)
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for n in range(mesh.num_elements * nodes_per_elem):
-        for c in range(MHD_NC):
-            host[n * MHD_NC + c] = uniform[c]
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def uniform_ic(x: Real, y: Real) -> Array[Real, MHD_NC]:
+        return _uniform()
+    mesh.fill(q, uniform_ic)
 
-    var spatial = DGImhdSolver2D[P](
+    var spatial = DGImhdSolver[2, P](
         IMHD(
             gas_gamma=GAMMA, min_density=Real(1e-12),
             min_pressure=Real(1e-12), cfl_max=Real(0.5),
         )
     )
-    var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[2, P, MHD_NC](ctx, mesh.num_elements)
 
-    def compute_rhs(
-        mut q_in: DGState2D[P, MHD_NC],
-        mut q_out: DGState2D[P, MHD_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def no_adjust(mut q_: DGState2D[P, MHD_NC]) raises {imm}:
-        pass
-
     for _ in range(N_STEPS):
-        stepper.step(ctx, q, DT, compute_rhs, no_adjust)
+        stepper.step(ctx, q, DT, compute_rhs, no_op_adjust[2, P, MHD_NC])
     ctx.synchronize()
 
-    var ja = mesh.jacobian_x * mesh.jacobian_y
-    var mass: Real = 0.0
-    var en: Real = 0.0
-    var mx: Real = 0.0
-    var my: Real = 0.0
-    var mz: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for e in range(mesh.num_elements):
-            for jn in range(P1):
-                for in_ in range(P1):
-                    var b = (e * nodes_per_elem + jn * P1 + in_) * MHD_NC
-                    var jw = ja * weights[in_] * weights[jn]
-                    mass += jw * h[b + IDX_RHO]
-                    en += jw * h[b + IDX_E]
-                    mx += jw * h[b + IDX_MX]
-                    my += jw * h[b + IDX_MY]
-                    mz += jw * h[b + IDX_MZ]
     # Unit box, uniform IC: the initial integrals are the nodal values.
+    var uniform = _uniform()
     _check(
-        "2D", bc, uniform[IDX_RHO], mass, uniform[IDX_E], en,
-        uniform[IDX_MX], mx, uniform[IDX_MY], my, uniform[IDX_MZ], mz, False,
+        "2D", bc,
+        uniform[IDX_RHO], mesh.integrate(q, IDX_RHO),
+        uniform[IDX_E], mesh.integrate(q, IDX_E),
+        uniform[IDX_MX], mesh.integrate(q, IDX_MX),
+        uniform[IDX_MY], mesh.integrate(q, IDX_MY),
+        uniform[IDX_MZ], mesh.integrate(q, IDX_MZ),
+        False,
     )
 
 
 def _run_3d(var ctx: DeviceContext, bc: Int) raises:
-    var mesh = BlockMesh3D[P](
+    comptime State = DGState[3, P, MHD_NC]
+    var mesh = BlockMesh[3, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=N3, ny=N3, nz=N3,
         periodic_x=False, periodic_y=False, periodic_z=False,
         bc_left=bc, bc_right=bc, bc_bottom=bc, bc_top=bc,
         bc_down=bc, bc_up=bc,
     )
-    var q = DGState3D[P, MHD_NC](ctx, mesh.num_elements)
-    var P1 = NodalBasis1D[P].num_nodes
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1 * P1
+    var q = State(ctx, mesh.num_elements)
 
-    var uniform = Array[Real, MHD_NC](fill=Real(0.0))
-    _fill_uniform(uniform)
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for n in range(mesh.num_elements * nodes_per_elem):
-        for c in range(MHD_NC):
-            host[n * MHD_NC + c] = uniform[c]
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def uniform_ic(x: Real, y: Real, z: Real) -> Array[Real, MHD_NC]:
+        return _uniform()
+    mesh.fill(q, uniform_ic)
 
-    var spatial = DGImhdSolver3D[P](
+    var spatial = DGImhdSolver[3, P](
         IMHD(
             gas_gamma=GAMMA, min_density=Real(1e-12),
             min_pressure=Real(1e-12), cfl_max=Real(0.5),
         )
     )
-    var stepper = SSPRK3_3D[P, MHD_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[3, P, MHD_NC](ctx, mesh.num_elements)
 
-    def compute_rhs(
-        mut q_in: DGState3D[P, MHD_NC],
-        mut q_out: DGState3D[P, MHD_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def no_adjust(mut q_: DGState3D[P, MHD_NC]) raises {imm}:
-        pass
-
     for _ in range(N_STEPS):
-        stepper.step(ctx, q, DT, compute_rhs, no_adjust)
+        stepper.step(ctx, q, DT, compute_rhs, no_op_adjust[3, P, MHD_NC])
     ctx.synchronize()
 
-    var jv = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
-    var mass: Real = 0.0
-    var en: Real = 0.0
-    var mx: Real = 0.0
-    var my: Real = 0.0
-    var mz: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for e in range(mesh.num_elements):
-            for kn in range(P1):
-                for jn in range(P1):
-                    for in_ in range(P1):
-                        var n = kn * P1 * P1 + jn * P1 + in_
-                        var b = (e * nodes_per_elem + n) * MHD_NC
-                        var jw = jv * weights[in_] * weights[jn] * weights[kn]
-                        mass += jw * h[b + IDX_RHO]
-                        en += jw * h[b + IDX_E]
-                        mx += jw * h[b + IDX_MX]
-                        my += jw * h[b + IDX_MY]
-                        mz += jw * h[b + IDX_MZ]
+    # Unit box, uniform IC: the initial integrals are the nodal values.
+    var uniform = _uniform()
     _check(
-        "3D", bc, uniform[IDX_RHO], mass, uniform[IDX_E], en,
-        uniform[IDX_MX], mx, uniform[IDX_MY], my, uniform[IDX_MZ], mz, True,
+        "3D", bc,
+        uniform[IDX_RHO], mesh.integrate(q, IDX_RHO),
+        uniform[IDX_E], mesh.integrate(q, IDX_E),
+        uniform[IDX_MX], mesh.integrate(q, IDX_MX),
+        uniform[IDX_MY], mesh.integrate(q, IDX_MY),
+        uniform[IDX_MZ], mesh.integrate(q, IDX_MZ),
+        True,
     )
 
 

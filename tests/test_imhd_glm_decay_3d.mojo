@@ -6,22 +6,14 @@
 # parabolic damping decays ψ exponentially. Validates that the 3D GLM
 # kernel handles all three axes correctly.
 
+from std.collections import Array
 from std.math import exp
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.imhd_glm import ImhdGLM, MHD_GLM_NC, IDX_PSI
-from warpxm.apps.imhd import (
-    IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.spatial.dg_imhd_glm_3d import DGImhdGLMSolver3D
-from warpxm.spatial.imhd_glm_source_3d import apply_glm_damping_3d
-from warpxm.temporal.ssprk3_3d import SSPRK3_3D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.prelude import *
+from warpxm.physics.imhd_glm import *
 
 
 comptime P: Int = 2
@@ -34,119 +26,62 @@ comptime SIGMA: Real = 0.1
 comptime C_H: Real = 1.0
 comptime C_P_SQ: Real = 0.05   # strong damping
 comptime DT: Real = 5.0e-3
+comptime State = DGState[3, P, MHD_GLM_NC]
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh3D[P](
+    var mesh = BlockMesh[3, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, nz=NZ,
     )
-    var q = DGState3D[P, MHD_GLM_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1 * P1
-
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for k in range(NZ):
-        var zl = mesh.z_min + Real(k) * mesh.dz
-        for j in range(NY):
-            var yl = mesh.y_min + Real(j) * mesh.dy
-            for i in range(NX):
-                var xl = mesh.x_min + Real(i) * mesh.dx
-                var e = k * NX * NY + j * NX + i
-                for kn in range(P1):
-                    var z = zl + (Real(1.0) + ref_nodes[kn]) * mesh.jacobian_z
-                    for jn in range(P1):
-                        var y = yl + (Real(1.0) + ref_nodes[jn]) * mesh.jacobian_y
-                        for in_ in range(P1):
-                            var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                            var r2 = (x - Real(0.5)) * (x - Real(0.5))
-                            r2 += (y - Real(0.5)) * (y - Real(0.5))
-                            r2 += (z - Real(0.5)) * (z - Real(0.5))
-                            var Bx_bump = DELTA * exp(-r2 / (SIGMA * SIGMA))
-                            var rho: Real = 1.0
-                            var pp: Real = 1.0
-                            var bsq = Bx_bump * Bx_bump
-                            var E_tot = pp / (GAMMA - Real(1.0)) + Real(0.5) * bsq
-                            var n = kn * P1 * P1 + jn * P1 + in_
-                            var b = (e * nodes_per_elem + n) * MHD_GLM_NC
-                            host[b + IDX_RHO] = rho
-                            host[b + IDX_MX] = Real(0.0)
-                            host[b + IDX_MY] = Real(0.0)
-                            host[b + IDX_MZ] = Real(0.0)
-                            host[b + IDX_E] = E_tot
-                            host[b + IDX_BX] = Bx_bump
-                            host[b + IDX_BY] = Real(0.0)
-                            host[b + IDX_BZ] = Real(0.0)
-                            host[b + IDX_PSI] = Real(0.0)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real, y: Real, z: Real) -> Array[Real, MHD_GLM_NC]:
+        var r2 = (x - Real(0.5)) * (x - Real(0.5))
+        r2 += (y - Real(0.5)) * (y - Real(0.5))
+        r2 += (z - Real(0.5)) * (z - Real(0.5))
+        var bx_bump = DELTA * exp(-r2 / (SIGMA * SIGMA))
+        var v = Array[Real, MHD_GLM_NC](fill=Real(0.0))
+        v[IDX_RHO] = 1.0
+        v[IDX_E] = Real(1.0) / (GAMMA - Real(1.0)) + Real(0.5) * bx_bump * bx_bump
+        v[IDX_BX] = bx_bump
+        return v^
+    mesh.fill(q, initial)
 
     var app = ImhdGLM(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
         c_h=C_H, c_p_sq=C_P_SQ,
     )
-    var spatial = DGImhdGLMSolver3D[P](app)
-    var stepper = SSPRK3_3D[P, MHD_GLM_NC](ctx, mesh.num_elements)
+    var spatial = DGImhdGLMSolver[3, P](app)
+    var stepper = SSPRK3[3, P, MHD_GLM_NC](ctx, mesh.num_elements)
 
-    var jv = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
+    def psi_sq(v: Array[Real, MHD_GLM_NC]) -> Real:
+        return v[IDX_PSI] * v[IDX_PSI]
 
-    var psi2_max: Real = 0.0
-
-    def compute_rhs(
-        mut q_in: DGState3D[P, MHD_GLM_NC],
-        mut q_out: DGState3D[P, MHD_GLM_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
-        apply_glm_damping_3d[P, MHD_GLM_NC](ctx, q_in, q_out, C_H, C_P_SQ)
-
-    def no_adjust(mut q_: DGState3D[P, MHD_GLM_NC]) raises {imm}:
-        pass
+        apply_glm_damping(ctx, q_in, q_out, C_H, C_P_SQ)
 
     var t: Real = 0.0
     var t_charge: Real = 0.5
     var t_final: Real = 2.0
     while t < t_charge - Real(0.5) * DT:
-        stepper.step(ctx, q, DT, compute_rhs, no_adjust)
+        stepper.step(ctx, q, DT, compute_rhs, no_op_adjust[3, P, MHD_GLM_NC])
         t += DT
     ctx.synchronize()
-    with q.buf.map_to_host() as h:
-        for k in range(NZ):
-            for j in range(NY):
-                for i in range(NX):
-                    var e = k * NX * NY + j * NX + i
-                    for kn in range(P1):
-                        for jn in range(P1):
-                            for in_ in range(P1):
-                                var n = kn * P1 * P1 + jn * P1 + in_
-                                var b = (e * nodes_per_elem + n) * MHD_GLM_NC
-                                var jw = jv * weights[in_] * weights[jn] * weights[kn]
-                                psi2_max += jw * h[b + IDX_PSI] * h[b + IDX_PSI]
+    var psi2_max = mesh.integrate_fn(q, psi_sq)
     print("t =", t, ": ∫ψ²  =", psi2_max, "  (charging done)")
 
     while t < t_final - Real(0.5) * DT:
-        stepper.step(ctx, q, DT, compute_rhs, no_adjust)
+        stepper.step(ctx, q, DT, compute_rhs, no_op_adjust[3, P, MHD_GLM_NC])
         t += DT
     ctx.synchronize()
 
-    var psi2_end: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for k in range(NZ):
-            for j in range(NY):
-                for i in range(NX):
-                    var e = k * NX * NY + j * NX + i
-                    for kn in range(P1):
-                        for jn in range(P1):
-                            for in_ in range(P1):
-                                var n = kn * P1 * P1 + jn * P1 + in_
-                                var b = (e * nodes_per_elem + n) * MHD_GLM_NC
-                                var jw = jv * weights[in_] * weights[jn] * weights[kn]
-                                psi2_end += jw * h[b + IDX_PSI] * h[b + IDX_PSI]
+    var psi2_end = mesh.integrate_fn(q, psi_sq)
 
     print("t =", t, ": ∫ψ²  =", psi2_end)
     print("ψ² decay ratio (end / charging peak):", psi2_end / psi2_max)

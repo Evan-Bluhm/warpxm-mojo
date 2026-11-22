@@ -37,8 +37,8 @@ the same property under the same CFL.
 * **Three RHS evaluations** per step (one per stage).
 * **GPU-friendly**: each stage is a kernel launch + an `enqueue_copy`
   for the snapshot. Two shared kernels live in
-  `temporal/ssprk3.mojo` and are reused by every `SSPRK3_*` variant
-  (including the plasma / two-fluid steppers):
+  `temporal/ssprk3.mojo` and are reused by every SSPRK3 variant
+  (including the plasma, two-fluid and kinetic steppers):
     * `_euler_step_kernel` — `output[i] = x[i] + dt · rhs[i]` (used
       for stage 1, where aliasing prevents the more general combine).
     * `_ssprk3_combine_kernel` — `output[i] = a · u₀[i] + b · (u_stage[i]
@@ -47,33 +47,47 @@ the same property under the same CFL.
 
 ## Steppers in `temporal/`
 
-One generic stepper per dimension:
-
-| File | Stepper | Use |
-| ---- | ------- | --- |
-| `ssprk3_1d.mojo` | `SSPRK3_1D[P, NC]` | Every 1D problem |
-| `ssprk3_2d.mojo` | `SSPRK3_2D[P, NC]` | Every 2D problem |
-| `ssprk3_3d.mojo` | `SSPRK3_3D[P, NC]` | Every 3D problem |
+`temporal/ssprk3.mojo` holds the one generic stepper,
+`SSPRK3[NDIM, P, NC]`, for every single-state problem in 1D, 2D and 3D.
+The state buffer is flat, so nothing in the RK combine depends on the
+dimension. Besides `step` it has `run_until` (fixed step to a target
+time) and `run_until_cfl` (step from `suggest_dt`).
 
 Limiters, positivity preservers, source kernels (gravity, GLM damping,
 …) are composed at the call site as closures (nested `def`s with a capture list) — see
 [Time integration](../concepts/time-integration.md). The plasma family
-(`ssprk3_plasma_{1,2,3}d`, `ssprk3_twofluid_{1,2,3}d`) is kept
-specialised because it juggles three (or two) coupled states.
+(`ssprk3_plasma.mojo`, `ssprk3_twofluid.mojo`, also generic over the
+dimension) is kept separate because it advances three (or two) coupled
+states.
 
 ## CFL constraint
 
-For a DG scheme with polynomial order $P$ on uniform mesh spacing
-$\Delta x$, the empirical stable $\Delta t$ for SSPRK3 + Rusanov is
+For a DG scheme of polynomial order $P$ on a uniform mesh the stable
+step is
 
 $$
-\Delta t \lesssim \frac{C_{\text{CFL}}}{(2P + 1)} \cdot \frac{\Delta x}{\lambda_{\max}},
+\Delta t \le \frac{C_{\text{CFL}}}{(2P + 1)\,\sum_d \lambda_d / \Delta x_d},
 $$
 
-with $C_{\text{CFL}} \approx 1/3$ working for everything in the repo.
-For $P = 2, \Delta x = 1/64$, $\lambda_{\max} = 1$ that's
-$\Delta t \approx 10^{-3}$ — matching the values you'll see in the
-examples.
+where $\lambda_d$ bounds the signal speed along axis $d$. This is what
+`solver.suggest_dt(...)` returns, with $C_{\text{CFL}}$ the app's
+`cfl_max`.
+
+Measured with this code's GLL-collocation DG and SSPRK3 on linear
+advection (`tests/test_cfl_timestep.mojo`): stable up to
+$C_{\text{CFL}} \approx 1.5$ for $P = 1..4$, unstable by 2 for
+$P \ge 3$. The test pins the two ends: energy is non-increasing at
+$C_{\text{CFL}} = 1$ and the run blows up at 4, for every $P$.
+
+In practice:
+
+* 0.5 for problems with shocks. The limiter and positivity preserver
+  assume a forward-Euler-stable step, and the nonlinear solvers use one
+  direction-independent speed bound.
+* up to 1 for smooth linear problems.
+
+For $P = 2$, $\Delta x = 1/64$, $\lambda = 1$ in 2D and
+$C_{\text{CFL}} = 0.5$ that gives $\Delta t \approx 7.8\times10^{-4}$.
 
 ## When you'd want Dormand-Prince instead
 

@@ -22,32 +22,33 @@ the standing-wave structure.
 ## Run it
 
 ```fish
-mkdir -p /tmp/maxwell_cavity
-pixi run mojo run -I src examples/maxwell_cavity_2d_vtu.mojo
+pixi run example maxwell_cavity_2d_vtu
 ```
 
-Per-frame output:
+Per-frame output (values rounded):
 
 ```text
-frame    time        ∫E_energy dV     ∫B_energy dV     ∫total dV
------  ----------  ----------------  ----------------  ----------------
-0      0.0         0.125             0.0               0.125
-1      0.118       0.0938            0.0312            0.125
-2      0.236       0.0313            0.0937            0.125
-3      0.354       6.5e-9            0.125             0.125
-4      0.471       0.0312            0.0938            0.125
+CFL dt = 0.0015625
+frame   time   ∫E_energy dV   ∫B_energy dV   ∫total dV
+0   0.0     0.12500000  0.0         0.12500000
+1   0.1179  0.09375001  0.03124999  0.12500000
+2   0.2357  0.03125002  0.09374997  0.12499999
+3   0.3536  2.4e-11     0.12499999  0.12499999
 ...
+12  1.4142  0.12499997  4.9e-11     0.12499997
+Wrote 13 frames and output/maxwell_cavity/cavity.pvd
 ```
 
-The total energy stays at 0.125 to ~10⁻⁸ across the whole period —
-that's the Maxwell solver's energy conservation, not anything we add.
+The total energy drops from 0.125 by 3.5e-8 over the period. That is
+the dissipation of the upwind flux at this resolution; nothing is added
+to conserve it.
 
 ## Walkthrough
 
 ### PEC walls
 
 ```mojo
-var mesh = BlockMesh2D[P](
+var mesh = BlockMesh[2, P](
     ctx, 0.0, 1.0, 0.0, 1.0, nx=NX, ny=NY,
     periodic_x=False, periodic_y=False,
     bc_left=BC_PEC_WALL, bc_right=BC_PEC_WALL,
@@ -62,41 +63,68 @@ which is what the conducting-wall boundary condition demands.
 ### IC and stepper
 
 ```mojo
-host[b + IDX_EZ] = sin(PI * x) * sin(PI * y)
-# everything else = 0
-ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+def initial(x: Real, y: Real) -> Array[Real, MAXWELL_NC]:
+    var v = Array[Real, MAXWELL_NC](fill=Real(0.0))
+    v[IDX_EZ] = sin(PI * x) * sin(PI * y)
+    return v^
+mesh.fill(q, initial)
 
-var app = Maxwell(c_light=1.0, cfl_max=0.5)
-var spatial = DGMaxwellSolver2D[P](app)
-var stepper = SSPRK3_2D[P, MAXWELL_NC](ctx, mesh.num_elements)
+var app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
+var spatial = DGMaxwellSolver[2, P](app)
+var stepper = SSPRK3[2, P, MAXWELL_NC](ctx, mesh.num_elements)
+var fw = FrameWriter("cavity", "output/maxwell_cavity")
 
-def compute_rhs(
-    mut q_in: DGState2D[P, MAXWELL_NC],
-    mut q_out: DGState2D[P, MAXWELL_NC],
-) raises {imm}:
+def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
-
-def no_adjust(mut q_: DGState2D[P, MAXWELL_NC]) raises {imm}:
-    pass
 ```
 
-No limiter is needed — Maxwell in vacuum has no shocks, so `no_adjust`
-is a no-op and the stepper does pure SSPRK3.
+No limiter is needed: Maxwell in vacuum has no shocks, so the stepper is
+given `no_op_adjust[2, P, MAXWELL_NC]`.
+
+### Time step and frame loop
+
+```mojo
+var t_final = sqrt(Real(2.0)) / C_LIGHT
+var dt = spatial.suggest_dt(mesh)
+
+var t: Real = 0.0
+for frame in range(NUM_FRAMES):
+    dump_maxwell_frame(fw.next_path(t), mesh, q)
+    var ee = mesh.integrate_fn(q, e_energy)
+    var be = mesh.integrate_fn(q, b_energy)
+    print(frame, t, ee, be, ee + be)
+
+    if frame < NUM_FRAMES - 1:
+        t = stepper.run_until(
+            ctx, q, t, t_final * Real(frame + 1) / Real(NUM_FRAMES - 1), dt,
+            compute_rhs, no_op_adjust[2, P, MAXWELL_NC],
+        )
+```
+
+The light speed is constant, so the CFL step is too:
+`suggest_dt(mesh)` needs no state and returns
+`cfl_max / ((2P + 1) · c · (1/Δx + 1/Δy))`, which is `1.5625e-3` here.
+It is computed once and `run_until` advances to each frame time with
+that fixed step, shortening the last step of each interval.
 
 ### Diagnostics
 
 ```mojo
-var e_energy = sum(½(E_x² + E_y² + E_z²))   # GLL-quadrature integrated
-var b_energy = sum(½(B_x² + B_y² + B_z²))
+def e_energy(v: Array[Real, MAXWELL_NC]) -> Real:
+    return Real(0.5) * (
+        v[IDX_EX] * v[IDX_EX] + v[IDX_EY] * v[IDX_EY] + v[IDX_EZ] * v[IDX_EZ]
+    )
 ```
 
-These give the picture you want: in a TM mode the E and B fields
-oscillate **out of phase** (E peaks at $t = 0, T/2, T$; B peaks at
-$t = T/4, 3T/4$). The total $E + B$ energy stays constant.
+and likewise `b_energy`; `mesh.integrate_fn(q, f)` integrates a
+pointwise function of the node state by GLL quadrature. In a TM mode
+the E and B fields oscillate **out of phase** (E peaks at
+$t = 0, T/2, T$; B peaks at $t = T/4, 3T/4$) and the total stays
+constant.
 
 ## What you'll see in ParaView
 
-Open `/tmp/maxwell_cavity/cavity.pvd`. Colour by:
+Open `output/maxwell_cavity/cavity.pvd`. Colour by:
 
 * `E_z` — single peak in the centre at $t = 0$ that flips sign at
   $t = T/2$ and returns by $t = T$.

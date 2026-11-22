@@ -23,13 +23,14 @@ right-going shock.
 ## Run it
 
 ```fish
-pixi run mojo run -I src examples/euler_sod_2d_vtu.mojo
+pixi run example euler_sod_2d_vtu
 ```
 
-The driver writes a single snapshot of the final state at $t = 0.2$
-to `/tmp/sod_2d.vtu`. Open it in ParaView (see
+The driver writes one snapshot of the final state at $t = 0.2$ to
+`output/sod_2d.vtu` and prints the time reached, the last CFL step and
+the total mass. Open the file in ParaView (see
 [Viewing output in ParaView](../getting-started/paraview.md)). For a
-multi-frame run with `FrameWriter` + a `.pvd` collection, see the
+multi-frame run with `FrameWriter` and a `.pvd` collection, see the
 [Orszag-Tang tutorial](orszag-tang.md) or the
 [Langmuir tutorial](langmuir-oscillation.md).
 
@@ -38,79 +39,91 @@ multi-frame run with `FrameWriter` + a `.pvd` collection, see the
 ### Setup
 
 ```mojo
-var mesh = BlockMesh2D[P](
-    ctx, 0.0, 1.0, 0.0, 0.1, nx=200, ny=8,
-    periodic_x=False, periodic_y=False,
+from warpxm.prelude import *
+from warpxm.physics.euler import *
+
+comptime State = DGState[2, P, EULER_NC]
+
+var mesh = BlockMesh[2, P](
+    ctx, Real(0.0), Real(1.0), Real(0.0), Real(0.1),
+    nx=NX, ny=NY, periodic_x=False, periodic_y=False,
     bc_left=BC_COPYOUT, bc_right=BC_COPYOUT,
     bc_bottom=BC_WALL_FREESLIP, bc_top=BC_WALL_FREESLIP,
 )
-var q = DGState2D[P, EULER_NC](ctx, mesh.num_elements)
+var q = State(ctx, mesh.num_elements)
 ```
 
-Notice the **anisotropic mesh**: 200 cells in $x$ where the physics
-lives, 8 cells in $y$ just to make the example 2D so the VTU writer
-has something to draw. The y-direction has free-slip walls so the
-solution stays 1D-extruded — the y-drift in $\rho$ stays at 10⁻¹³.
+The mesh is **anisotropic**: `NX = 200` cells in $x$ where the physics
+lives, `NY = 8` cells in $y$ only so the VTU writer has something to
+draw. The $y$ boundaries are free-slip walls, so the solution stays
+1D-extruded.
 
-### IC
+### Initial condition
 
-A standard left/right state assignment at each GLL node:
+One closure returning the conserved state at a point; `mesh.fill`
+evaluates it at every GLL node:
 
 ```mojo
-for j in range(NY):
-    for i in range(NX):
-        var xl = mesh.x_min + Real(i) * mesh.dx
-        for jn in range(P1):
-            for in_ in range(P1):
-                var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                if x < 0.5:
-                    rho = 1.0; pp = 1.0
-                else:
-                    rho = 0.125; pp = 0.1
-                ...
+def initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
+    var rho: Real = 1.0 if x < Real(0.5) else 0.125
+    var pp: Real = 1.0 if x < Real(0.5) else 0.1
+    return [rho, Real(0.0), Real(0.0), Real(0.0), pp / (GAMMA - Real(1.0))]
+mesh.fill(q, initial)
 ```
 
-### Stepper
+### Solver, limiter and closures
 
 ```mojo
-var app = Euler(gas_gamma=Real(1.4), ...)
-var spatial = DGEulerSolver2D[P](app)
-var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
-var limiter = MoeRossmanith2D[P, EULER_NC](ctx, mesh.num_elements)
+var app = Euler(
+    gas_gamma=GAMMA, min_density=Real(1e-12),
+    min_pressure=Real(1e-12), cfl_max=Real(0.5),
+)
+var spatial = DGEulerSolver[2, P](app)
+var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements)
+var limiter = MoeRossmanith[2, P, EULER_NC](ctx, mesh.num_elements)
 
-def compute_rhs(
-    mut q_in: DGState2D[P, EULER_NC],
-    mut q_out: DGState2D[P, EULER_NC],
-) raises {imm}:
+def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
     spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, imm}:
+def adjust(mut q_: State) raises {mut limiter, imm}:
     limiter.apply(ctx, mesh, q_)
+
+def suggest_dt(mut q_: State) raises {imm} -> Real:
+    return spatial.suggest_dt(ctx, mesh, q_)
 ```
 
-The `adjust` closure runs between each RK stage — see
+The `adjust` closure runs after each RK stage; see
 [Moe-Rossmanith limiter](../numerical-methods/moe-rossmanith.md). The
-Sod problem isn't strong enough to need positivity preservation; for
-shock ratios > ~100 you'd add `positivity.apply(ctx, mesh, q_)` inside
-`adjust`.
+Sod problem is not strong enough to need positivity preservation. For
+pressure ratios above about 100, add a `PositivityEuler[2, P]` and call
+`positivity.apply(ctx, mesh, q_)` inside `adjust`.
 
-### Loop
+### Time stepping
 
 ```mojo
-var t: Real = 0.0
-while t < T_FINAL - 0.5 * DT:
-    var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-    stepper.step(ctx, q, dt_use, compute_rhs, adjust)
-    t += dt_use
-ctx.synchronize()
+var t = stepper.run_until_cfl(
+    ctx, q, Real(0.0), T_FINAL, compute_rhs, adjust, suggest_dt,
+    dt_interval=5,
+)
 
-dump_euler_2d_frame[P]("/tmp/sod_2d.vtu", ctx, mesh, q, GAMMA)
+makedirs(OUTPUT_DIR, exist_ok=True)
+var path = OUTPUT_DIR + "/sod_2d.vtu"
+dump_euler_frame(path, mesh, q, GAMMA)
 ```
 
-One straight time loop up to $t = 0.2$, then a single VTU dump. If
-you want intermediate frames, swap the dump call for a `FrameWriter`
-and call `fw.next_path(t)` at frame boundaries — see
-[`driver.frame_writer`](../api/driver.md#framewriter).
+There is no hard-coded time step. `spatial.suggest_dt` reduces
+$\max(|u| + c)$ over all nodes on the GPU and returns
+`cfl_max / ((2P + 1) · λ · (1/Δx + 1/Δy))`; with `cfl_max = 0.5` that is
+about `1.6e-4` here. `run_until_cfl` asks for a new step every
+`dt_interval` steps (each request costs one reduction and a host
+read-back) and shortens the last step to land on `T_FINAL`. It also
+takes `dt_min`: if the suggested step is at or below it, or is NaN, the
+call raises instead of stalling.
+
+`dump_euler_frame` writes $
+ho$, $u$, $v$, $w$, $P$. For intermediate
+frames use a `FrameWriter` and call `fw.next_path(t)` at each frame
+time; see [`io`](../api/io.md).
 
 ## Expected result
 
@@ -129,7 +142,7 @@ limited by the DG-with-limiter dissipation. Compare with
 
 ## In ParaView
 
-1. Open `/tmp/sod_2d.vtu`.
+1. Open `output/sod_2d.vtu`.
 2. Apply.
 3. Color by `rho`.
 4. **Filters → Data Analysis → Plot Over Line** with endpoints at
@@ -140,7 +153,7 @@ By $t = 0.2$ the shock has propagated to $x \approx 0.86$.
 ## Variations to try
 
 * Increase pressure ratio to 100:1 — at some point you'll start seeing
-  negative pressure failures. Add `PositivityEuler2D` to your `adjust`
+  negative pressure failures. Add `PositivityEuler[2, P]` to your `adjust`
   closure (see the [Sedov blast tutorial](sedov-blast.md)).
 * Change $\gamma$ to 2.0 — analogous to the Brio-Wu MHD setup, useful if
   you want to compare hydrodynamic vs magnetised shock structure.

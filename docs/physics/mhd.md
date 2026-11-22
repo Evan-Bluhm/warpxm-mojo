@@ -59,22 +59,28 @@ from warpxm.apps.imhd import (
 
 ## Boundary conditions
 
-3D MHD dispatches on each `bc_kind`:
+The ideal-MHD solvers (2D and 3D) dispatch on each `bc_kind`:
 
-| BC | 3D Behaviour |
-| -- | ------------ |
+| BC | Behaviour |
+| -- | --------- |
 | Periodic | Implicit. |
 | `BC_COPYOUT` | Zero-gradient outflow. |
 | `BC_WALL_FREESLIP` | Reflective wall (normal momentum flipped). |
-| `BC_PEC_WALL` | Perfectly-conducting wall (tangential E vanishes; normal momentum + normal B flipped). |
+| `BC_PEC_WALL` | Perfectly-conducting wall (normal momentum and normal B flipped). |
 
-**2D caveat:** the 2D MHD kernel currently falls through to copyout for
-every non-periodic `bc_kind` (see
-[`_apply_bc_imhd`](https://github.com/your-fork/warpxm-mojo/blob/main/src/warpxm/spatial/dg_imhd_2d.mojo)).
-The 2D regression tests pass `BC_WALL_FREESLIP` only on planes where
-the normal momentum is already zero by construction (e.g. Brio-Wu
-y-walls), so copyout coincides with free-slip. If a future 2D test
-needs genuine wall behaviour, port the 3D dispatch into the 2D wrapper.
+`tests/test_imhd_walls.mojo` runs a closed box with each wall type: both
+conserve mass, and the PEC wall also conserves total energy.
+
+**GLM-MHD caveat:** `DGImhdGLMSolver` treats every non-periodic
+`bc_kind` as copy-out. Use them on periodic or outflow domains.
+
+## Time step
+
+`spatial.suggest_dt(ctx, mesh, q)` uses
+$\lambda = \max(|\mathbf{u}| + \sqrt{c_s^2 + c_A^2})$, the fast speed
+perpendicular to $\mathbf{B}$, which bounds the fast speed in every
+direction. For GLM-MHD the bound is floored at $c_h$. See
+[`spatial`](../api/spatial.md#cfl-time-step).
 
 ## Numerical flux
 
@@ -87,7 +93,7 @@ Two solvers, selectable at compile time:
   fast, Alfvén, and contact waves. Much sharper shocks.
 
 ```mojo
-var spatial = DGImhdSolver2D[P, USE_HLLD=True](app)
+var spatial = DGImhdSolver[2, P, USE_HLLD=True](app)
 ```
 
 See [Numerical Methods → HLLD](../numerical-methods/hlld.md) for the
@@ -124,19 +130,27 @@ See [Numerical Methods → Dedner GLM](../numerical-methods/dedner-glm.md).
 Use the NC-parameterised Moe-Rossmanith limiter at NC=8 (ideal MHD) or
 NC=9 (GLM). For strong shocks add the Zhang-Shu MHD positivity
 preserver — its pressure step is a cubic in θ because $|B|^{2}$
-contributes; the implementation uses bisection.
+contributes; the implementation bisects, and only at nodes that violate
+the bound.
 
 ```mojo
-from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
-from warpxm.adjusters.positivity_mhd import PositivityMHD2D
-from warpxm.temporal.ssprk3_2d import SSPRK3_2D
+from warpxm.prelude import *
+from warpxm.physics.imhd import *
 
-var stepper = SSPRK3_2D[P, MHD_NC](ctx, mesh.num_elements)
+var stepper = SSPRK3[2, P, MHD_NC](ctx, mesh.num_elements)
+var limiter = MoeRossmanith[2, P, MHD_NC](ctx, mesh.num_elements)
+var positivity = PositivityMHD[2, P, MHD_NC](mesh.num_elements, gamma=GAMMA)
 
-def adjust(mut q_: DGState2D[P, MHD_NC]) raises {mut limiter, mut positivity, imm}:
+def adjust(mut q_: DGState[2, P, MHD_NC]) raises {mut limiter, mut positivity, imm}:
     limiter.apply(ctx, mesh, q_)
     positivity.apply(ctx, mesh, q_)
 ```
+
+The limiter only acts on deviations above
+$\alpha = \texttt{alpha\_coeff}\cdot\Delta x^{1.5}$ (default
+coefficient 1000), which on coarse meshes can exceed the solution scale
+and leave the limiter idle; see
+[Moe-Rossmanith](../numerical-methods/moe-rossmanith.md).
 
 ## Examples and tests
 
@@ -155,6 +169,6 @@ Notable test results:
 * **Orszag-Tang** — mass drift 6 × 10⁻¹⁴, ψ² bounded.
 * **3D MHD blast** — $\int B_x\,dV$ preserved to 4 × 10⁻¹⁵
   (Faraday's law on periodic mesh).
-* **Strong MHD blast (2D and 3D, $\Delta P / P_{\text{amb}} = 1000$)**
+* **Strong MHD blast (2D and 3D, $\Delta P = 100$ on $P_{\text{amb}} = 0.1$, a ratio of 1000)**
   — `min P_gas` clamped to `p_eps = 1e-10` by the positivity preserver;
   mass and $\int B_x$ conserved to 2 × 10⁻¹³.

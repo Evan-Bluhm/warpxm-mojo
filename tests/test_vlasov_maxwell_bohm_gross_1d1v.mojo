@@ -30,29 +30,15 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_maxwell_bohm_gross_1d1v.mojo
 
-from std.collections import List
-from std.math import exp, sin, sqrt
+from std.collections import Array, List
+from std.math import exp, sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.maxwell import Maxwell, MAXWELL_NC, IDX_EX
-from warpxm.apps.vlasovmaxwell import VlasovMaxwell, VLASOV_NC
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, PI, TWO_PI
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.dg_maxwell_1d import DGMaxwellSolver1D
-from warpxm.spatial.dg_vlasov_1d1v import DGVlasovSolver1D1V
-from warpxm.spatial.vlasov_current_source_1d import (
-    apply_vlasov_current_source_1d,
-)
-from warpxm.spatial.vlasov_moments_1d1v import VlasovMoments1D1V
-from warpxm.temporal.ssprk3_vlasov_maxwell_1d1v import (
-    SSPRK3_VlasovMaxwell_1D1V,
-)
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
+from warpxm.physics.maxwell import *
 
 
 comptime P_X: Int = 2
@@ -73,6 +59,8 @@ comptime T_FINAL: Real = 12.0
 comptime DT: Real = 0.05
 # Pick the sample x-node where `sin(2π·x/L) = 1` (peak amplitude).
 comptime SAMPLE_X: Real = L_DOMAIN / Real(4.0)
+comptime PhaseState = PhaseState1D1V[P_X, P_V, VLASOV_NC]
+comptime MaxwellState = DGState[1, P_X, MAXWELL_NC]
 
 
 def main() raises:
@@ -84,50 +72,43 @@ def main() raises:
         Real(0.0), L_DOMAIN, -V_MAX, V_MAX,
         num_x=NX, num_v=NV, periodic_x=True,
     )
-    var x_mesh = BlockMesh1D[P_X](
+    var x_mesh = BlockMesh[1, P_X](
         ctx, Real(0.0), L_DOMAIN, NX, periodic=True,
     )
 
-    var q_phase = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    var q_maxwell = DGState1D[P_X, MAXWELL_NC](ctx, NX)
+    var q_phase = PhaseState(ctx, NX, NV)
+    var q_maxwell = MaxwellState(ctx, NX)
 
     # IC f₀(v) = exp(-v²/σ²) / (σ√π) (normalised so ∫f dv = 1).
     var sigma = sqrt(SIGMA_SQ)
     var norm = Real(1.0) / (sigma * sqrt(PI))
-    var ref_x_nodes = NodalBasis1D[P_X].nodes()
-    var ref_v_nodes = NodalBasis1D[P_V].nodes()
-    var p_host = ctx.enqueue_create_host_buffer[Real.dtype](q_phase.buf_len)
-    for ex in range(NX):
-        for ev in range(NV):
-            var vl = -V_MAX + Real(ev) * phase_mesh.dv
-            for ix in range(P_X + 1):
-                for iv in range(P_V + 1):
-                    var v = vl + (Real(1.0) + ref_v_nodes[iv]) * phase_mesh.jacobian_v
-                    var phase_e = ex * NV + ev
-                    var idx = (
-                        (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                    ) * VLASOV_NC
-                    p_host[idx] = norm * exp(-v * v / SIGMA_SQ)
-    ctx.enqueue_copy(dst_buf=q_phase.buf, src_buf=p_host)
+    def maxwellian(x: Real, v: Real) {imm} -> Real:
+        return norm * exp(-v * v / SIGMA_SQ)
+    phase_mesh.fill(q_phase, maxwellian)
 
     # IC: E_x(x) = ε · sin(2π · x / L), rest zero.
-    var m_host = ctx.enqueue_create_host_buffer[Real.dtype](q_maxwell.buf_len)
-    for k in range(q_maxwell.buf_len):
-        m_host[k] = Real(0.0)
+    def field(x: Real) -> Array[Real, MAXWELL_NC]:
+        var v = Array[Real, MAXWELL_NC](fill=Real(0.0))
+        v[IDX_EX] = EPS * sin(TWO_PI * x / L_DOMAIN)
+        return v^
+    x_mesh.fill(q_maxwell, field)
+
+    # Sample node: the x-node closest to SAMPLE_X (first one on a tie),
+    # numbered across the whole mesh.
     var sample_node: Int = 0
     var best_d: Real = 1.0e30
-    for ex in range(NX):
-        var xl = Real(0.0) + Real(ex) * x_mesh.dx
-        for ix in range(P_X + 1):
-            var x = xl + (Real(1.0) + ref_x_nodes[ix]) * x_mesh.jacobian
-            var node_x = ex * (P_X + 1) + ix
-            m_host[node_x * MAXWELL_NC + IDX_EX] = EPS * sin(TWO_PI * x / L_DOMAIN)
-            var d = x - SAMPLE_X
-            var ad = d if d >= 0.0 else -d
-            if ad < best_d:
-                best_d = ad
-                sample_node = node_x
-    ctx.enqueue_copy(dst_buf=q_maxwell.buf, src_buf=m_host)
+    var node_x: Int = 0
+    def nearest(
+        x: Real, w: Real, v: Array[Real, MAXWELL_NC],
+    ) {mut sample_node, mut best_d, mut node_x}:
+        if fabs(x - SAMPLE_X) < best_d:
+            best_d = fabs(x - SAMPLE_X)
+            sample_node = node_x
+        node_x += 1
+    x_mesh.visit_nodes(q_maxwell, nearest)
+    var sample_idx = MaxwellState.index(
+        sample_node // (P_X + 1), sample_node % (P_X + 1), IDX_EX,
+    )
     ctx.synchronize()
 
     # --- solver setup ---
@@ -138,16 +119,16 @@ def main() raises:
     )
     var maxwell_app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
     var spatial_vlasov = DGVlasovSolver1D1V[P_X, P_V](vlasov_app)
-    var spatial_maxwell = DGMaxwellSolver1D[P_X](maxwell_app)
+    var spatial_maxwell = DGMaxwellSolver[1, P_X](maxwell_app)
     var moments = VlasovMoments1D1V[P_X, P_V]()
     var stepper = SSPRK3_VlasovMaxwell_1D1V[P_X, P_V](ctx, NX, NV)
-    var j_current = DGState1D[P_X, 1](ctx, NX)
+    var j_current = DGState[1, P_X, 1](ctx, NX)
 
     def compute_joint_rhs(
-        mut qp_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut qm_in: DGState1D[P_X, MAXWELL_NC],
-        mut qp_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut qm_out: DGState1D[P_X, MAXWELL_NC],
+        mut qp_in: PhaseState,
+        mut qm_in: MaxwellState,
+        mut qp_out: PhaseState,
+        mut qm_out: MaxwellState,
     ) raises {mut j_current, imm}:
         spatial_vlasov.compute_rhs(ctx, phase_mesh, qp_in, qm_in, qp_out)
         spatial_maxwell.compute_rhs(ctx, x_mesh, qm_in, qm_out)
@@ -164,7 +145,7 @@ def main() raises:
     ctx.synchronize()
     with q_maxwell.buf.map_to_host() as h:
         t_series.append(t)
-        e_series.append(h[sample_node * MAXWELL_NC + IDX_EX])
+        e_series.append(h[sample_idx])
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
         stepper.step(ctx, q_phase, q_maxwell, dt_use, compute_joint_rhs)
@@ -173,7 +154,7 @@ def main() raises:
         ctx.synchronize()
         with q_maxwell.buf.map_to_host() as h:
             t_series.append(t)
-            e_series.append(h[sample_node * MAXWELL_NC + IDX_EX])
+            e_series.append(h[sample_idx])
     ctx.synchronize()
 
     # --- zero-crossing detection ---

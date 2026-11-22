@@ -18,16 +18,9 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
 from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
-from warpxm.apps.vlasovmaxwell import VLASOV_NC
-from warpxm.core.types import Real
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.vlasov_5moment_to_kinetic_1d1v import (
-    apply_5moment_to_kinetic_1d1v,
-)
-from warpxm.spatial.vlasov_moments_1d1v import VlasovMoments1D1V
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.state_1d import DGState1D
 
 
 comptime P_X: Int = 2
@@ -62,7 +55,7 @@ def main() raises:
     )
 
     # Build a uniform fluid IC.
-    var fluid = DGState1D[P_X, EULER_NC](ctx, NX)
+    var fluid = DGState[1, P_X, EULER_NC](ctx, NX)
     var fluid_host = ctx.enqueue_create_host_buffer[Real.dtype](fluid.buf_len)
     var node_count = NX * (P_X + 1)
     for n in range(node_count):
@@ -84,9 +77,9 @@ def main() raises:
 
     # Verify via the three moment kernels — sample at every x-node.
     var moments = VlasovMoments1D1V[P_X, P_V]()
-    var rho_k = DGState1D[P_X, 1](ctx, NX)
-    var j_k = DGState1D[P_X, 1](ctx, NX)
-    var e_k = DGState1D[P_X, 1](ctx, NX)
+    var rho_k = DGState[1, P_X, 1](ctx, NX)
+    var j_k = DGState[1, P_X, 1](ctx, NX)
+    var e_k = DGState[1, P_X, 1](ctx, NX)
     moments.zeroth_moment(ctx, mesh, q, rho_k)
     moments.first_moment(ctx, mesh, q, j_k)
     moments.second_moment(ctx, mesh, q, e_k)

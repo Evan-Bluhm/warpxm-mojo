@@ -118,3 +118,39 @@ struct SSPRK3_1D2V[P_x: Int, P_v1: Int, P_v2: Int, NC: Int]:
             grid_dim=grid, block_dim=BLOCK,
         )
         adjust_fn(u)
+
+    def run_until[
+        ComputeRhs: def(
+            mut PhaseState1D2V[
+                Self.P_x, Self.P_v1, Self.P_v2, Self.NC,
+            ],
+            mut PhaseState1D2V[
+                Self.P_x, Self.P_v1, Self.P_v2, Self.NC,
+            ],
+        ) raises -> None,
+        Adjust: def(
+            mut PhaseState1D2V[
+                Self.P_x, Self.P_v1, Self.P_v2, Self.NC,
+            ],
+        ) raises -> None,
+    ](
+        mut self,
+        var ctx: DeviceContext,
+        mut u: PhaseState1D2V[Self.P_x, Self.P_v1, Self.P_v2, Self.NC],
+        t: Real,
+        t_target: Real,
+        dt: Real,
+        compute_rhs_fn: ComputeRhs,
+        adjust_fn: Adjust,
+    ) raises -> Real:
+        """Advance from time `t` to `t_target` in steps of `dt`, shortening
+        the last step to land on `t_target` exactly. Returns the time
+        reached, so a frame loop is `t = stepper.run_until(..., t, t_next,
+        dt, ...)`."""
+        var time = t
+        # The tolerance stops round-off in `time` from adding a ~1e-16 step.
+        while time < t_target - Real(1.0e-9) * dt:
+            var dt_use = dt if (time + dt) < t_target else (t_target - time)
+            self.step(ctx, u, dt_use, compute_rhs_fn, adjust_fn)
+            time += dt_use
+        return time

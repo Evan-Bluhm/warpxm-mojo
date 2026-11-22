@@ -42,7 +42,7 @@ compiler — useful to include in bug reports.
 ## Confirm the GPU is visible
 
 ```fish
-pixi run mojo run -I src tests/test_dg_convergence_1d.mojo
+pixi run mojo run -I src tests/test_advection_convergence_1d.mojo
 ```
 
 This is the smallest end-to-end test. If you see `PASSED`, you have a
@@ -50,10 +50,24 @@ working build with a visible GPU. If it fails with `Requires GPU` or a
 similar message, your `pixi` environment is fine but Mojo can't find a
 device — check vendor-specific drivers (`nvidia-smi`, `rocm-smi`).
 
-## The `pixi run` incantation
+## The `pixi run` commands
 
 Every command runs through pixi so it has the right `PATH`, library
-paths, and Mojo version. The convention used everywhere in this repo:
+paths, and Mojo version. The project defines three tasks:
+
+```fish
+pixi run test                 # the regression suite, in parallel (about a minute)
+pixi run build                # type-check every example
+pixi run example              # list the examples
+pixi run example advection_1d # run one
+```
+
+`pixi run test euler 3d` runs only the tests whose name contains
+`euler` or `3d`; see [Tests](../contributing/tests.md) for the other
+options. Examples that write VTU frames put them in `./output/<name>/`
+(created automatically, ignored by git).
+
+To run any Mojo file directly:
 
 ```fish
 pixi run mojo run -I src <file>.mojo

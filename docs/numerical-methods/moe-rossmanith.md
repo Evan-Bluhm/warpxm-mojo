@@ -81,16 +81,15 @@ the Moe-Rossmanith limiter.
 
 | File | Dims | Struct(s) | Notes |
 | ---- | ---- | --------- | ----- |
-| `adjusters/moe_rossmanith.mojo`    | 2D, 3D | `MoeRossmanith{2,3}D[P, NC]` | NDIM-parametric, NC-parameterised |
-| `adjusters/moe_rossmanith_1d.mojo` | 1D     | `MoeRossmanith1D[P]`         | Euler-only (NC=5 hard-coded); uses the 1D mesh's split left/right face arrays |
+| `adjusters/moe_rossmanith.mojo` | 1D, 2D, 3D | `MoeRossmanith[NDIM, P, NC]` | generic over the dimension, NC-parameterised |
 
 Usage:
 
 ```mojo
-from warpxm.adjusters.moe_rossmanith import MoeRossmanith2D
+from warpxm.adjusters.moe_rossmanith import MoeRossmanith
 
-var limiter = MoeRossmanith2D[P, MHD_NC](ctx, mesh.num_elements)
-# Inside the stepper, after each RK stage:
+var limiter = MoeRossmanith[2, P, MHD_NC](ctx, mesh.num_elements)
+# Called from the driver's `adjust` closure, after each RK stage:
 limiter.apply(ctx, mesh, q)
 ```
 

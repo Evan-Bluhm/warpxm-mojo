@@ -19,19 +19,9 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.adjusters.moe_rossmanith import MoeRossmanith3D
-from warpxm.apps.euler import (
-    EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
-)
-from warpxm.apps.euler import Euler
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import BC_COPYOUT, BC_WALL_FREESLIP
-from warpxm.core.math_compat import fabs, sqrt
-from warpxm.core.types import Real
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.spatial.dg_euler_3d import DGEulerSolver3D
-from warpxm.temporal.ssprk3_3d import SSPRK3_3D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
+from warpxm.testing.riemann import ExactRiemann
 
 
 comptime P: Int = 2
@@ -41,94 +31,22 @@ comptime NZ: Int = 2
 comptime GAMMA: Real = 1.4
 comptime T_FINAL: Real = 0.2
 comptime DT: Real = 5.0e-4
+comptime State = DGState[3, P, EULER_NC]
 
-
-# ---- Exact Riemann solution (Toro, "Riemann Solvers and Numerical Methods
-# for Fluid Dynamics", 3rd ed., §4.2–4.5) --------------------------------
-
-def _wave_fn(p: Real, rho_k: Real, p_k: Real) -> Real:
-    """Toro's f_K(p): velocity change across the K-wave for star pressure p
-    (shock branch if p > p_k, rarefaction branch otherwise)."""
-    if p > p_k:
-        var a = Real(2.0) / ((GAMMA + Real(1.0)) * rho_k)
-        var b = (GAMMA - Real(1.0)) / (GAMMA + Real(1.0)) * p_k
-        return (p - p_k) * sqrt(a / (p + b))
-    var c_k = sqrt(GAMMA * p_k / rho_k)
-    var ex = (GAMMA - Real(1.0)) / (Real(2.0) * GAMMA)
-    return Real(2.0) * c_k / (GAMMA - Real(1.0)) * ((p / p_k) ** ex - Real(1.0))
-
-
-def _star_pressure(
-    rho_l: Real, u_l: Real, p_l: Real, rho_r: Real, u_r: Real, p_r: Real,
-) -> Real:
-    """Solve f_L(p) + f_R(p) + u_R − u_L = 0 by bisection (f is monotone)."""
-    var lo: Real = 0.0
-    var hi: Real = Real(10.0) * (p_l + p_r)
-    for _ in range(100):
-        var mid = Real(0.5) * (lo + hi)
-        var f = _wave_fn(mid, rho_l, p_l) + _wave_fn(mid, rho_r, p_r) + u_r - u_l
-        if f > Real(0.0):
-            hi = mid
-        else:
-            lo = mid
-    return Real(0.5) * (lo + hi)
-
-
-def _sample_left(
-    rho_k: Real, u_k: Real, p_k: Real, p_s: Real, u_s: Real, xi: Real,
-) -> Array[Real, 3]:
-    """(ρ, u, p) at similarity coordinate xi = (x − x₀)/t on the left of the
-    contact (xi < u*). The right side is obtained by mirror symmetry."""
-    var out = Array[Real, 3](fill=Real(0.0))
-    var c_k = sqrt(GAMMA * p_k / rho_k)
-    var gm = (GAMMA - Real(1.0)) / (GAMMA + Real(1.0))
-    out[0] = rho_k; out[1] = u_k; out[2] = p_k
-    if p_s > p_k:
-        # Left shock.
-        var s = u_k - c_k * sqrt(
-            (GAMMA + Real(1.0)) / (Real(2.0) * GAMMA) * p_s / p_k
-            + (GAMMA - Real(1.0)) / (Real(2.0) * GAMMA)
-        )
-        if xi > s:
-            out[0] = rho_k * (p_s / p_k + gm) / (gm * p_s / p_k + Real(1.0))
-            out[1] = u_s; out[2] = p_s
-    else:
-        # Left rarefaction: head, fan, tail.
-        var c_s = c_k * (p_s / p_k) ** ((GAMMA - Real(1.0)) / (Real(2.0) * GAMMA))
-        if xi > u_s - c_s:
-            out[0] = rho_k * (p_s / p_k) ** (Real(1.0) / GAMMA)
-            out[1] = u_s; out[2] = p_s
-        elif xi > u_k - c_k:
-            var c = Real(2.0) / (GAMMA + Real(1.0)) * (
-                c_k + Real(0.5) * (GAMMA - Real(1.0)) * (u_k - xi)
-            )
-            out[0] = rho_k * (c / c_k) ** (Real(2.0) / (GAMMA - Real(1.0)))
-            out[1] = Real(2.0) / (GAMMA + Real(1.0)) * (
-                c_k + Real(0.5) * (GAMMA - Real(1.0)) * u_k + xi
-            )
-            out[2] = p_k * (c / c_k) ** (Real(2.0) * GAMMA / (GAMMA - Real(1.0)))
-    return out^
-
-
-def _exact_riemann(
-    rho_l: Real, u_l: Real, p_l: Real, rho_r: Real, u_r: Real, p_r: Real,
-    p_s: Real, xi: Real,
-) -> Array[Real, 3]:
-    var u_s = Real(0.5) * (u_l + u_r) + Real(0.5) * (
-        _wave_fn(p_s, rho_r, p_r) - _wave_fn(p_s, rho_l, p_l)
-    )
-    if xi < u_s:
-        return _sample_left(rho_l, u_l, p_l, p_s, u_s, xi)
-    var m = _sample_left(rho_r, -u_r, p_r, p_s, -u_s, -xi)
-    m[1] = -m[1]
-    return m^
+# Left / right primitive states (ρ, u, p).
+comptime RHO_L: Real = 1.0
+comptime U_L: Real = 0.0
+comptime P_L: Real = 1.0
+comptime RHO_R: Real = 0.125
+comptime U_R: Real = 0.0
+comptime P_R: Real = 0.1
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh3D[P](
+    var mesh = BlockMesh[3, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(0.1), Real(0.0), Real(0.1),
         nx=NX, ny=NY, nz=NZ,
         periodic_x=False, periodic_y=False, periodic_z=False,
@@ -136,64 +54,38 @@ def main() raises:
         bc_bottom=BC_WALL_FREESLIP, bc_top=BC_WALL_FREESLIP,
         bc_down=BC_WALL_FREESLIP, bc_up=BC_WALL_FREESLIP,
     )
-    var q = DGState3D[P, EULER_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var nodes_per_elem = P1 * P1 * P1
-
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for k in range(NZ):
-        for j in range(NY):
-            for i in range(NX):
-                var xl = mesh.x_min + Real(i) * mesh.dx
-                var e = k * NX * NY + j * NX + i
-                for kn in range(P1):
-                    for jn in range(P1):
-                        for in_ in range(P1):
-                            var x = xl + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                            var rho: Real
-                            var pp: Real
-                            if x < Real(0.5):
-                                rho = 1.0; pp = 1.0
-                            else:
-                                rho = 0.125; pp = 0.1
-                            var n = kn * P1 * P1 + jn * P1 + in_
-                            var b = (e * nodes_per_elem + n) * EULER_NC
-                            host[b + IDX_RHO] = rho
-                            host[b + IDX_MX] = Real(0.0)
-                            host[b + IDX_MY] = Real(0.0)
-                            host[b + IDX_MZ] = Real(0.0)
-                            host[b + IDX_E] = pp / (GAMMA - Real(1.0))
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real, y: Real, z: Real) -> Array[Real, EULER_NC]:
+        var rho = RHO_L if x < Real(0.5) else RHO_R
+        var pp = P_L if x < Real(0.5) else P_R
+        return [rho, Real(0.0), Real(0.0), Real(0.0), pp / (GAMMA - Real(1.0))]
+    mesh.fill(q, initial)
+    var mass_0 = mesh.integrate(q, IDX_RHO)
+    var mom_0 = mesh.integrate(q, IDX_MX)
+    var energy_0 = mesh.integrate(q, IDX_E)
 
     var app = Euler(
         gas_gamma=GAMMA, min_density=Real(1e-12),
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )
-    var spatial = DGEulerSolver3D[P](app)
-    var stepper = SSPRK3_3D[P, EULER_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith3D[P, EULER_NC](ctx, mesh.num_elements)
+    var spatial = DGEulerSolver[3, P](app)
+    var stepper = SSPRK3[3, P, EULER_NC](ctx, mesh.num_elements)
+    var limiter = MoeRossmanith[3, P, EULER_NC](ctx, mesh.num_elements)
 
-
-    def compute_rhs(
-        mut q_in: DGState3D[P, EULER_NC],
-        mut q_out: DGState3D[P, EULER_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def adjust(mut q_: DGState3D[P, EULER_NC]) raises {mut limiter, imm}:
+    def adjust(mut q_: State) raises {mut limiter, imm}:
         limiter.apply(ctx, mesh, q_)
 
-    var t: Real = 0.0
-    while t < T_FINAL - Real(0.5) * DT:
-        var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, adjust)
-        t += dt_use
+    var t = stepper.run_until(
+        ctx, q, Real(0.0), T_FINAL, DT, compute_rhs, adjust,
+    )
     ctx.synchronize()
 
     # Pull the mid-row (j=0, k=0) midpoint sample at every x.
-    var mid_node = nodes_per_elem // 2
+    var mid_node = State.num_nodes_per_elem // 2
     var any_nan = False
     var max_y_drift: Real = 0.0
     var max_z_drift: Real = 0.0
@@ -201,9 +93,7 @@ def main() raises:
     with q.buf.map_to_host() as h:
         # First pass: row 0 in z=0 plane.
         for i in range(NX):
-            var e = 0 * NX * NY + 0 * NX + i
-            var b = (e * nodes_per_elem + mid_node) * EULER_NC
-            var rho_ji = h[b + IDX_RHO]
+            var rho_ji = h[State.index(i, mid_node, IDX_RHO)]
             if isnan(rho_ji): any_nan = True
             rho_row[i] = rho_ji
         # Compare every other (j, k) sample to the row-0 z-0 value at the same x.
@@ -212,8 +102,7 @@ def main() raises:
                 if j == 0 and k == 0: continue
                 for i in range(NX):
                     var e = k * NX * NY + j * NX + i
-                    var b = (e * nodes_per_elem + mid_node) * EULER_NC
-                    var d = fabs(h[b + IDX_RHO] - rho_row[i])
+                    var d = fabs(h[State.index(e, mid_node, IDX_RHO)] - rho_row[i])
                     if j != 0 and d > max_y_drift: max_y_drift = d
                     if k != 0 and d > max_z_drift: max_z_drift = d
 
@@ -238,66 +127,46 @@ def main() raises:
     assert_true(fabs(rho_row[ix095] - Real(0.125)) < Real(1.0e-8), "right state off")
 
     # ---- Checks against the exact Riemann solution ---------------------
-    var rho_L: Real = Real(1.0)
-    var u_L: Real = Real(0.0)
-    var p_L: Real = Real(1.0)
-    var rho_R: Real = Real(0.125)
-    var u_R: Real = Real(0.0)
-    var p_R: Real = Real(0.1)
-    var E_L = p_L / (GAMMA - Real(1.0)) + Real(0.5) * rho_L * u_L * u_L
-    var E_R = p_R / (GAMMA - Real(1.0)) + Real(0.5) * rho_R * u_R * u_R
+    var exact = ExactRiemann(GAMMA, RHO_L, U_L, P_L, RHO_R, U_R, P_R)
+    var E_L = P_L / (GAMMA - Real(1.0)) + Real(0.5) * RHO_L * U_L * U_L
+    var E_R = P_R / (GAMMA - Real(1.0)) + Real(0.5) * RHO_R * U_R * U_R
 
     # (1) Conservation with boundary-flux accounting. No wave has reached
     # x = 0 or x = 1, so the copy-out faces see the initial states and
     #   ∫U dV (t) = ∫U dV (0) + area · t · (F(U_L) − F(U_R))
     # holds exactly for U = (ρ, m_x, E).
-    var cw = NodalBasis1D[P].weights()
-    var c_area = Real(4 * NY * NZ) * mesh.jacobian_y * mesh.jacobian_z
-    var c_jac = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
-    var npe = (P + 1) * (P + 1) * (P + 1)
-    var d_rho: Real = 0.0
-    var d_mx: Real = 0.0
-    var d_E: Real = 0.0
+    var area = (mesh.y_max - mesh.y_min) * (mesh.z_max - mesh.z_min)
+    var err_mass = fabs(
+        mesh.integrate(q, IDX_RHO) - mass_0
+        - area * t * (RHO_L * U_L - RHO_R * U_R)
+    ) / area
+    var err_mom = fabs(
+        mesh.integrate(q, IDX_MX) - mom_0
+        - area * t * (RHO_L * U_L * U_L + P_L - RHO_R * U_R * U_R - P_R)
+    ) / area
+    var err_en = fabs(
+        mesh.integrate(q, IDX_E) - energy_0
+        - area * t * ((E_L + P_L) * U_L - (E_R + P_R) * U_R)
+    ) / area
+
+    # (2) L1 error of the primitives against the exact solution, sampled
+    # at the element centres of the first x-row (the P = 2 mid node).
     var l1_rho: Real = 0.0
     var l1_u: Real = 0.0
     var l1_p: Real = 0.0
-    var p_star = _star_pressure(rho_L, u_L, p_L, rho_R, u_R, p_R)
     with q.buf.map_to_host() as h:
-        for e in range(mesh.num_elements):
-            for n in range(npe):
-                var w = c_jac
-                var rem = n
-                for _d in range(3):
-                    w *= cw[rem % (P + 1)]
-                    rem = rem // (P + 1)
-                var b = (e * npe + n) * EULER_NC
-                d_rho += w * (h[b + IDX_RHO] - host[b + IDX_RHO])
-                d_mx += w * (h[b + IDX_MX] - host[b + IDX_MX])
-                d_E += w * (h[b + IDX_E] - host[b + IDX_E])
-        # (2) L1 error of the primitives against the exact solution, sampled
-        # at the element centres of the first x-row (P = 2 mid-node).
         for i in range(NX):
-            var b = (i * npe + npe // 2) * EULER_NC
             var x = (Real(i) + Real(0.5)) * mesh.dx
-            var ex = _exact_riemann(
-                rho_L, u_L, p_L, rho_R, u_R, p_R, p_star, (x - Real(0.5)) / t,
+            var ex = exact.sample((x - Real(0.5)) / t)
+            var r = h[State.index(i, mid_node, IDX_RHO)]
+            var uu = h[State.index(i, mid_node, IDX_MX)] / r
+            var pp = (GAMMA - Real(1.0)) * (
+                h[State.index(i, mid_node, IDX_E)] - Real(0.5) * r * uu * uu
             )
-            var r = h[b + IDX_RHO]
-            var uu = h[b + IDX_MX] / r
-            var pp = (GAMMA - Real(1.0)) * (h[b + IDX_E] - Real(0.5) * r * uu * uu)
             l1_rho += mesh.dx * fabs(r - ex[0])
             l1_u += mesh.dx * fabs(uu - ex[1])
             l1_p += mesh.dx * fabs(pp - ex[2])
-    var err_mass = fabs(d_rho - c_area * t * (rho_L * u_L - rho_R * u_R)) / c_area
-    var err_mom = fabs(
-        d_mx - c_area * t * (
-            rho_L * u_L * u_L + p_L - rho_R * u_R * u_R - p_R
-        )
-    ) / c_area
-    var err_en = fabs(
-        d_E - c_area * t * ((E_L + p_L) * u_L - (E_R + p_R) * u_R)
-    ) / c_area
-    print("  exact p* =", p_star)
+    print("  exact p* =", exact.p_star)
     print("  conservation errors (mass, momentum, energy):",
           err_mass, err_mom, err_en)
     print("  L1 errors vs exact (ρ, u, p):", l1_rho, l1_u, l1_p)

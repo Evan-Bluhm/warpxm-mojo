@@ -39,16 +39,9 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.vlasovmaxwell import (
-    VlasovMaxwell, VLASOV_NC, VLASOV_AUX_NC, AUX_EX,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.spatial.dg_vlasov_1d1v import DGVlasovSolver1D1V
-from warpxm.temporal.ssprk3_1d1v import SSPRK3_1D1V
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.vlasov import *
+from warpxm.apps.vlasovmaxwell import VLASOV_AUX_NC, AUX_EX
 
 
 comptime P_X: Int = 2
@@ -64,28 +57,13 @@ comptime DT: Real = 5.0e-3
 
 
 def compute_total_mass(
-    var ctx: DeviceContext,
     mesh: PhaseMesh1D1V[P_X, P_V],
     mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
 ) raises -> Real:
-    var x_weights = NodalBasis1D[P_X].weights()
-    var v_weights = NodalBasis1D[P_V].weights()
     var acc: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for ex in range(NX):
-            for ev in range(NV):
-                for ix in range(P_X + 1):
-                    for iv in range(P_V + 1):
-                        var phase_e = ex * NV + ev
-                        var idx = (
-                            (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                        ) * VLASOV_NC
-                        var f = h[idx]
-                        var w = (
-                            x_weights[ix] * mesh.jacobian_x
-                            * v_weights[iv] * mesh.jacobian_v
-                        )
-                        acc += w * f
+    def add(x: Real, v: Real, w: Real, f: Real) {mut acc}:
+        acc += w * f
+    mesh.visit_nodes(q, add)
     return acc
 
 
@@ -99,25 +77,14 @@ def main() raises:
     )
 
     var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    var aux = DGState1D[P_X, VLASOV_AUX_NC](ctx, NX)
+    var aux = DGState[1, P_X, VLASOV_AUX_NC](ctx, NX)
 
     # IC: f₀(v) = exp(-(v - U_CENTER)² / σ²) — Maxwellian near v_max,
     # x-independent.
-    var ref_v_nodes = NodalBasis1D[P_V].nodes()
-    var p_host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for ex in range(NX):
-        for ev in range(NV):
-            var vl = Real(-3.0) + Real(ev) * mesh.dv
-            for ix in range(P_X + 1):
-                for iv in range(P_V + 1):
-                    var v = vl + (Real(1.0) + ref_v_nodes[iv]) * mesh.jacobian_v
-                    var phase_e = ex * NV + ev
-                    var idx = (
-                        (phase_e * (P_V + 1) + iv) * (P_X + 1) + ix
-                    ) * VLASOV_NC
-                    var dv_shift = v - U_CENTER
-                    p_host[idx] = exp(-dv_shift * dv_shift / SIGMA_SQ)
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=p_host)
+    def initial(x: Real, v: Real) -> Real:
+        var dv_shift = v - U_CENTER
+        return exp(-dv_shift * dv_shift / SIGMA_SQ)
+    mesh.fill(q, initial)
 
     # Aux: constant E_x = E0 at every x-node.
     var aux_host = ctx.enqueue_create_host_buffer[Real.dtype](aux.buf_len)
@@ -129,7 +96,7 @@ def main() raises:
     ctx.synchronize()
 
     # --- baseline mass + tail at v_max ---
-    var m0 = compute_total_mass(ctx, mesh, q)
+    var m0 = compute_total_mass(mesh, q)
     var tail_at_vmax = exp(-(Real(3.0) - U_CENTER) * (Real(3.0) - U_CENTER) / SIGMA_SQ)
     print(
         "Vlasov outflow IC: M0 =", m0,
@@ -163,7 +130,7 @@ def main() raises:
         nsteps += 1
     ctx.synchronize()
 
-    var m1 = compute_total_mass(ctx, mesh, q)
+    var m1 = compute_total_mass(mesh, q)
     var dM = m1 - m0
     var adM = dM if dM >= 0.0 else -dM
     var rel_dM = adM / m0

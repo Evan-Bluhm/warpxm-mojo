@@ -138,9 +138,8 @@ struct Euler(ImplicitlyCopyable, Movable):
         f[IDX_E] = u_axis * (q[IDX_E] + p)
         return f^
 
-    # Backward-compatible per-axis named methods. They forward to
-    # `internal_flux_axis_static[axis]` so per-dim DG kernels can call
-    # them directly without writing the axis parameter at every site.
+    # Per-axis named forms of `internal_flux_axis_static[axis]`, the names
+    # the DG wrapper's flux closures call.
 
     @staticmethod
     def internal_flux_x_static(
@@ -163,20 +162,23 @@ struct Euler(ImplicitlyCopyable, Movable):
     ) -> Array[Real, EULER_NC]:
         return Self.internal_flux_axis_static[2](q, gamma, rho_min, press_min)
 
-    # The 1D-style entry point — always x-direction. Kept so the 1D DG
-    # kernel doesn't need to spell `_x_static` for "the only axis I have".
-
-    @staticmethod
-    def internal_flux_static(
-        q: Array[Real, EULER_NC],
-        gamma: Real, rho_min: Real, press_min: Real,
-    ) -> Array[Real, EULER_NC]:
-        return Self.internal_flux_axis_static[0](q, gamma, rho_min, press_min)
-
     # ------------------------------------------------------------------
     # Rusanov numerical flux on a 3-component unit normal.
     # 1D callers pass (±1, 0, 0); 2D callers pass (nx, ny, 0).
     # ------------------------------------------------------------------
+
+    @staticmethod
+    @always_inline
+    def max_signal_speed_static(
+        q: Array[Real, EULER_NC], gamma: Real, rho_min: Real, press_min: Real,
+    ) -> Real:
+        """`|u| + c`: the fastest signal speed in any direction, for CFL
+        time-step selection."""
+        var inv_rho = Real(1.0) / _rho_floored(q, rho_min)
+        var p = _pressure_from_inv_rho(q, inv_rho, gamma, press_min)
+        var msq = (q[IDX_MX] * q[IDX_MX] + q[IDX_MY] * q[IDX_MY]
+                   + q[IDX_MZ] * q[IDX_MZ])
+        return sqrt(msq) * inv_rho + sqrt(gamma * p * inv_rho)
 
     @staticmethod
     def numerical_flux_static(

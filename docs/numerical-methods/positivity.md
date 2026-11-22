@@ -78,30 +78,31 @@ problem (two-rarefaction near-vacuum), because the cell mean is the
 
 | File | Dims | Physics | Struct(s) |
 | ---- | ---- | ------- | --------- |
-| `adjusters/positivity_euler.mojo` | 1D, 2D, 3D | Euler (NC=5) | `PositivityEuler{1,2,3}D[P]` |
-| `adjusters/positivity_mhd.mojo`   | 2D, 3D | MHD (NC=8 or 9 with ψ) | `PositivityMHD{2,3}D[P, NC]` |
+| `adjusters/positivity_euler.mojo` | 1D, 2D, 3D | Euler (NC=5) | `PositivityEuler[NDIM, P]` |
+| `adjusters/positivity_mhd.mojo`   | 2D, 3D (tested) | MHD (NC=8 or 9 with ψ) | `PositivityMHD[NDIM, P, NC]` |
 
 Usage (mirrors the limiter):
 
 ```mojo
-from warpxm.adjusters.positivity_euler import PositivityEuler2D
-from warpxm.temporal.ssprk3_2d import SSPRK3_2D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
 
-var positivity = PositivityEuler2D[P](
+var positivity = PositivityEuler[2, P](
     num_elements=mesh.num_elements, gamma=GAMMA,
     rho_eps=Real(1.0e-10), p_eps=Real(1.0e-10),
 )
-var stepper = SSPRK3_2D[P, EULER_NC](ctx, mesh.num_elements)
+var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements)
 
-def adjust(mut q_: DGState2D[P, EULER_NC]) raises {mut limiter, mut positivity, imm}:
+def adjust(mut q_: DGState[2, P, EULER_NC]) raises {mut limiter, mut positivity, imm}:
     limiter.apply(ctx, mesh, q_)
     positivity.apply(ctx, mesh, q_)
 
 stepper.step(ctx, q, dt, compute_rhs, adjust)
 ```
 
-The positive stepper runs `limiter.apply(...)` then `positivity.apply(...)`
-between each RK stage.
+The stepper calls `adjust` on the incoming state and after each RK
+stage, so the limiter and then the preserver run before every RHS
+evaluation.
 
 ## Validation
 

@@ -65,7 +65,7 @@ discretisation error. When discretisation produces $\nabla\cdot\mathbf{B}
 \neq 0$ in some region, $\psi$ acquires a value that propagates the
 error away at speed $c_h$ and dissipates it.
 
-The implementation is a single additional source kernel (`apply_glm_damping_*`)
+The implementation is a single additional source kernel (`apply_glm_damping`, in `spatial/sources/imhd_glm_source.mojo`)
 that adds the damping term to the $\psi$ RHS at every RK stage, plus an
 extra "ψ-coupled-B" flux contribution baked into the GLM-MHD spatial
 solver.

@@ -2,33 +2,17 @@
 #
 # Same physics as test_imhd_convergence_3d.mojo (a +x-propagating circularly
 # polarized Alfvén wave, uniform in y / z, period 1). Exercises the
-# generic DormandPrince45_3D[P, MHD_NC] on the most expensive
+# generic DormandPrince45[3, P, MHD_NC] on the most expensive
 # (8-component, 3D, MHD) spatial RHS in the framework.
 
+from std.collections import Array
 from std.math import cos, sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.imhd import IMHD
-from warpxm.apps.imhd import (
-    MHD_NC,
-    IDX_RHO,
-    IDX_MX,
-    IDX_MY,
-    IDX_MZ,
-    IDX_E,
-    IDX_BX,
-    IDX_BY,
-    IDX_BZ,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.math_compat import sqrt
-from warpxm.core.types import Real, TWO_PI
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.spatial.dg_imhd_3d import DGImhdSolver3D
-from warpxm.temporal.dormand_prince_3d import DormandPrince45_3D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.prelude import *
+from warpxm.physics.imhd import *
 
 
 comptime P: Int = 2
@@ -44,13 +28,14 @@ comptime T_FINAL: Real = 1.0
 comptime DT_INIT: Real = 1.0e-2  # CFL-violating
 comptime ATOL: Real = 1.0e-8
 comptime RTOL: Real = 1.0e-6
+comptime State = DGState[3, P, MHD_NC]
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = BlockMesh3D[P](
+    var mesh = BlockMesh[3, P](
         ctx,
         Real(0.0),
         Real(1.0),
@@ -62,56 +47,30 @@ def main() raises:
         ny=NY,
         nz=NZ,
     )
-    var q = DGState3D[P, MHD_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var P1 = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
-    var nodes_per_elem = P1 * P1 * P1
     var inv_sqrt_rho = Real(1.0) / sqrt(RHO0)
     var k_wave = TWO_PI
 
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for k in range(NZ):
-        for j in range(NY):
-            for i in range(NX):
-                var xl = mesh.x_min + Real(i) * mesh.dx
-                var e = k * NX * NY + j * NX + i
-                for kn in range(P1):
-                    for jn in range(P1):
-                        for in_ in range(P1):
-                            var x = (
-                                xl
-                                + (Real(1.0) + ref_nodes[in_]) * mesh.jacobian_x
-                            )
-                            var c_v = cos(k_wave * x)
-                            var s_v = sin(k_wave * x)
-                            var By_ic = DELTA * c_v
-                            var Bz_ic = DELTA * s_v
-                            var uy_ic = -DELTA * c_v * inv_sqrt_rho
-                            var uz_ic = -DELTA * s_v * inv_sqrt_rho
-                            var bsq = B0 * B0 + By_ic * By_ic + Bz_ic * Bz_ic
-                            var msq = (
-                                RHO0 * RHO0 * (uy_ic * uy_ic + uz_ic * uz_ic)
-                            )
-                            var E_total = (
-                                P0 / (GAMMA - Real(1.0))
-                                + Real(0.5) * msq / RHO0
-                                + Real(0.5) * bsq
-                            )
-                            var n = kn * P1 * P1 + jn * P1 + in_
-                            var b = (e * nodes_per_elem + n) * MHD_NC
-                            host[b + IDX_RHO] = RHO0
-                            host[b + IDX_MX] = Real(0.0)
-                            host[b + IDX_MY] = RHO0 * uy_ic
-                            host[b + IDX_MZ] = RHO0 * uz_ic
-                            host[b + IDX_E] = E_total
-                            host[b + IDX_BX] = B0
-                            host[b + IDX_BY] = By_ic
-                            host[b + IDX_BZ] = Bz_ic
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
+    def initial(x: Real, y: Real, z: Real) {imm} -> Array[Real, MHD_NC]:
+        var c_v = cos(k_wave * x)
+        var s_v = sin(k_wave * x)
+        var By_ic = DELTA * c_v
+        var Bz_ic = DELTA * s_v
+        var uy_ic = -DELTA * c_v * inv_sqrt_rho
+        var uz_ic = -DELTA * s_v * inv_sqrt_rho
+        var bsq = B0 * B0 + By_ic * By_ic + Bz_ic * Bz_ic
+        var msq = RHO0 * RHO0 * (uy_ic * uy_ic + uz_ic * uz_ic)
+        var E_total = (
+            P0 / (GAMMA - Real(1.0)) + Real(0.5) * msq / RHO0 + Real(0.5) * bsq
+        )
+        return [
+            RHO0, Real(0.0), RHO0 * uy_ic, RHO0 * uz_ic, E_total,
+            B0, By_ic, Bz_ic,
+        ]
+    mesh.fill(q, initial)
 
-    var spatial = DGImhdSolver3D[P](
+    var spatial = DGImhdSolver[3, P](
         IMHD(
             gas_gamma=GAMMA,
             min_density=Real(1e-12),
@@ -119,12 +78,9 @@ def main() raises:
             cfl_max=Real(0.5),
         )
     )
-    var stepper = DormandPrince45_3D[P, MHD_NC](ctx, mesh.num_elements)
+    var stepper = DormandPrince45[3, P, MHD_NC](ctx, mesh.num_elements)
 
-    def compute_rhs(
-        mut q_in: DGState3D[P, MHD_NC],
-        mut q_out: DGState3D[P, MHD_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
     var t: Real = 0.0
@@ -167,47 +123,20 @@ def main() raises:
             break
     ctx.synchronize()
 
-    var jv = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
     var err_By: Real = 0.0
     var err_Bz: Real = 0.0
     var max_drho: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for k in range(NZ):
-            for j in range(NY):
-                for i in range(NX):
-                    var xl = mesh.x_min + Real(i) * mesh.dx
-                    var e = k * NX * NY + j * NX + i
-                    for kn in range(P1):
-                        for jn in range(P1):
-                            for in_ in range(P1):
-                                var x = (
-                                    xl
-                                    + (Real(1.0) + ref_nodes[in_])
-                                    * mesh.jacobian_x
-                                )
-                                var c_v = cos(k_wave * x)
-                                var s_v = sin(k_wave * x)
-                                var By_exact = DELTA * c_v
-                                var Bz_exact = DELTA * s_v
-                                var n = kn * P1 * P1 + jn * P1 + in_
-                                var b = (e * nodes_per_elem + n) * MHD_NC
-                                var d_By = h[b + IDX_BY] - By_exact
-                                var d_Bz = h[b + IDX_BZ] - Bz_exact
-                                var d_rho = h[b + IDX_RHO] - RHO0
-                                var jw = (
-                                    jv
-                                    * weights[in_]
-                                    * weights[jn]
-                                    * weights[kn]
-                                )
-                                err_By += jw * d_By * d_By
-                                err_Bz += jw * d_Bz * d_Bz
-                                if d_rho > max_drho:
-                                    max_drho = d_rho
-                                if -d_rho > max_drho:
-                                    max_drho = -d_rho
-    var l2_By = err_By ** Real(0.5)
-    var l2_Bz = err_Bz ** Real(0.5)
+    def accumulate(
+        x: Real, y: Real, z: Real, w: Real, v: Array[Real, MHD_NC],
+    ) {mut err_By, mut err_Bz, mut max_drho, imm}:
+        var d_By = v[IDX_BY] - DELTA * cos(k_wave * x)
+        var d_Bz = v[IDX_BZ] - DELTA * sin(k_wave * x)
+        err_By += w * d_By * d_By
+        err_Bz += w * d_Bz * d_Bz
+        max_drho = fmax(max_drho, fabs(v[IDX_RHO] - RHO0))
+    mesh.visit_nodes(q, accumulate)
+    var l2_By = sqrt(err_By)
+    var l2_Bz = sqrt(err_Bz)
 
     print("Adaptive DP45 3D MHD Alfvén (P=2, 16x4x4, atol=1e-8, rtol=1e-6):")
     print("  steps taken     :", num_steps)

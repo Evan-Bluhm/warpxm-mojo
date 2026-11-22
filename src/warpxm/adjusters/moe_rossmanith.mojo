@@ -1,29 +1,50 @@
-# Moe-Rossmanith slope limiter for 2D + 3D DG fields — NDIM-parametric.
+# Moe-Rossmanith slope limiter for DG fields, generic over the dimension
+# and the number of conserved variables (Euler NC=5, IMHD NC=8, GLM-MHD
+# NC=9, ...).
 #
-# The 1D variant uses a different mesh API (separate left/right face
-# arrays and Euler-only NC) and lives in `moe_rossmanith_1d.mojo`.
+# Mirrors `dfem/variable_adjusters/limiter/kokkos/moe_rossmanith_kokkos.{h,cc}`
+# upstream, restricted to conserved-variable bounds. Upstream also checks
+# primitive bounds (pressure positivity); here that is the job of the
+# separate Zhang-Shu positivity preservers, composed after this limiter in
+# the driver's `adjust` closure.
 #
-# Algorithm: per element compute cell average + conserved-variable
-# bounds (min, max) via GLL quadrature; gather all 2·NDIM face
-# neighbors' averages; compute a single per-element θ ∈ [0, 1] using
-# the Moe-Rossmanith bound-collapse + φ functions; linearly shrink each
-# node's deviation from the cell mean by θ. Cell means are untouched.
+# Reference: Moe, Rossmanith, Seal, "A SIMPLE AND EFFECTIVE HIGH-ORDER
+# SHOCK CAPTURING LIMITER FOR DISCONTINUOUS GALERKIN METHODS" (2015),
+# https://arxiv.org/abs/1507.03024
 #
-# Parametric on the conserved-variable count NC so one kernel handles
-# Euler (NC=5), IMHD (NC=8), GLM-MHD (NC=9), …
+# Algorithm (per element e, each conserved component c):
+#
+#     q_avg(e, c) = cell mean of q(e, ·, c)          (tensor-product GLL quadrature)
+#     q_min(e, c) = minᵢ q(e, i, c)
+#     q_max(e, c) = maxᵢ q(e, i, c)
+#
+#     upper(e, c) = max( q_avg(e, c) + α(dx), max_{n ∈ neighbors} q_avg(n, c) )   # eq 6.4
+#     lower(e, c) = min( q_avg(e, c) - α(dx), min_{n ∈ neighbors} q_avg(n, c) )   # eq 6.5
+#     y_M(e, c)   = (upper(e, c) - q_avg(e, c)) / (q_max(e, c) - q_avg(e, c) + ε)
+#     y_m(e, c)   = (lower(e, c) - q_avg(e, c)) / (q_min(e, c) - q_avg(e, c) + ε)
+#     φ(y)        = max( min( |y| / 1.1, 1 ), 0 )                                 # clip
+#     θ_c         = min( φ(y_M(e, c)), φ(y_m(e, c)) )                              # eq 6.6
+#     θ(e)        = min(1, min_c θ_c)                                              # eq 6.7
+#
+#     q_new(e, i, c) = q_avg(e, c) + θ(e) · (q_old(e, i, c) - q_avg(e, c))         # eq 6.8
+#
+# with α(dx) = α_coeff · dx^{1.5} a safety margin that disables the limiter
+# in smooth-flow regions. Default α_coeff = 1000 (upstream default).
+#
+# The neighbors are the 2·NDIM face neighbors; at a domain boundary the
+# element stands in for its missing neighbor. One θ per element shrinks
+# every node's deviation from the cell mean, so cell means are untouched.
 
 from max.gpu import global_idx
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv
 from layout import TileTensor, TensorLayout, row_major
 
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.math_compat import fabs, fmin, fmax, sqrt
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.variable.state_2d import DGState2D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.adjusters.cell_mean import gll_cell_weight
+from warpxm.mesh.block import BlockMesh
+from warpxm.variable.state import DGState
 
 
 @always_inline
@@ -39,24 +60,6 @@ def _phi_func(y: Real) -> Real:
 @always_inline
 def _alpha_dx(alpha_coeff: Real, dx: Real) -> Real:
     return alpha_coeff * dx * sqrt(dx)
-
-
-@always_inline
-def _gll_cell_weight[P: Int, NDIM: Int](n: Int) -> Scalar[WXM_DTYPE]:
-    """Tensor-product GLL cell-mean weight at flat node `n`, normalised
-    by 1 / 2^NDIM (reference [-1, 1]^NDIM → unit-cell)."""
-    comptime P1 = P + 1
-    var weights = NodalBasis1D[P].weights()
-    comptime if NDIM == 2:
-        var jn = n // P1
-        var in_ = n % P1
-        return weights[in_] * weights[jn] * Real(0.25)
-    # NDIM == 3
-    var kn = n // (P1 * P1)
-    var rem = n % (P1 * P1)
-    var jn = rem // P1
-    var in_ = rem % P1
-    return weights[in_] * weights[jn] * weights[kn] * Real(0.125)
 
 
 def _bounds_kernel[
@@ -88,7 +91,7 @@ def _bounds_kernel[
         )
         var max_val: Scalar[WXM_DTYPE] = min_val
         comptime for n in range(nodes_per_elem):
-            var w = _gll_cell_weight[P, NDIM](n)
+            var w = gll_cell_weight[P, NDIM](n)
             var v = rebind[Scalar[WXM_DTYPE]](
                 q[(e * nodes_per_elem + n) * NC + c]
             )
@@ -191,11 +194,16 @@ def _apply_kernel[
                 )
 
 
-struct MoeRossmanith2D[P: Int, NC: Int]:
-    """Device-resident Moe-Rossmanith slope limiter for 2D DG fields."""
+struct MoeRossmanith[NDIM: Int, P: Int, NC: Int]:
+    """Device-resident Moe-Rossmanith slope limiter.
+
+    `alpha_coeff` sets the tolerance α(dx) = α_coeff · dx^1.5 below which
+    an extremum is left alone (1000 is the upstream default)."""
 
     var alpha_coeff: Real
     var num_elements: Int
+
+    # Per-element scratch (mean, min, max of every component), allocated once.
     var q_avg_buf: DeviceBuffer[Real.dtype]
     var q_min_buf: DeviceBuffer[Real.dtype]
     var q_max_buf: DeviceBuffer[Real.dtype]
@@ -214,16 +222,17 @@ struct MoeRossmanith2D[P: Int, NC: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mesh: BlockMesh2D[Self.P],
-        mut q: DGState2D[Self.P, Self.NC],
+        mesh: BlockMesh[Self.NDIM, Self.P],
+        mut q: DGState[Self.NDIM, Self.P, Self.NC],
     ) raises:
+        """Limit `q` in place."""
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
 
         var q_layout = row_major(Int(q.buf_len))
         var bounds_layout = row_major(Int(self.num_elements * Self.NC))
         var face_layout = row_major(Int(mesh.num_faces))
-        var ef_layout = row_major(Int(mesh.num_elements * 4))
+        var ef_layout = row_major(Int(mesh.num_elements * 2 * Self.NDIM))
 
         var q_view = TileTensor(q.buf, q_layout)
         var qa_view = TileTensor(self.q_avg_buf, bounds_layout)
@@ -231,7 +240,7 @@ struct MoeRossmanith2D[P: Int, NC: Int]:
         var qmx_view = TileTensor(self.q_max_buf, bounds_layout)
 
         comptime k_bounds = _bounds_kernel[
-            Self.P, 2, Self.NC,
+            Self.P, Self.NDIM, Self.NC,
             type_of(q_layout), type_of(bounds_layout),
         ]
         ctx.enqueue_function[k_bounds](
@@ -239,85 +248,16 @@ struct MoeRossmanith2D[P: Int, NC: Int]:
             grid_dim=grid, block_dim=BLOCK,
         )
 
-        var fn_view = TileTensor(mesh.face_neg_elem_buf, face_layout)
-        var fp_view = TileTensor(mesh.face_pos_elem_buf, face_layout)
-        var ef_view = TileTensor(mesh.elem_face_dir_buf, ef_layout)
-        var dx_min = fmin(mesh.dx, mesh.dy)
-
         comptime k_apply = _apply_kernel[
-            Self.P, 2, Self.NC,
+            Self.P, Self.NDIM, Self.NC,
             type_of(q_layout), type_of(bounds_layout),
             type_of(face_layout), type_of(ef_layout),
         ]
         ctx.enqueue_function[k_apply](
             q_view, qa_view, qmn_view, qmx_view,
-            fn_view, fp_view, ef_view,
-            self.alpha_coeff, dx_min, Int64(self.num_elements),
-            grid_dim=grid, block_dim=BLOCK,
-        )
-
-
-struct MoeRossmanith3D[P: Int, NC: Int]:
-    """Device-resident Moe-Rossmanith slope limiter for 3D DG fields."""
-
-    var alpha_coeff: Real
-    var num_elements: Int
-    var q_avg_buf: DeviceBuffer[Real.dtype]
-    var q_min_buf: DeviceBuffer[Real.dtype]
-    var q_max_buf: DeviceBuffer[Real.dtype]
-
-    def __init__(
-        out self, var ctx: DeviceContext, num_elements: Int,
-        alpha_coeff: Real = Real(1000.0),
-    ) raises:
-        self.alpha_coeff = alpha_coeff
-        self.num_elements = num_elements
-        var n = num_elements * Self.NC
-        self.q_avg_buf = ctx.enqueue_create_buffer[Real.dtype](n)
-        self.q_min_buf = ctx.enqueue_create_buffer[Real.dtype](n)
-        self.q_max_buf = ctx.enqueue_create_buffer[Real.dtype](n)
-
-    def apply(
-        mut self,
-        var ctx: DeviceContext,
-        mesh: BlockMesh3D[Self.P],
-        mut q: DGState3D[Self.P, Self.NC],
-    ) raises:
-        comptime BLOCK = 256
-        var grid = ceildiv(self.num_elements, BLOCK)
-
-        var q_layout = row_major(Int(q.buf_len))
-        var bounds_layout = row_major(Int(self.num_elements * Self.NC))
-        var face_layout = row_major(Int(mesh.num_faces))
-        var ef_layout = row_major(Int(mesh.num_elements * 6))
-
-        var q_view = TileTensor(q.buf, q_layout)
-        var qa_view = TileTensor(self.q_avg_buf, bounds_layout)
-        var qmn_view = TileTensor(self.q_min_buf, bounds_layout)
-        var qmx_view = TileTensor(self.q_max_buf, bounds_layout)
-
-        comptime k_bounds = _bounds_kernel[
-            Self.P, 3, Self.NC,
-            type_of(q_layout), type_of(bounds_layout),
-        ]
-        ctx.enqueue_function[k_bounds](
-            q_view, qa_view, qmn_view, qmx_view, Int64(self.num_elements),
-            grid_dim=grid, block_dim=BLOCK,
-        )
-
-        var fn_view = TileTensor(mesh.face_neg_elem_buf, face_layout)
-        var fp_view = TileTensor(mesh.face_pos_elem_buf, face_layout)
-        var ef_view = TileTensor(mesh.elem_face_dir_buf, ef_layout)
-        var dx_min = fmin(fmin(mesh.dx, mesh.dy), mesh.dz)
-
-        comptime k_apply = _apply_kernel[
-            Self.P, 3, Self.NC,
-            type_of(q_layout), type_of(bounds_layout),
-            type_of(face_layout), type_of(ef_layout),
-        ]
-        ctx.enqueue_function[k_apply](
-            q_view, qa_view, qmn_view, qmx_view,
-            fn_view, fp_view, ef_view,
-            self.alpha_coeff, dx_min, Int64(self.num_elements),
+            TileTensor(mesh.face_neg_elem_buf, face_layout),
+            TileTensor(mesh.face_pos_elem_buf, face_layout),
+            TileTensor(mesh.elem_face_dir_buf, ef_layout),
+            self.alpha_coeff, mesh.min_dx(), Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )

@@ -1,6 +1,6 @@
-# Zhang-Shu positivity preserver for ideal MHD — 2D + 3D in a single
-# NDIM-parametric kernel. Works for plain IMHD (NC=8) and GLM-MHD
-# (NC=9 — ψ is shrunk along with the rest but doesn't affect positivity).
+# Zhang-Shu positivity preserver for ideal MHD, generic over the
+# dimension. Works for plain IMHD (NC=8) and GLM-MHD (NC=9: ψ is shrunk
+# along with the rest but doesn't affect positivity).
 #
 # Density step is identical to the Euler positivity preserver; the
 # pressure step uses a bisection on a cubic in θ because P_gas now
@@ -22,12 +22,10 @@ from layout import TileTensor, TensorLayout, row_major
 from warpxm.apps.imhd import (
     IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E, IDX_BX, IDX_BY, IDX_BZ,
 )
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
+from warpxm.adjusters.cell_mean import gll_cell_weight
 from warpxm.core.types import Real, WXM_DTYPE
-from warpxm.mesh.block_2d import BlockMesh2D
-from warpxm.mesh.block_3d import BlockMesh3D
-from warpxm.variable.state_2d import DGState2D
-from warpxm.variable.state_3d import DGState3D
+from warpxm.mesh.block import BlockMesh
+from warpxm.variable.state import DGState
 
 
 @always_inline
@@ -44,24 +42,6 @@ def _mhd_f(
     return rho * E - Real(0.5) * msq - Real(0.5) * rho * bsq - rho * c_e
 
 
-@always_inline
-def _gll_cell_weight[P: Int, NDIM: Int](n: Int) -> Scalar[WXM_DTYPE]:
-    """Tensor-product GLL cell-mean weight (same form as
-    `positivity_euler._gll_cell_weight`)."""
-    comptime P1 = P + 1
-    var weights = NodalBasis1D[P].weights()
-    comptime if NDIM == 2:
-        var jn = n // P1
-        var in_ = n % P1
-        return weights[in_] * weights[jn] * Real(0.25)
-    # NDIM == 3
-    var kn = n // (P1 * P1)
-    var rem = n % (P1 * P1)
-    var jn = rem // P1
-    var in_ = rem % P1
-    return weights[in_] * weights[jn] * weights[kn] * Real(0.125)
-
-
 def _positivity_kernel_mhd[
     P: Int, NDIM: Int, NC: Int, QLayout: TensorLayout,
 ](
@@ -73,7 +53,6 @@ def _positivity_kernel_mhd[
     comptime P1 = P + 1
     comptime nodes_per_elem = P1 ** NDIM
     comptime assert q.flat_rank == 1
-    comptime assert NDIM >= 2 and NDIM <= 3, "MHD positivity is 2D or 3D"
 
     var e = Int(global_idx.x)
     if e >= num_elements:
@@ -85,7 +64,7 @@ def _positivity_kernel_mhd[
     var bar = Array[Scalar[WXM_DTYPE], NC](fill=Scalar[WXM_DTYPE](0.0))
     comptime for n in range(nodes_per_elem):
         var base = (e * nodes_per_elem + n) * NC
-        var w = _gll_cell_weight[P, NDIM](n)
+        var w = gll_cell_weight[P, NDIM](n)
         comptime for c in range(NC):
             bar[c] += w * rebind[Scalar[WXM_DTYPE]](q[base + c])
 
@@ -190,8 +169,8 @@ def _positivity_kernel_mhd[
                 )
 
 
-struct PositivityMHD2D[P: Int, NC: Int]:
-    """Device-resident Zhang-Shu positivity preserver for 2D MHD
+struct PositivityMHD[NDIM: Int, P: Int, NC: Int]:
+    """Device-resident Zhang-Shu positivity preserver for MHD
     (NC=8 plain IMHD; NC=9 GLM-MHD)."""
 
     var rho_eps: Real
@@ -211,53 +190,18 @@ struct PositivityMHD2D[P: Int, NC: Int]:
     def apply(
         mut self,
         var ctx: DeviceContext,
-        mesh: BlockMesh2D[Self.P],
-        mut q: DGState2D[Self.P, Self.NC],
+        mesh: BlockMesh[Self.NDIM, Self.P],
+        mut q: DGState[Self.NDIM, Self.P, Self.NC],
     ) raises:
+        """Restore ρ ≥ ρ_eps and P_gas ≥ P_eps at every node of `q`, in place."""
         comptime BLOCK = 256
         var grid = ceildiv(self.num_elements, BLOCK)
         var q_layout = row_major(Int(q.buf_len))
-        var q_view = TileTensor(q.buf, q_layout)
         comptime k_fn = _positivity_kernel_mhd[
-            Self.P, 2, Self.NC, type_of(q_layout),
+            Self.P, Self.NDIM, Self.NC, type_of(q_layout),
         ]
         ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
-            grid_dim=grid, block_dim=BLOCK,
-        )
-
-
-struct PositivityMHD3D[P: Int, NC: Int]:
-    """Device-resident Zhang-Shu positivity preserver for 3D MHD."""
-
-    var rho_eps: Real
-    var p_eps: Real
-    var gamma: Real
-    var num_elements: Int
-
-    def __init__(
-        out self, num_elements: Int, gamma: Real,
-        rho_eps: Real = Real(1.0e-10), p_eps: Real = Real(1.0e-10),
-    ):
-        self.rho_eps = rho_eps
-        self.p_eps = p_eps
-        self.gamma = gamma
-        self.num_elements = num_elements
-
-    def apply(
-        mut self,
-        var ctx: DeviceContext,
-        mesh: BlockMesh3D[Self.P],
-        mut q: DGState3D[Self.P, Self.NC],
-    ) raises:
-        comptime BLOCK = 256
-        var grid = ceildiv(self.num_elements, BLOCK)
-        var q_layout = row_major(Int(q.buf_len))
-        var q_view = TileTensor(q.buf, q_layout)
-        comptime k_fn = _positivity_kernel_mhd[
-            Self.P, 3, Self.NC, type_of(q_layout),
-        ]
-        ctx.enqueue_function[k_fn](
-            q_view, self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
+            TileTensor(q.buf, q_layout),
+            self.rho_eps, self.p_eps, self.gamma, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )

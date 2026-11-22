@@ -1,6 +1,6 @@
 # 1D 5-moment Euler DG convergence regression — confirm rate ≈ (P + 1)
 # on the smooth entropy-wave problem. Extends the convergence-rate
-# validation from linear scalar advection (`test_dg_convergence_1d`)
+# validation from linear scalar advection (`test_advection_convergence_1d`)
 # and linear vector electromagnetic (`test_maxwell_convergence_1d`) to
 # a **nonlinear** physics: Euler's momentum-flux is quadratic in `m_x`
 # (via `m_x² / ρ`), so this test exercises a code path that the linear
@@ -16,25 +16,20 @@
 #
 # Sweep: `P ∈ {1, 2, 3}` on `NX ∈ {32, 64}`. `T = 1` (one full period).
 # `dt = 5·10⁻⁴` pinned to the finest-mesh CFL so SSPRK3's `O(dt³)`
-# doesn't pollute.
+# doesn't pollute. Both errors are also bounded absolutely (about 3x the
+# measured values) so a defect that leaves the rate intact still fails.
 #
 # Build / run:
 #     pixi run mojo run -I src tests/test_euler_convergence_1d.mojo
 
-from std.math import log2, sin
+from std.collections import Array
+from std.math import sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
-from std.testing import assert_true
 
-from warpxm.apps.euler import (
-    Euler, EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, TWO_PI
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.spatial.dg_euler_1d import DGEulerSolver1D
-from warpxm.temporal.ssprk3_1d import SSPRK3_1D
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.euler import *
+from warpxm.testing.convergence import check_convergence
 
 
 comptime GAMMA: Real = 5.0 / 3.0
@@ -44,35 +39,28 @@ comptime DT: Real = 5.0e-4
 comptime T_FINAL: Real = 1.0
 
 
+def _rho_exact(x: Real) -> Real:
+    """Density at t = 0 and, since u·T = 1, after one period."""
+    return Real(1.0) + EPS * sin(TWO_PI * x)
+
+
 def _one_run[P: Int](
     var ctx: DeviceContext, num_x: Int,
 ) raises -> Real:
-    var mesh = BlockMesh1D[P](
+    comptime State = DGState[1, P, EULER_NC]
+    var mesh = BlockMesh[1, P](
         ctx, Real(0.0), Real(1.0), num_x, periodic=True,
     )
-    var q = DGState1D[P, EULER_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var nodes_per_elem = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
+    def initial(x: Real) -> Array[Real, EULER_NC]:
+        var pp: Real = 1.0
+        var rho = _rho_exact(x)
+        var ke = Real(0.5) * rho * U * U
+        return [rho, rho * U, Real(0.0), Real(0.0), pp / (GAMMA - Real(1.0)) + ke]
+    mesh.fill(q, initial)
 
-    var pp: Real = 1.0
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for e in range(mesh.num_elements):
-        var xl = mesh.x_min + Real(e) * mesh.dx
-        for i in range(nodes_per_elem):
-            var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
-            var rho = Real(1.0) + EPS * sin(TWO_PI * x)
-            var ke = Real(0.5) * rho * U * U
-            var b = (e * nodes_per_elem + i) * EULER_NC
-            host[b + IDX_RHO] = rho
-            host[b + IDX_MX] = rho * U
-            host[b + IDX_MY] = Real(0.0)
-            host[b + IDX_MZ] = Real(0.0)
-            host[b + IDX_E] = pp / (GAMMA - Real(1.0)) + ke
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
-
-    var spatial = DGEulerSolver1D[P](
+    var spatial = DGEulerSolver[1, P](
         Euler(
             gas_gamma=GAMMA,
             min_density=Real(1e-12),
@@ -80,59 +68,35 @@ def _one_run[P: Int](
             cfl_max=Real(0.5),
         )
     )
-    var stepper = SSPRK3_1D[P, EULER_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[1, P, EULER_NC](ctx, mesh.num_elements)
 
-    def compute_rhs(
-        mut q_in: DGState1D[P, EULER_NC],
-        mut q_out: DGState1D[P, EULER_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def no_adjust(mut q_: DGState1D[P, EULER_NC]) raises {imm}:
-        pass
-
-    var t: Real = 0.0
-    while t < T_FINAL - Real(0.5) * DT:
-        var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
-        t += dt_use
+    _ = stepper.run_until(
+        ctx, q, Real(0.0), T_FINAL, DT, compute_rhs,
+        no_op_adjust[1, P, EULER_NC],
+    )
     ctx.synchronize()
 
-    # After one period (u·T = 1), exact ρ returns to IC.
-    var acc: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for e in range(mesh.num_elements):
-            var xl = mesh.x_min + Real(e) * mesh.dx
-            for i in range(nodes_per_elem):
-                var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
-                var exact = Real(1.0) + EPS * sin(TWO_PI * x)
-                var b = (e * nodes_per_elem + i) * EULER_NC
-                var d = h[b + IDX_RHO] - exact
-                var jw = mesh.jacobian * weights[i]
-                acc += jw * d * d
-    return acc ** Real(0.5)
+    return mesh.l2_error(q, IDX_RHO, _rho_exact)
 
 
-def _check_rate[P: Int](var ctx: DeviceContext, expected: Real) raises:
+def _check_rate[P: Int](
+    var ctx: DeviceContext, expected: Real, tol_lo: Real, tol_hi: Real,
+) raises:
     var err_lo = _one_run[P](ctx, 32)
     var err_hi = _one_run[P](ctx, 64)
-    var rate = log2(err_lo / err_hi)
-    print(
-        "P =", P,
-        " err_NX32 =", err_lo,
-        " err_NX64 =", err_hi,
-        " rate =", rate,
-    )
-    assert_true(
-        rate > expected - Real(0.25),
-        "1D Euler entropy-wave convergence rate below tolerance",
+    _ = check_convergence(
+        "1D Euler entropy wave, P = " + String(P),
+        err_lo, err_hi, expected, tol_lo, tol_hi,
     )
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
-    _check_rate[1](ctx, Real(2.0))
-    _check_rate[2](ctx, Real(3.0))
-    _check_rate[3](ctx, Real(4.0))
+    _check_rate[1](ctx, Real(2.0), Real(8.6e-4), Real(2.2e-4))
+    _check_rate[2](ctx, Real(3.0), Real(5.5e-6), Real(7.2e-7))
+    _check_rate[3](ctx, Real(4.0), Real(2.3e-8), Real(1.5e-9))
     print("PASSED")

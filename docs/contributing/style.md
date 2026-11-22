@@ -37,26 +37,28 @@ hit a parse error.
 
 ### File names
 
-* Spatial solvers, steppers, adjusters, writers all end in
-  `_1d.mojo` / `_2d.mojo` / `_3d.mojo`. Apps (`advection.mojo`,
-  `euler.mojo`, `maxwell.mojo`, `imhd.mojo`, `imhd_glm.mojo`) are
-  single canonical files — the DG launcher owns dimensionality.
-  Dimensionless support modules (basis, core, the SSPRK3 combine
-  kernels in `ssprk3.mojo`) also drop the suffix. The DP45 family
-  has no standalone dimensionless file: its shared combine /
-  error / reduction kernels live inside `dormand_prince_1d.mojo`
-  and are imported from there by the 2D and 3D wrappers.
+* Fluid-side library files carry no dimension suffix: everything is
+  written once for all dimensions (apps, `mesh/block.mojo`,
+  `variable/state.mojo`, `spatial/dg_core.mojo`, `dg_euler.mojo`, the
+  adjusters, `temporal/ssprk3.mojo`, the source kernels in
+  `spatial/sources/`, `io/vtu.mojo`). Kinetic files end in `_1d1v` /
+  `_1d2v`.
+* Source kernels are named `<thing>_source.mojo`; tests are
+  `test_<physics>_<problem>_<dim>.mojo`.
 * Underscored prefixes mark "internal helpers": `_load_node`,
-  `_combine1`, `_apply_bc_imhd_3d`, etc. These aren't expected to be
+  `_combine1`, `_apply_bc_imhd`, etc. These aren't expected to be
   called from outside the file.
 
 ### Comptime parameter order on structs
 
-Polynomial order first, then component count, then flags:
+Dimension first, then polynomial order, then
+component count, then flags:
 
 ```mojo
-struct DGImhdSolver2D[P: Int, USE_HLLD: Bool = False]: ...
-struct PositivityMHD2D[P: Int, NC: Int]: ...
+struct DGState[NDIM: Int, P: Int, NC: Int]: ...
+struct SSPRK3[NDIM: Int, P: Int, NC: Int]: ...
+struct DGImhdSolver[NDIM: Int, P: Int, USE_HLLD: Bool = False]: ...
+struct PositivityMHD[NDIM: Int, P: Int, NC: Int]: ...
 ```
 
 The convention exists so multiple structs combine without parameter-
@@ -70,11 +72,44 @@ reorder confusion when used together.
   `warpxm.core.math_compat`. The standard `std.math.sqrt` doesn't
   cover `float64` GPU paths on NVIDIA.
 
+### Closures and capture lists
+
+Closures are nested `def`s. One that reads an outer runtime variable
+needs a capture list: `{imm}` to borrow everything read-only, plus
+`mut name` for what it mutates. One that uses only its arguments and
+`comptime` constants needs none.
+
+```mojo
+def initial(x: Real, y: Real) -> Array[Real, EULER_NC]: ...        # comptime constants only
+def exact(x: Real) {imm} -> Real: ...                              # reads a runtime `t`
+def adjust(mut q_: State) raises {mut limiter, imm}: ...           # mutates the limiter
+def visit(x: Real, w: Real, v: Array[Real, NC]) {mut total}: ...   # accumulates
+```
+
+Two closures passed to the same call may not both capture one object
+mutably, which is why solver and adjuster methods take `mesh`
+read-only.
+
+### Drivers use the helpers
+
+Tests and examples do not index the state buffer or hand-roll node
+loops: `mesh.fill`, `mesh.integrate`, `mesh.visit_nodes`,
+`State.index`, `stepper.run_until` / `run_until_cfl`,
+`FrameWriter(name)`. Name the state type once with
+`comptime State = DGState[NDIM, P, NC]`. Examples take their time step
+from `spatial.suggest_dt`, not a hard-coded constant, and write output
+under `./output/`.
+
 ### Kernels never raise
 
-GPU kernel functions (the `def ..._kernel_*d[...](...)` definitions)
+GPU kernel functions (the `def ..._kernel...[...](...)` definitions)
 **don't** have `raises`. The Mojo GPU dispatch path doesn't support
 exceptions.
+
+`CLAUDE.md` lists the kernel performance rules (FP64 instruction count
+is what matters: `sqrt` from `math_compat`, divide once, form $F\cdot n$
+directly, no per-thread local memory) and the DG kernel signature
+convention (`KernelParams`).
 
 ### Host driver code does raise
 

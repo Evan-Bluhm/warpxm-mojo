@@ -12,13 +12,13 @@
 # `PhaseState1D2V` — v2 innermost:
 #     phase_e = (ex · num_v1 + ev1) · num_v2 + ev2.
 #
-# Six local face directions per element, matching `BlockMesh3D`:
-#     elem_face_dir[phase_e * 6 + FACE_DIR_LEFT_3D]   → x-negative
-#     elem_face_dir[phase_e * 6 + FACE_DIR_RIGHT_3D]  → x-positive
-#     elem_face_dir[phase_e * 6 + FACE_DIR_BOTTOM_3D] → v1-negative
-#     elem_face_dir[phase_e * 6 + FACE_DIR_TOP_3D]    → v1-positive
-#     elem_face_dir[phase_e * 6 + FACE_DIR_DOWN_3D]   → v2-negative
-#     elem_face_dir[phase_e * 6 + FACE_DIR_UP_3D]     → v2-positive
+# Six local face directions per element, matching `BlockMesh[3, P]`:
+#     elem_face_dir[phase_e * 6 + FACE_DIR_LEFT]   → x-negative
+#     elem_face_dir[phase_e * 6 + FACE_DIR_RIGHT]  → x-positive
+#     elem_face_dir[phase_e * 6 + FACE_DIR_BOTTOM] → v1-negative
+#     elem_face_dir[phase_e * 6 + FACE_DIR_TOP]    → v1-positive
+#     elem_face_dir[phase_e * 6 + FACE_DIR_DOWN]   → v2-negative
+#     elem_face_dir[phase_e * 6 + FACE_DIR_UP]     → v2-positive
 #
 # Both velocity axes carry `BC_VLASOV_OUTFLOW` (zero-influx ghost state) at
 # their truncation boundaries; the x-axis honours `periodic_x` with
@@ -30,11 +30,12 @@ from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_VLASOV_OUTFLOW
 from warpxm.core.types import Real, INDEX_DTYPE
-from warpxm.mesh.block_3d import (
-    GHOST_NEG_3D, GHOST_POS_3D,
-    FACE_DIR_LEFT_3D, FACE_DIR_RIGHT_3D,
-    FACE_DIR_BOTTOM_3D, FACE_DIR_TOP_3D,
-    FACE_DIR_DOWN_3D, FACE_DIR_UP_3D,
+from warpxm.variable.phase_state_1d2v import PhaseState1D2V
+from warpxm.mesh.block import (
+    GHOST_NEG, GHOST_POS,
+    FACE_DIR_LEFT, FACE_DIR_RIGHT,
+    FACE_DIR_BOTTOM, FACE_DIR_TOP,
+    FACE_DIR_DOWN, FACE_DIR_UP,
 )
 
 
@@ -95,11 +96,11 @@ struct PhaseMesh1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
 
     var face_neg_elem_buf: DeviceBuffer[INDEX_DTYPE]
     """Phase-element index on the negative side of each face (or
-    `GHOST_NEG_3D` at a non-periodic boundary). Length `num_faces`."""
+    `GHOST_NEG` at a non-periodic boundary). Length `num_faces`."""
 
     var face_pos_elem_buf: DeviceBuffer[INDEX_DTYPE]
     """Phase-element index on the positive side of each face (or
-    `GHOST_POS_3D` at a non-periodic boundary). Length `num_faces`."""
+    `GHOST_POS` at a non-periodic boundary). Length `num_faces`."""
 
     var elem_face_dir_buf: DeviceBuffer[INDEX_DTYPE]
     """Per-element face indices: `elem_face_dir[phase_e * 6 + dir]`."""
@@ -197,7 +198,7 @@ struct PhaseMesh1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         )
         var fbc_host = ctx.enqueue_create_host_buffer[INDEX_DTYPE](self.num_faces)
         for k in range(self.num_phase_elements * 6):
-            efd_host[k] = GHOST_NEG_3D
+            efd_host[k] = GHOST_NEG
         for f in range(self.num_faces):
             fbc_host[f] = Int32(BC_INTERIOR)
 
@@ -217,22 +218,22 @@ struct PhaseMesh1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
                         var pos_e = (pos_ex * num_v1 + ev1) * num_v2 + ev2
                         fn_host[f_idx] = Int32(neg_e)
                         fp_host[f_idx] = Int32(pos_e)
-                        efd_host[neg_e * 6 + FACE_DIR_RIGHT_3D] = Int32(f_idx)
-                        efd_host[pos_e * 6 + FACE_DIR_LEFT_3D] = Int32(f_idx)
+                        efd_host[neg_e * 6 + FACE_DIR_RIGHT] = Int32(f_idx)
+                        efd_host[pos_e * 6 + FACE_DIR_LEFT] = Int32(f_idx)
                     else:
                         if i_face == 0:
                             var pos_e = (0 * num_v1 + ev1) * num_v2 + ev2
-                            fn_host[f_idx] = GHOST_NEG_3D
+                            fn_host[f_idx] = GHOST_NEG
                             fp_host[f_idx] = Int32(pos_e)
-                            efd_host[pos_e * 6 + FACE_DIR_LEFT_3D] = Int32(f_idx)
+                            efd_host[pos_e * 6 + FACE_DIR_LEFT] = Int32(f_idx)
                             fbc_host[f_idx] = Int32(bc_left)
                         elif i_face == num_x:
                             var neg_e = (
                                 ((num_x - 1) * num_v1 + ev1) * num_v2 + ev2
                             )
                             fn_host[f_idx] = Int32(neg_e)
-                            fp_host[f_idx] = GHOST_POS_3D
-                            efd_host[neg_e * 6 + FACE_DIR_RIGHT_3D] = Int32(f_idx)
+                            fp_host[f_idx] = GHOST_POS
+                            efd_host[neg_e * 6 + FACE_DIR_RIGHT] = Int32(f_idx)
                             fbc_host[f_idx] = Int32(bc_right)
                         else:
                             var neg_ex = i_face - 1
@@ -241,8 +242,8 @@ struct PhaseMesh1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
                             var pos_e = (pos_ex * num_v1 + ev1) * num_v2 + ev2
                             fn_host[f_idx] = Int32(neg_e)
                             fp_host[f_idx] = Int32(pos_e)
-                            efd_host[neg_e * 6 + FACE_DIR_RIGHT_3D] = Int32(f_idx)
-                            efd_host[pos_e * 6 + FACE_DIR_LEFT_3D] = Int32(f_idx)
+                            efd_host[neg_e * 6 + FACE_DIR_RIGHT] = Int32(f_idx)
+                            efd_host[pos_e * 6 + FACE_DIR_LEFT] = Int32(f_idx)
 
         # v1-axis faces (non-periodic). Indexed by (ex, j_face, ev2) where
         # j_face ∈ [0, num_v1]. Offset starts at `num_x_faces`.
@@ -258,17 +259,17 @@ struct PhaseMesh1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
                     )
                     if j_face == 0:
                         var pos_e = (ex * num_v1 + 0) * num_v2 + ev2
-                        fn_host[f_idx] = GHOST_NEG_3D
+                        fn_host[f_idx] = GHOST_NEG
                         fp_host[f_idx] = Int32(pos_e)
-                        efd_host[pos_e * 6 + FACE_DIR_BOTTOM_3D] = Int32(f_idx)
+                        efd_host[pos_e * 6 + FACE_DIR_BOTTOM] = Int32(f_idx)
                         fbc_host[f_idx] = Int32(BC_VLASOV_OUTFLOW)
                     elif j_face == num_v1:
                         var neg_e = (
                             (ex * num_v1 + (num_v1 - 1)) * num_v2 + ev2
                         )
                         fn_host[f_idx] = Int32(neg_e)
-                        fp_host[f_idx] = GHOST_POS_3D
-                        efd_host[neg_e * 6 + FACE_DIR_TOP_3D] = Int32(f_idx)
+                        fp_host[f_idx] = GHOST_POS
+                        efd_host[neg_e * 6 + FACE_DIR_TOP] = Int32(f_idx)
                         fbc_host[f_idx] = Int32(BC_VLASOV_OUTFLOW)
                     else:
                         var neg_ev1 = j_face - 1
@@ -277,8 +278,8 @@ struct PhaseMesh1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
                         var pos_e = (ex * num_v1 + pos_ev1) * num_v2 + ev2
                         fn_host[f_idx] = Int32(neg_e)
                         fp_host[f_idx] = Int32(pos_e)
-                        efd_host[neg_e * 6 + FACE_DIR_TOP_3D] = Int32(f_idx)
-                        efd_host[pos_e * 6 + FACE_DIR_BOTTOM_3D] = Int32(f_idx)
+                        efd_host[neg_e * 6 + FACE_DIR_TOP] = Int32(f_idx)
+                        efd_host[pos_e * 6 + FACE_DIR_BOTTOM] = Int32(f_idx)
 
         # v2-axis faces (non-periodic). Indexed by (ex, ev1, k_face) where
         # k_face ∈ [0, num_v2]. Offset starts at `num_x_faces + num_v1_faces`.
@@ -294,17 +295,17 @@ struct PhaseMesh1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
                     )
                     if k_face == 0:
                         var pos_e = (ex * num_v1 + ev1) * num_v2 + 0
-                        fn_host[f_idx] = GHOST_NEG_3D
+                        fn_host[f_idx] = GHOST_NEG
                         fp_host[f_idx] = Int32(pos_e)
-                        efd_host[pos_e * 6 + FACE_DIR_DOWN_3D] = Int32(f_idx)
+                        efd_host[pos_e * 6 + FACE_DIR_DOWN] = Int32(f_idx)
                         fbc_host[f_idx] = Int32(BC_VLASOV_OUTFLOW)
                     elif k_face == num_v2:
                         var neg_e = (
                             (ex * num_v1 + ev1) * num_v2 + (num_v2 - 1)
                         )
                         fn_host[f_idx] = Int32(neg_e)
-                        fp_host[f_idx] = GHOST_POS_3D
-                        efd_host[neg_e * 6 + FACE_DIR_UP_3D] = Int32(f_idx)
+                        fp_host[f_idx] = GHOST_POS
+                        efd_host[neg_e * 6 + FACE_DIR_UP] = Int32(f_idx)
                         fbc_host[f_idx] = Int32(BC_VLASOV_OUTFLOW)
                     else:
                         var neg_ev2 = k_face - 1
@@ -313,8 +314,8 @@ struct PhaseMesh1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
                         var pos_e = (ex * num_v1 + ev1) * num_v2 + pos_ev2
                         fn_host[f_idx] = Int32(neg_e)
                         fp_host[f_idx] = Int32(pos_e)
-                        efd_host[neg_e * 6 + FACE_DIR_UP_3D] = Int32(f_idx)
-                        efd_host[pos_e * 6 + FACE_DIR_DOWN_3D] = Int32(f_idx)
+                        efd_host[neg_e * 6 + FACE_DIR_UP] = Int32(f_idx)
+                        efd_host[pos_e * 6 + FACE_DIR_DOWN] = Int32(f_idx)
 
         self.face_neg_elem_buf = ctx.enqueue_create_buffer[INDEX_DTYPE](
             self.num_faces
@@ -330,3 +331,79 @@ struct PhaseMesh1D2V[P_x: Int, P_v1: Int, P_v2: Int]:
         ctx.enqueue_copy(dst_buf=self.face_pos_elem_buf, src_buf=fp_host)
         ctx.enqueue_copy(dst_buf=self.elem_face_dir_buf, src_buf=efd_host)
         ctx.enqueue_copy(dst_buf=self.face_bc_buf, src_buf=fbc_host)
+
+    # -----------------------------------------------------------------
+    # Host-side helpers: initial conditions and diagnostics. They own the
+    # phase-node ordering and the buffer layout; component 0 (the
+    # distribution function) is the one read and written.
+    # -----------------------------------------------------------------
+
+    def fill[NC: Int, IC: def(Real, Real, Real) -> Real](
+        self,
+        mut f: PhaseState1D2V[Self.P_x, Self.P_v1, Self.P_v2, NC],
+        ic: IC,
+    ) raises:
+        """Set the distribution function to `ic(x, v1, v2)` at every phase
+        node."""
+        var ref_x = NodalBasis1D[Self.P_x].nodes()
+        var ref_v1 = NodalBasis1D[Self.P_v1].nodes()
+        var ref_v2 = NodalBasis1D[Self.P_v2].nodes()
+        comptime PX1 = Self.P_x + 1
+        comptime PV11 = Self.P_v1 + 1
+        comptime PV21 = Self.P_v2 + 1
+        comptime NPE = PX1 * PV11 * PV21
+        with f.buf.map_to_host() as h:
+            for ex in range(self.num_x):
+                var xl = self.x_min + Real(ex) * self.dx
+                for ev1 in range(self.num_v1):
+                    var v1l = self.v1_min + Real(ev1) * self.dv1
+                    for ev2 in range(self.num_v2):
+                        var v2l = self.v2_min + Real(ev2) * self.dv2
+                        var phase_e = (ex * self.num_v1 + ev1) * self.num_v2 + ev2
+                        for iv2 in range(PV21):
+                            var v2 = v2l + (Real(1.0) + ref_v2[iv2]) * self.jacobian_v2
+                            for iv1 in range(PV11):
+                                var v1 = v1l + (Real(1.0) + ref_v1[iv1]) * self.jacobian_v1
+                                for ix in range(PX1):
+                                    var x = xl + (Real(1.0) + ref_x[ix]) * self.jacobian_x
+                                    var n = (iv2 * PV11 + iv1) * PX1 + ix
+                                    h[(phase_e * NPE + n) * NC] = ic(x, v1, v2)
+
+    def visit_nodes[NC: Int, Visit: def(Real, Real, Real, Real, Real) -> None](
+        self,
+        mut f: PhaseState1D2V[Self.P_x, Self.P_v1, Self.P_v2, NC],
+        visit: Visit,
+    ) raises:
+        """Call `visit(x, v1, v2, w, f_node)` at every phase node. `w` is
+        the phase-space quadrature weight."""
+        var ref_x = NodalBasis1D[Self.P_x].nodes()
+        var ref_v1 = NodalBasis1D[Self.P_v1].nodes()
+        var ref_v2 = NodalBasis1D[Self.P_v2].nodes()
+        var w_x = NodalBasis1D[Self.P_x].weights()
+        var w_v1 = NodalBasis1D[Self.P_v1].weights()
+        var w_v2 = NodalBasis1D[Self.P_v2].weights()
+        comptime PX1 = Self.P_x + 1
+        comptime PV11 = Self.P_v1 + 1
+        comptime PV21 = Self.P_v2 + 1
+        comptime NPE = PX1 * PV11 * PV21
+        var w_jac = self.jacobian_x * self.jacobian_v1 * self.jacobian_v2
+        with f.buf.map_to_host() as h:
+            for ex in range(self.num_x):
+                var xl = self.x_min + Real(ex) * self.dx
+                for ev1 in range(self.num_v1):
+                    var v1l = self.v1_min + Real(ev1) * self.dv1
+                    for ev2 in range(self.num_v2):
+                        var v2l = self.v2_min + Real(ev2) * self.dv2
+                        var phase_e = (ex * self.num_v1 + ev1) * self.num_v2 + ev2
+                        for iv2 in range(PV21):
+                            var v2 = v2l + (Real(1.0) + ref_v2[iv2]) * self.jacobian_v2
+                            for iv1 in range(PV11):
+                                var v1 = v1l + (Real(1.0) + ref_v1[iv1]) * self.jacobian_v1
+                                for ix in range(PX1):
+                                    var x = xl + (Real(1.0) + ref_x[ix]) * self.jacobian_x
+                                    var n = (iv2 * PV11 + iv1) * PX1 + ix
+                                    visit(
+                                        x, v1, v2,
+                                        w_x[ix] * w_v1[iv1] * w_v2[iv2] * w_jac,
+                                        h[(phase_e * NPE + n) * NC],
+                                    )

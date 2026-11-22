@@ -1,6 +1,6 @@
 # 1D Maxwell DG convergence regression — confirm rate ≈ (P + 1) on the
 # smooth plane-wave problem. Extends the convergence-rate validation
-# from scalar advection (`test_dg_convergence_1d`) to a multi-component
+# from scalar advection (`test_advection_convergence_1d`) to a multi-component
 # vector physics — `MAXWELL_NC = 6` — which exercises the full DG
 # kernel's per-component flux accumulation path.
 #
@@ -16,20 +16,15 @@
 # Build / run:
 #     pixi run mojo run -I src tests/test_maxwell_convergence_1d.mojo
 
-from std.math import log2, sin
+from std.collections import Array
+from std.math import sin
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
-from warpxm.apps.maxwell import (
-    Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
-)
-from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.types import Real, TWO_PI
-from warpxm.mesh.block_1d import BlockMesh1D
-from warpxm.spatial.dg_maxwell_1d import DGMaxwellSolver1D
-from warpxm.temporal.ssprk3_1d import SSPRK3_1D
-from warpxm.variable.state_1d import DGState1D
+from warpxm.prelude import *
+from warpxm.physics.maxwell import *
+from warpxm.testing.convergence import check_convergence
 
 
 comptime C_LIGHT: Real = 1.0
@@ -39,99 +34,61 @@ comptime DT: Real = 2.5e-4
 def _one_run[P: Int](
     var ctx: DeviceContext, num_x: Int,
 ) raises -> Real:
-    var mesh = BlockMesh1D[P](
+    comptime State = DGState[1, P, MAXWELL_NC]
+    var mesh = BlockMesh[1, P](
         ctx, Real(0.0), Real(1.0), num_x, periodic=True,
     )
-    var q = DGState1D[P, MAXWELL_NC](ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements)
 
-    var nodes_per_elem = NodalBasis1D[P].num_nodes
-    var ref_nodes = NodalBasis1D[P].nodes()
-    var weights = NodalBasis1D[P].weights()
+    def initial(x: Real) -> Array[Real, MAXWELL_NC]:
+        var s = sin(TWO_PI * x)
+        return [Real(0.0), Real(0.0), s, Real(0.0), -s / C_LIGHT, Real(0.0)]
+    mesh.fill(q, initial)
 
-    var host = ctx.enqueue_create_host_buffer[Real.dtype](q.buf_len)
-    for e in range(mesh.num_elements):
-        var xl = mesh.x_min + Real(e) * mesh.dx
-        for i in range(nodes_per_elem):
-            var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
-            var s = sin(TWO_PI * x)
-            var b = (e * nodes_per_elem + i) * MAXWELL_NC
-            comptime for c in range(MAXWELL_NC):
-                host[b + c] = Real(0.0)
-            host[b + IDX_EZ] = s
-            host[b + IDX_BY] = -s / C_LIGHT
-    ctx.enqueue_copy(dst_buf=q.buf, src_buf=host)
-
-    var spatial = DGMaxwellSolver1D[P](
+    var spatial = DGMaxwellSolver[1, P](
         Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5)),
     )
-    var stepper = SSPRK3_1D[P, MAXWELL_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[1, P, MAXWELL_NC](ctx, mesh.num_elements)
 
-    def compute_rhs(
-        mut q_in: DGState1D[P, MAXWELL_NC],
-        mut q_out: DGState1D[P, MAXWELL_NC],
-    ) raises {imm}:
+    def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
 
-    def no_adjust(mut q_: DGState1D[P, MAXWELL_NC]) raises {imm}:
-        pass
-
     var t_final: Real = 1.0 / C_LIGHT
-    var t: Real = 0.0
-    while t < t_final - Real(0.5) * DT:
-        var dt_use = DT if (t + DT) < t_final else (t_final - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
-        t += dt_use
+    _ = stepper.run_until(
+        ctx, q, Real(0.0), t_final, DT, compute_rhs,
+        no_op_adjust[1, P, MAXWELL_NC],
+    )
     ctx.synchronize()
 
     # Combined L² on the active (E_z, B_y) components.
     var acc: Real = 0.0
     var max_other: Real = 0.0
-    with q.buf.map_to_host() as h:
-        for e in range(mesh.num_elements):
-            var xl = mesh.x_min + Real(e) * mesh.dx
-            for i in range(nodes_per_elem):
-                var x = xl + (Real(1.0) + ref_nodes[i]) * mesh.jacobian
-                var s = sin(TWO_PI * x)
-                var b = (e * nodes_per_elem + i) * MAXWELL_NC
-                var d_Ez = h[b + IDX_EZ] - s
-                var d_By = h[b + IDX_BY] - (-s / C_LIGHT)
-                var jw = mesh.jacobian * weights[i]
-                acc += jw * (d_Ez * d_Ez + d_By * d_By)
-                # E_x, E_y, B_x, B_z are not excited and must stay at 0.
-                for idx in [IDX_EX, IDX_EY, IDX_BX, IDX_BZ]:
-                    var v = h[b + idx]
-                    if v > max_other: max_other = v
-                    if -v > max_other: max_other = -v
+    def scan(x: Real, w: Real, v: Array[Real, MAXWELL_NC]) {mut acc, mut max_other}:
+        var s = sin(TWO_PI * x)
+        var d_Ez = v[IDX_EZ] - s
+        var d_By = v[IDX_BY] - (-s / C_LIGHT)
+        acc += w * (d_Ez * d_Ez + d_By * d_By)
+        # E_x, E_y, B_x, B_z are not excited and must stay at 0.
+        for idx in [IDX_EX, IDX_EY, IDX_BX, IDX_BZ]:
+            max_other = fmax(max_other, fabs(v[idx]))
+    mesh.visit_nodes(q, scan)
     assert_true(
         max_other < Real(1.0e-12),
         "unexcited components grew — 1D Maxwell coupling is spurious",
     )
-    return acc ** Real(0.5)
+    return sqrt(acc)
 
 
 def _check_rate[P: Int](
     var ctx: DeviceContext, expected: Real, tol_lo: Real, tol_hi: Real,
 ) raises:
-    """Check the observed rate and bound both errors absolutely.
-
-    `tol_lo` / `tol_hi` are about 3x the measured coarse / fine errors, so
-    a defect that scales the error uniformly (and leaves the rate intact)
-    still fails.
-    """
-    var err_lo = _one_run[P](ctx, 32)
-    var err_hi = _one_run[P](ctx, 64)
-    var rate = log2(err_lo / err_hi)
-    assert_true(err_lo < tol_lo, "coarse-mesh L2 error above tolerance")
-    assert_true(err_hi < tol_hi, "fine-mesh L2 error above tolerance")
-    print(
-        "P =", P,
-        " err_NX32 =", err_lo,
-        " err_NX64 =", err_hi,
-        " rate =", rate,
-    )
-    assert_true(
-        rate > expected - Real(0.25),
-        "1D Maxwell convergence rate below tolerance",
+    """Check the observed rate between 32 and 64 elements and bound both
+    errors absolutely (`tol_lo` / `tol_hi` are about 3x the measured
+    errors)."""
+    _ = check_convergence(
+        "1D Maxwell P = " + String(P),
+        _one_run[P](ctx, 32), _one_run[P](ctx, 64),
+        expected, tol_lo, tol_hi,
     )
 
 
