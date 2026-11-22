@@ -104,12 +104,22 @@ def _one_run[P: Int](
     return acc ** Real(0.5)
 
 
-def _check_rate[P: Int](var ctx: DeviceContext, expected: Real) raises:
+def _check_rate[P: Int](
+    var ctx: DeviceContext, expected: Real, tol_lo: Real, tol_hi: Real,
+) raises:
+    """Check the observed rate and bound both errors absolutely.
+
+    `tol_lo` / `tol_hi` are about 3x the measured coarse / fine errors, so
+    a defect that scales the error uniformly (and leaves the rate intact)
+    still fails.
+    """
     var dt: Real = 5.0e-4
     var t_final: Real = 1.0
     var err_lo = _one_run[P](ctx, 8, dt, t_final)
     var err_hi = _one_run[P](ctx, 16, dt, t_final)
     var rate = log2(err_lo / err_hi)
+    assert_true(err_lo < tol_lo, "coarse-mesh L2 error above tolerance")
+    assert_true(err_hi < tol_hi, "fine-mesh L2 error above tolerance")
     print("P =", P, " err8 =", err_lo, " err16 =", err_hi, " rate =", rate)
     assert_true(rate > expected - Real(0.25), "Convergence rate below tolerance")
 
@@ -122,6 +132,6 @@ def main() raises:
     # P=1 convergence is already validated by test_dg_convergence_1d and
     # test_dg_convergence_2d; the 3D version focuses on P=2 and P=3 which
     # reach the asymptotic regime at smaller N.
-    _check_rate[2](ctx, Real(3.0))
-    _check_rate[3](ctx, Real(4.0))
+    _check_rate[2](ctx, Real(3.0), Real(1.9e-2), Real(2.0e-3))
+    _check_rate[3](ctx, Real(4.0), Real(7.0e-4), Real(4.5e-5))
     print("PASSED")

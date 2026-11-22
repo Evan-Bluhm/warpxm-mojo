@@ -90,8 +90,10 @@ Tests:
 
 * `tests/test_maxwell_1d_cavity.mojo` — 1D TM cavity (E_z + B_y on $x$),
   one period; L2 E_z ~ 8e-6.
-* `tests/test_maxwell_1d_plane_wave.mojo` — 1D transverse plane wave
+* `tests/test_maxwell_convergence_1d.mojo` — 1D transverse plane wave
   propagating along $\hat{x}$ with E_z / B_y; one period returns to IC.
+  Checks the P+1 rate, the absolute L2 error and that unexcited
+  components stay at zero.
 * `tests/test_maxwell_2d_cavity.mojo` — TM₁₁ standing wave; unexcited
   components stay at 0.0 exactly.
 * `tests/test_maxwell_2d_plane_wave.mojo` — vacuum plane wave.

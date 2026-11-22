@@ -74,7 +74,7 @@ What was needed:
 src/warpxm/
   apps/maxwell.mojo               # already existed — covers all 3 dims
   spatial/dg_maxwell_1d.mojo      # NEW: thin wrapper over dg_core_1d
-tests/test_maxwell_1d_plane_wave.mojo  # transverse plane wave
+tests/test_maxwell_convergence_1d.mojo # transverse plane wave: rate + absolute error
 tests/test_maxwell_1d_cavity.mojo      # TM cavity
 ```
 

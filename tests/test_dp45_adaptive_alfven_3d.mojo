@@ -1,6 +1,6 @@
 # Adaptive DP45 on a 3D ideal-MHD Alfvén wave.
 #
-# Same physics as test_imhd_alfven_3d.mojo (a +x-propagating circularly
+# Same physics as test_imhd_convergence_3d.mojo (a +x-propagating circularly
 # polarized Alfvén wave, uniform in y / z, period 1). Exercises the
 # generic DormandPrince45_3D[P, MHD_NC] on the most expensive
 # (8-component, 3D, MHD) spatial RHS in the framework.

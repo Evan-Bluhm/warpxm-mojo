@@ -42,7 +42,7 @@ compiler — useful to include in bug reports.
 ## Confirm the GPU is visible
 
 ```fish
-pixi run mojo run -I src tests/test_advection_1d.mojo
+pixi run mojo run -I src tests/test_dg_convergence_1d.mojo
 ```
 
 This is the smallest end-to-end test. If you see `PASSED`, you have a

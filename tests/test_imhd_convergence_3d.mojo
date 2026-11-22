@@ -24,7 +24,7 @@
 # Note: smaller NX values than the 2D test (16 / 32 vs 32 / 64). The
 # 3D state buffer scales as `NX · NY · NZ · (P+1)³`, so 3D runs cost
 # `(NY · NZ · (P+1))` ≈ 50 × more per cell than 2D. The 16 / 32 sweep
-# is the standard `test_imhd_alfven_3d` resolution and gets us into
+# is the cheapest pair that gets us into
 # the asymptotic regime for P = 2, 3 (P = 1 is marginal — accepted).
 #
 # Build / run:
@@ -64,6 +64,7 @@ comptime T_FINAL: Real = 0.5
 
 def _one_run[P: Int](
     var ctx: DeviceContext, num_x: Int,
+    drho_tol: Real, de_tol: Real,
 ) raises -> Real:
     var mesh = BlockMesh3D[P](
         ctx,
@@ -153,6 +154,14 @@ def _one_run[P: Int](
     # Combined L² over the four perturbation components.
     var jv = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
     var acc: Real = 0.0
+    var max_drho: Real = 0.0
+    var max_dE: Real = 0.0
+    # ρ and E are uniform in the exact solution (the wave is incompressible).
+    var E_exact = (
+        P0 / (GAMMA - Real(1.0))
+        + Real(0.5) * (B0 * B0 + DELTA * DELTA)
+        + Real(0.5) * RHO0 * DELTA * DELTA * inv_sqrt_rho * inv_sqrt_rho
+    )
     with q.buf.map_to_host() as h:
         for k in range(NZ):
             for j in range(NY):
@@ -182,6 +191,12 @@ def _one_run[P: Int](
                                 var d_Bz = h[b + IDX_BZ] - Bz_ex
                                 var d_uy = uy - uy_ex
                                 var d_uz = uz - uz_ex
+                                var d_rho = rho - RHO0
+                                var d_E = h[b + IDX_E] - E_exact
+                                if d_rho > max_drho: max_drho = d_rho
+                                if -d_rho > max_drho: max_drho = -d_rho
+                                if d_E > max_dE: max_dE = d_E
+                                if -d_E > max_dE: max_dE = -d_E
                                 var jw = (
                                     jv * weights[in_] * weights[jn] * weights[kn]
                                 )
@@ -189,13 +204,27 @@ def _one_run[P: Int](
                                     d_By * d_By + d_Bz * d_Bz
                                     + d_uy * d_uy + d_uz * d_uz
                                 )
+    print("  P =", P, " NX =", num_x, " max |Δρ| =", max_drho, " max |ΔE| =", max_dE)
+    assert_true(max_drho < drho_tol, "density drifted (Alfvén wave is incompressible)")
+    assert_true(max_dE < de_tol, "total energy drifted")
     return acc ** Real(0.5)
 
 
-def _check_rate[P: Int](var ctx: DeviceContext, expected: Real) raises:
-    var err_lo = _one_run[P](ctx, 16)
-    var err_hi = _one_run[P](ctx, 32)
+def _check_rate[P: Int](
+    var ctx: DeviceContext, expected: Real, tol_lo: Real, tol_hi: Real,
+    drho_tol: Real, de_tol: Real,
+) raises:
+    """Check the observed rate and bound both errors absolutely.
+
+    `tol_lo` / `tol_hi` are about 3x the measured coarse / fine errors, so
+    a defect that scales the error uniformly (and leaves the rate intact)
+    still fails.
+    """
+    var err_lo = _one_run[P](ctx, 16, drho_tol, de_tol)
+    var err_hi = _one_run[P](ctx, 32, drho_tol, de_tol)
     var rate = log2(err_lo / err_hi)
+    assert_true(err_lo < tol_lo, "coarse-mesh L2 error above tolerance")
+    assert_true(err_hi < tol_hi, "fine-mesh L2 error above tolerance")
     print(
         "P =", P,
         " err_NX16 =", err_lo,
@@ -213,6 +242,8 @@ def main() raises:
     var ctx = DeviceContext()
     # P=1 omitted: at NX=16, P=1 is borderline for the asymptotic
     # h^(P+1) regime on the smooth Alfvén-wave problem.
-    _check_rate[2](ctx, Real(3.0))
-    _check_rate[3](ctx, Real(4.0))
+    _check_rate[2](ctx, Real(3.0), Real(1.4e-4), Real(1.8e-5),
+        Real(3.3e-4), Real(2.0e-5))
+    _check_rate[3](ctx, Real(4.0), Real(2.3e-6), Real(1.4e-7),
+        Real(1.7e-5), Real(5.0e-7))
     print("PASSED")

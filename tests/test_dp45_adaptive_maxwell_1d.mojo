@@ -1,6 +1,6 @@
 # Adaptive DP45 on 1D Maxwell — completes DP45 + Maxwell coverage
 # across all three dimensions. Same plane-wave IC as
-# test_maxwell_1d_plane_wave.mojo.
+# test_maxwell_convergence_1d.mojo.
 
 from std.math import sin
 from std.sys import has_accelerator

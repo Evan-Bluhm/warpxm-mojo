@@ -44,7 +44,7 @@ as their assertion allows:
 To run a single test directly:
 
 ```fish
-pixi run mojo run -I src tests/test_advection_1d.mojo
+pixi run mojo run -I src tests/test_dg_convergence_1d.mojo
 ```
 
 Tests run sequentially. Each takes a few seconds on a modern GPU; the

@@ -4,8 +4,8 @@
 # vector physics — `MAXWELL_NC = 6` — which exercises the full DG
 # kernel's per-component flux accumulation path.
 #
-# IC + analytic solution: same TM-wave setup as
-# `test_maxwell_1d_plane_wave`. With `c = 1` the wave traverses one
+# IC + analytic solution: a TM plane wave, `E_z = sin(2π x)`,
+# `B_y = -sin(2π x) / c`, on a periodic unit interval. With `c = 1` the wave traverses one
 # wavelength in `T = 1` and returns to the IC bit-for-bit modulo the
 # DG truncation error; the L² error of `(E_z, B_y)` at `t = T` is what
 # we fit.
@@ -22,7 +22,7 @@ from max.gpu.host import DeviceContext
 from std.testing import assert_true
 
 from warpxm.apps.maxwell import (
-    Maxwell, MAXWELL_NC, IDX_EZ, IDX_BY,
+    Maxwell, MAXWELL_NC, IDX_EX, IDX_EY, IDX_EZ, IDX_BX, IDX_BY, IDX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.types import Real, TWO_PI
@@ -85,6 +85,7 @@ def _one_run[P: Int](
 
     # Combined L² on the active (E_z, B_y) components.
     var acc: Real = 0.0
+    var max_other: Real = 0.0
     with q.buf.map_to_host() as h:
         for e in range(mesh.num_elements):
             var xl = mesh.x_min + Real(e) * mesh.dx
@@ -96,13 +97,32 @@ def _one_run[P: Int](
                 var d_By = h[b + IDX_BY] - (-s / C_LIGHT)
                 var jw = mesh.jacobian * weights[i]
                 acc += jw * (d_Ez * d_Ez + d_By * d_By)
+                # E_x, E_y, B_x, B_z are not excited and must stay at 0.
+                for idx in [IDX_EX, IDX_EY, IDX_BX, IDX_BZ]:
+                    var v = h[b + idx]
+                    if v > max_other: max_other = v
+                    if -v > max_other: max_other = -v
+    assert_true(
+        max_other < Real(1.0e-12),
+        "unexcited components grew — 1D Maxwell coupling is spurious",
+    )
     return acc ** Real(0.5)
 
 
-def _check_rate[P: Int](var ctx: DeviceContext, expected: Real) raises:
+def _check_rate[P: Int](
+    var ctx: DeviceContext, expected: Real, tol_lo: Real, tol_hi: Real,
+) raises:
+    """Check the observed rate and bound both errors absolutely.
+
+    `tol_lo` / `tol_hi` are about 3x the measured coarse / fine errors, so
+    a defect that scales the error uniformly (and leaves the rate intact)
+    still fails.
+    """
     var err_lo = _one_run[P](ctx, 32)
     var err_hi = _one_run[P](ctx, 64)
     var rate = log2(err_lo / err_hi)
+    assert_true(err_lo < tol_lo, "coarse-mesh L2 error above tolerance")
+    assert_true(err_hi < tol_hi, "fine-mesh L2 error above tolerance")
     print(
         "P =", P,
         " err_NX32 =", err_lo,
@@ -118,7 +138,7 @@ def _check_rate[P: Int](var ctx: DeviceContext, expected: Real) raises:
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
-    _check_rate[1](ctx, Real(2.0))
-    _check_rate[2](ctx, Real(3.0))
-    _check_rate[3](ctx, Real(4.0))
+    _check_rate[1](ctx, Real(2.0), Real(1.2e-1), Real(3.1e-2))
+    _check_rate[2](ctx, Real(3.0), Real(4.5e-4), Real(5.5e-5))
+    _check_rate[3](ctx, Real(4.0), Real(4.5e-6), Real(2.8e-7))
     print("PASSED")

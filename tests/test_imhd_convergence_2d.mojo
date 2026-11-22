@@ -1,7 +1,7 @@
 # 2D ideal-MHD DG convergence regression — confirm rate ≈ (P + 1) on
 # the smooth circularly-polarised Alfvén wave (the canonical smooth
-# MHD test problem). Mirrors the layout of `test_imhd_alfven_2d`
-# but sweeps over `P` and `NX`.
+# MHD test problem), sweeping over `P` and `NX`. Every run also asserts
+# an absolute L2 bound and that ρ and E stay uniform.
 #
 # This is the MHD entry in the convergence-test family alongside
 # `test_dg_convergence_{1,2,3}d` (scalar advection),
@@ -57,6 +57,7 @@ comptime T_FINAL: Real = 0.5
 
 def _one_run[P: Int](
     var ctx: DeviceContext, num_x: Int,
+    drho_tol: Real, de_tol: Real,
 ) raises -> Real:
     var mesh = BlockMesh2D[P](
         ctx,
@@ -140,6 +141,14 @@ def _one_run[P: Int](
     # After exactly one period, the exact solution equals the IC.
     var ja = mesh.jacobian_x * mesh.jacobian_y
     var acc: Real = 0.0
+    var max_drho: Real = 0.0
+    var max_dE: Real = 0.0
+    # ρ and E are uniform in the exact solution (the wave is incompressible).
+    var E_exact = (
+        P0 / (GAMMA - Real(1.0))
+        + Real(0.5) * (B0 * B0 + DELTA * DELTA)
+        + Real(0.5) * RHO0 * DELTA * DELTA * inv_sqrt_rho * inv_sqrt_rho
+    )
     with q.buf.map_to_host() as h:
         for j in range(NY):
             for i in range(num_x):
@@ -165,18 +174,38 @@ def _one_run[P: Int](
                         var d_Bz = h[b + IDX_BZ] - Bz_ex
                         var d_uy = uy - uy_ex
                         var d_uz = uz - uz_ex
+                        var d_rho = rho - RHO0
+                        var d_E = h[b + IDX_E] - E_exact
+                        if d_rho > max_drho: max_drho = d_rho
+                        if -d_rho > max_drho: max_drho = -d_rho
+                        if d_E > max_dE: max_dE = d_E
+                        if -d_E > max_dE: max_dE = -d_E
                         var jw = ja * weights[in_] * weights[jn]
                         acc += jw * (
                             d_By * d_By + d_Bz * d_Bz
                             + d_uy * d_uy + d_uz * d_uz
                         )
+    print("  P =", P, " NX =", num_x, " max |Δρ| =", max_drho, " max |ΔE| =", max_dE)
+    assert_true(max_drho < drho_tol, "density drifted (Alfvén wave is incompressible)")
+    assert_true(max_dE < de_tol, "total energy drifted")
     return acc ** Real(0.5)
 
 
-def _check_rate[P: Int](var ctx: DeviceContext, expected: Real) raises:
-    var err_lo = _one_run[P](ctx, 32)
-    var err_hi = _one_run[P](ctx, 64)
+def _check_rate[P: Int](
+    var ctx: DeviceContext, expected: Real, tol_lo: Real, tol_hi: Real,
+    drho_tol: Real, de_tol: Real,
+) raises:
+    """Check the observed rate and bound both errors absolutely.
+
+    `tol_lo` / `tol_hi` are about 3x the measured coarse / fine errors, so
+    a defect that scales the error uniformly (and leaves the rate intact)
+    still fails.
+    """
+    var err_lo = _one_run[P](ctx, 32, drho_tol, de_tol)
+    var err_hi = _one_run[P](ctx, 64, drho_tol, de_tol)
     var rate = log2(err_lo / err_hi)
+    assert_true(err_lo < tol_lo, "coarse-mesh L2 error above tolerance")
+    assert_true(err_hi < tol_hi, "fine-mesh L2 error above tolerance")
     print(
         "P =", P,
         " err_NX32 =", err_lo,
@@ -192,7 +221,10 @@ def _check_rate[P: Int](var ctx: DeviceContext, expected: Real) raises:
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
-    _check_rate[1](ctx, Real(2.0))
-    _check_rate[2](ctx, Real(3.0))
-    _check_rate[3](ctx, Real(4.0))
+    _check_rate[1](ctx, Real(2.0), Real(3.2e-3), Real(8.0e-4),
+        Real(1.0e-10), Real(1.0e-10))
+    _check_rate[2](ctx, Real(3.0), Real(2.5e-5), Real(3.2e-6),
+        Real(4.5e-5), Real(1.2e-6))
+    _check_rate[3](ctx, Real(4.0), Real(2.0e-7), Real(1.2e-8),
+        Real(2.2e-6), Real(3.2e-8))
     print("PASSED")

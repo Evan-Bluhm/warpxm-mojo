@@ -2,7 +2,7 @@
 #
 # Exercises the generic DormandPrince45_2D[P, MHD_NC] (NC=8) against a
 # smooth nonlinear eigenvector of the MHD system. Same IC as
-# test_imhd_alfven_2d.mojo: a +x-propagating circularly polarized Alfvén
+# test_imhd_convergence_2d.mojo: a +x-propagating circularly polarized Alfvén
 # wave that returns to its IC at t = 1.
 #
 # Validates:

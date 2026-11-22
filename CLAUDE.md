@@ -40,7 +40,7 @@ src/warpxm/
                # (multi-state coupled steppers).
   variable/    # DGState{1,2,3}D[P, NC] device buffers
 examples/      # polished driver programs (one .mojo per physics setup)
-tests/         # 70 regression tests covering every (physics, dimension) combination
+tests/         # 86 regression tests covering every (physics, dimension) combination
 scripts/       # tooling: gll_tables.py (GLL basis table generator),
                # run_tests.sh (pixi `test` task), build_examples.sh
                # (pixi `build` task).
@@ -56,7 +56,7 @@ Mojo + helpers are pinned via pixi:
 
 ```fish
 pixi install
-pixi run mojo run -I src tests/test_advection_1d.mojo
+pixi run mojo run -I src tests/test_dg_convergence_1d.mojo
 pixi run mojo run -I src examples/imhd_orszag_tang_2d_vtu.mojo
 ```
 
@@ -119,7 +119,6 @@ Supporting infrastructure:
 | 2D Orszag-Tang (Athena units)   | ρ ∈ [0.047, 0.547] at t=0.3 (Athena ref), mass drift 8e-14, ψ² 6e-5 |
 | 3D Orszag-Tang (Athena, z-extruded) | z-drift 0.0 exactly; ρ + P + ψ² match 2D bit-for-bit, mass drift 1.7e-12 |
 | 2D GLM ψ-bump decay             | ~900× decay over 2 time units (45000× over 4)           |
-| 3D Alfvén wave (SSPRK3)         | B_y / B_z L2 2.4e-5 bit-identical; ρ-drift 2.2e-4       |
 | 3D MHD blast                    | ∫B_x dV preserved to 4e-15 (Faraday's law)              |
 | 3D cyclotron orbit              | ΔE = 3e-13 (magnetic force does no work)                |
 | 1D Einfeldt 1-2-3 problem       | near-vacuum centre survives (min ρ 1e-3, min P 6e-3)   |
@@ -151,13 +150,13 @@ and the broader MHD-code literature that adopts Athena's form. The
 3D variant only exists in Athena units (z-extrusion of the Athena
 2D IC).
 
-Plus 40+ more in `tests/` (94 tests total). Run the suite via:
+Plus 40+ more in `tests/` (86 tests total). Run the suite via:
 ```fish
 pixi run test               # whole suite in parallel, about a minute
 pixi run test euler 3d      # only tests whose name contains "euler" or "3d"
 pixi run test -t            # also list the ten slowest tests
 # or, for a single test:
-pixi run mojo run -I src tests/test_advection_1d.mojo
+pixi run mojo run -I src tests/test_dg_convergence_1d.mojo
 ```
 
 ## Open work

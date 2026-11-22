@@ -146,12 +146,22 @@ def _one_run[P_X: Int](
     return acc ** Real(0.5)
 
 
-def _check_rate[P_X: Int](var ctx: DeviceContext, expected: Real) raises:
+def _check_rate[P_X: Int](
+    var ctx: DeviceContext, expected: Real, tol_lo: Real, tol_hi: Real,
+) raises:
+    """Check the observed rate and bound both errors absolutely.
+
+    `tol_lo` / `tol_hi` are about 3x the measured coarse / fine errors, so
+    a defect that scales the error uniformly (and leaves the rate intact)
+    still fails.
+    """
     # NX=32 vs 64 (same choice as `test_dg_convergence_1d`) — at NX=16
     # the P=1 case isn't yet in the asymptotic h^(P+1) regime.
     var err_lo = _one_run[P_X](ctx, 32)
     var err_hi = _one_run[P_X](ctx, 64)
     var rate = log2(err_lo / err_hi)
+    assert_true(err_lo < tol_lo, "coarse-mesh L2 error above tolerance")
+    assert_true(err_hi < tol_hi, "fine-mesh L2 error above tolerance")
     print(
         "P_X =", P_X,
         " err_NX32 =", err_lo,
@@ -167,7 +177,7 @@ def _check_rate[P_X: Int](var ctx: DeviceContext, expected: Real) raises:
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
-    _check_rate[1](ctx, Real(2.0))
-    _check_rate[2](ctx, Real(3.0))
-    _check_rate[3](ctx, Real(4.0))
+    _check_rate[1](ctx, Real(2.0), Real(1.5e-2), Real(4.3e-3))
+    _check_rate[2](ctx, Real(3.0), Real(2.9e-4), Real(3.3e-5))
+    _check_rate[3](ctx, Real(4.0), Real(3.3e-6), Real(1.7e-7))
     print("PASSED")
