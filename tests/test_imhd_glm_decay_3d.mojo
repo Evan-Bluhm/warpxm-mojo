@@ -110,7 +110,7 @@ def main() raises:
 
     var t: Real = 0.0
     var t_charge: Real = 0.5
-    var t_final: Real = 4.0
+    var t_final: Real = 2.0
     while t < t_charge - Real(0.5) * DT:
         stepper.step(ctx, q, DT, compute_rhs, no_adjust)
         t += DT
@@ -151,5 +151,5 @@ def main() raises:
     print("t =", t, ": ∫ψ²  =", psi2_end)
     print("ψ² decay ratio (end / charging peak):", psi2_end / psi2_max)
     assert_true(psi2_max > Real(1.0e-10), "ψ should pick up energy from ∇·B coupling")
-    assert_true(psi2_end < Real(0.5) * psi2_max, "ψ should decay ≥ 50 % from peak")
+    assert_true(psi2_end < Real(0.02) * psi2_max, "ψ should decay ≥ 98 % from peak")
     print("PASSED")

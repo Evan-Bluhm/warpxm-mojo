@@ -179,6 +179,7 @@ def main() raises:
 
     assert_true(not any_nan, "Orszag-Tang produced NaN (GLM + limiter unstable)")
     assert_true(rel_mass_drift < Real(1.0e-12), "mass not conserved")
+    assert_true(psi2_T < Real(1.0e-3), "GLM ψ² grew uncontrollably")
     assert_true(min_rho > Real(0.0), "density went non-positive")
     assert_true(max_rho < Real(10.0) * rho_0, "density blew up — unstable shock")
     print("PASSED")

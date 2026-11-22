@@ -87,7 +87,9 @@ def main() raises:
 
     # One period: T = 2π/ω with ω = c·π·√2 ⇒ T = √2/c.
     var t_final = sqrt(Real(2.0)) / C_LIGHT
-    var dt: Real = Real(2.0e-4)
+    # dt divides the period exactly (≈ 5e-4, the step the plane-wave tests
+    # use on the same mesh), so the run ends exactly at t = T.
+    var dt: Real = t_final / Real(2829)
 
     def compute_rhs(
         mut q_in: DGState2D[P, MAXWELL_NC],
@@ -138,8 +140,8 @@ def main() raises:
     var l2_ez = err_ez ** Real(0.5)
     print("L2 E_z after one period:", l2_ez)
     print("max |E_x, E_y, B_z| (should be tiny):", max_other)
-    assert_true(l2_ez < Real(5.0e-3),
+    assert_true(l2_ez < Real(1.0e-4),
                 "E_z L2 error too large — PEC wall reflection likely off")
-    assert_true(max_other < Real(5.0e-3),
+    assert_true(max_other < Real(1.0e-10),
                 "non-TM₁₁ components excited — wall BC mixing modes")
     print("PASSED")

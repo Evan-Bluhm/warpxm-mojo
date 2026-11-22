@@ -12,15 +12,34 @@ test in `tests/`. Each test is a standalone `main()` that:
 ## Running the suite
 
 ```fish
-pixi run test               # full suite, tally pass/fail at the end
-pixi run test -k            # stop at first failure
+pixi run test               # full suite (16 tests at a time), about a minute
+pixi run test euler 3d      # only tests whose name contains "euler" or "3d"
+pixi run test -j 4          # at most 4 tests at once (-j 1 = sequential)
+pixi run test -k            # stop launching tests after the first failure
 pixi run test -v            # verbose: print full output of failing tests
+pixi run test -t            # also list the ten slowest tests
 ```
 
-The `test` pixi task wraps `scripts/run_tests.sh` — a shell loop with
-robust pass detection (grep for `^PASSED$`) so noise like build
-warnings or trailing newlines doesn't confuse the tally. Exit code 1
-on any failure.
+The `test` pixi task wraps `scripts/run_tests.sh`. Tests are independent
+programs, so the runner compiles and runs them in parallel. A test passes
+only if it exits with status 0 **and** prints the line `PASSED`. Exit
+code 1 on any failure.
+
+Compilation parallelises well; GPU work does not (one GPU serialises the
+processes, and each process pays about a second of driver start-up). So
+the suite's wall time is set by total GPU work — keep new tests as small
+as their assertion allows:
+
+* Use the fewest transverse elements that still exercise the code path
+  (2 layers for a problem that is uniform in that direction).
+* Choose `dt = T / n_steps` so the run ends exactly on the target time;
+  a truncated last step otherwise shows up as a spurious phase error
+  and forces a loose tolerance.
+* Stop at the earliest time with a known exact solution (a half period
+  with the sign-flipped IC, or the true period of a diagonal wave).
+* Set tolerances from the measured error (roughly 5–30× above it), not
+  from a generic bound — a tolerance orders of magnitude above the
+  measured value cannot catch a regression.
 
 To run a single test directly:
 

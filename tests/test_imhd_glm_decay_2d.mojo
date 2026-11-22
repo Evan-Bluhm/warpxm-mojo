@@ -129,7 +129,7 @@ def main() raises:
 
     var t: Real = 0.0
     var t_charge: Real = 0.5
-    var t_final: Real = 4.0
+    var t_final: Real = 2.0
     while t < t_charge - Real(0.5) * DT:
         stepper.step(ctx, q, DT, compute_rhs, no_adjust)
         t += DT
@@ -170,8 +170,8 @@ def main() raises:
 
     assert_true(psi2_max > psi2_0 + Real(1.0e-8),
                 "ψ should pick up energy from ∇·B coupling")
-    assert_true(psi2_end < Real(0.5) * psi2_max,
-                "ψ should decay at least 50 % from its peak under GLM damping")
+    assert_true(psi2_end < Real(0.02) * psi2_max,
+                "ψ should decay at least 98 % from its peak under GLM damping")
     assert_true(bx2_end < Real(2.0) * bx2_0,
                 "B_x² should stay bounded — no runaway growth")
     print("PASSED")

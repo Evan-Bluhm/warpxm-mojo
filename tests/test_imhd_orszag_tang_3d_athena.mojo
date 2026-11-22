@@ -9,7 +9,7 @@
 # check that the 3D MHD solver gives bit-identical behavior to 2D on
 # extruded ICs (we already have this validation for Brio-Wu and Alfvén).
 #
-# Mesh: `NX = NY = 32`, `NZ = 4`. The reduced NZ keeps the run cheap
+# Mesh: `NX = NY = 32`, `NZ = 2`. The reduced NZ keeps the run cheap
 # while still exercising multiple z-layers' worth of comparison work
 # (any per-z-layer code-path bug would show up as z-drift).
 #
@@ -45,7 +45,7 @@ from warpxm.variable.state_3d import DGState3D
 comptime P: Int = 2
 comptime NX: Int = 32
 comptime NY: Int = 32
-comptime NZ: Int = 4
+comptime NZ: Int = 2
 comptime GAMMA: Real = 5.0 / 3.0
 comptime V0: Real = 1.0
 comptime C_H: Real = 3.0
@@ -248,7 +248,7 @@ def main() raises:
     assert_true(min_rho > Real(0.0), "density went non-positive")
     assert_true(min_p > Real(0.0), "pressure went non-positive")
     assert_true(max_rho < Real(10.0) * d0, "density blew up")
-    assert_true(psi2_T < Real(1.0e-2) * Real(NZ), "GLM ψ² grew uncontrollably")
+    assert_true(psi2_T < Real(1.0e-3), "GLM ψ² grew uncontrollably")
     # z-drift bound: floating-point cumulative error over 600 SSPRK3 steps
     # on a problem with σ ≈ 1 fields. 1e-10 is loose but well above
     # the asymmetric-summation noise floor.

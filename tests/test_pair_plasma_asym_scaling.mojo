@@ -41,13 +41,13 @@ from warpxm.variable.state_2d import DGState2D
 
 comptime P: Int = 2
 comptime NX: Int = 32
-comptime NY: Int = 4
+comptime NY: Int = 2
 comptime GAMMA: Real = 5.0 / 3.0
 comptime ALPHA_1: Real = -1.0
 comptime ALPHA_2: Real = +1.0
 comptime EPS0: Real = 1.0
 comptime P0: Real = 1.0e-4
-comptime DT: Real = 1.0e-3
+comptime DT: Real = 2.5e-3
 
 
 def _measure_asym(var ctx: DeviceContext, delta: Real) raises -> Real:

@@ -32,7 +32,7 @@ from warpxm.variable.state_2d import DGState2D
 
 comptime P: Int = 2
 comptime NX: Int = 200
-comptime NY: Int = 4
+comptime NY: Int = 2
 comptime GAMMA: Real = 1.4
 comptime T_FINAL: Real = 0.15
 comptime DT: Real = 1.0e-4

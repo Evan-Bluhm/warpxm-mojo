@@ -115,7 +115,9 @@ def main() raises:
         apply_lorentz_source_2d[P](ctx, qf_in, qm_in, qf_out, ALPHA)
         apply_current_source_2d[P](ctx, qf_in, qm_out, ALPHA, eps0_decoupled)
 
-    var dt: Real = Real(1.0e-3)
+    # dt divides the period exactly, so the run ends at t = 2π and the
+    # closure error below is the scheme's, not a truncated last step.
+    var dt: Real = t_final / Real(1257)
     var t: Real = 0.0
     while t < t_final - Real(0.5) * dt:
         var dt_use = dt if (t + dt) < t_final else (t_final - t)
@@ -153,10 +155,11 @@ def main() raises:
     print("  max |Δρ|      =", max_d_rho)
     print("  max |ΔE|      =", max_d_e)
     print("  max |ΔB_z|    =", max_d_Bz)
-    # SSPRK3 is third-order in time, dt = 1e-3 over T = 2π ⇒ ~6300 steps.
-    # Per-step error ~ dt^4 ≈ 1e-12; accumulated ~ dt^3 ≈ 1e-9.
-    assert_true(max_d_mx < Real(1.0e-3), "ρu_x didn't close the cyclotron loop")
-    assert_true(max_d_my < Real(1.0e-3), "ρu_y residual after one period")
+    # SSPRK3 is third-order in time; 1257 steps of dt = 2π/1257 ≈ 5e-3 close
+    # the orbit to ~3e-8, so 1e-6 leaves a 30× margin while still catching a
+    # wrong gyro-frequency or a first-order source coupling.
+    assert_true(max_d_mx < Real(1.0e-6), "ρu_x didn't close the cyclotron loop")
+    assert_true(max_d_my < Real(1.0e-6), "ρu_y residual after one period")
     assert_true(max_d_rho < Real(1.0e-12), "density drifted during cyclotron motion")
     assert_true(max_d_e < Real(1.0e-12), "total energy drifted (magnetic force should do no work)")
     assert_true(max_d_Bz < Real(1.0e-12), "B_z should be untouched by spatial solver")

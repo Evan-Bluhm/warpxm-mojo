@@ -37,7 +37,6 @@ comptime EPS: Real = 0.01
 comptime UX: Real = 1.0
 comptime UY: Real = 1.0
 comptime UZ: Real = 1.0
-comptime DT: Real = 1.0e-3
 
 
 def main() raises:
@@ -88,7 +87,12 @@ def main() raises:
     var spatial = DGEulerSolver3D[P](app)
     var stepper = SSPRK3_3D[P, EULER_NC](ctx, mesh.num_elements)
 
-    var t_final: Real = 1.0
+    # The wave moves along (1, 1, 1) at speed |u| = √3 with wavelength 1/√3,
+    # so the solution returns to the IC every 1/3 time unit. One period is
+    # enough to measure the dispersion / dissipation error; 334 steps of
+    # dt = (1/3)/334 ≈ 1e-3 land exactly on it.
+    var t_final: Real = Real(1.0) / Real(3.0)
+    var dt: Real = t_final / Real(334)
 
     def compute_rhs(
         mut q_in: DGState3D[P, EULER_NC],
@@ -100,10 +104,9 @@ def main() raises:
         pass
 
     var t: Real = 0.0
-    while t < t_final - Real(0.5) * DT:
-        var dt_use = DT if (t + DT) < t_final else (t_final - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
-        t += dt_use
+    for _ in range(334):
+        stepper.step(ctx, q, dt, compute_rhs, no_adjust)
+        t += dt
     ctx.synchronize()
 
     var jv = mesh.jacobian_x * mesh.jacobian_y * mesh.jacobian_z
@@ -134,6 +137,6 @@ def main() raises:
     print("3D Euler entropy wave — t =", t)
     print("  ρ L2 error vs exact:", l2)
     print("  net mass drift:      ", mass_drift)
-    assert_true(l2 < Real(5.0e-4), "ρ L2 error too large")
+    assert_true(l2 < Real(1.0e-4), "ρ L2 error too large")
     assert_true(fabs(mass_drift) < Real(1.0e-12), "mass not conserved")
     print("PASSED")

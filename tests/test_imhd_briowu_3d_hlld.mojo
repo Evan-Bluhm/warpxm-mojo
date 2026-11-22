@@ -24,8 +24,8 @@ from warpxm.variable.state_3d import DGState3D
 
 comptime P: Int = 2
 comptime NX: Int = 200
-comptime NY: Int = 4
-comptime NZ: Int = 4
+comptime NY: Int = 2
+comptime NZ: Int = 2
 comptime GAMMA: Real = 2.0
 comptime T_FINAL: Real = 0.1
 comptime DT: Real = 1.0e-4

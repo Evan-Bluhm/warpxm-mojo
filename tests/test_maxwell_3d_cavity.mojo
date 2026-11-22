@@ -97,7 +97,9 @@ def main() raises:
     var stepper = SSPRK3_3D[P, MAXWELL_NC](ctx, mesh.num_elements)
 
     var t_final = sqrt(Real(2.0)) / C_LIGHT
-    var dt: Real = Real(2.0e-4)
+    # dt divides the period exactly (≈ 5e-4, the step the plane-wave tests
+    # use on the same mesh), so the run ends exactly at t = T.
+    var dt: Real = t_final / Real(2829)
 
     def compute_rhs(
         mut q_in: DGState3D[P, MAXWELL_NC],
@@ -145,7 +147,7 @@ def main() raises:
     print("3D Maxwell cavity TM mode — t =", t)
     print("  L2 E_z error vs IC:                                  ", l2_ez)
     print("  max |E_x, E_y, B_z| (must be ~0 by symmetry):        ", max_other)
-    assert_true(l2_ez < Real(5.0e-3), "E_z L2 error too large — PEC reflection wrong")
+    assert_true(l2_ez < Real(5.0e-4), "E_z L2 error too large — PEC reflection wrong")
     assert_true(max_other < Real(1.0e-10),
                 "spurious E_x / E_y / B_z excited — wall BC mixing modes")
     print("PASSED")

@@ -164,6 +164,8 @@ def main() raises:
     print("  rel Δ(∫B_x dV):           ", fabs(bx_T - bx_0) / bx_0)
 
     assert_true(not any_nan, "strong MHD blast NaN'd")
+    assert_true(fabs(mass_T - mass_0) / mass_0 < Real(1.0e-11),
+                "mass not conserved (limiter / positivity must be conservative)")
     assert_true(min_rho > Real(0.0), "negative ρ survived positivity preserver")
     assert_true(min_p > Real(0.0), "negative P_gas survived positivity preserver")
     # ∫B_x is exactly conserved with periodic BCs (Faraday's law) regardless

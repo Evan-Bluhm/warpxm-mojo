@@ -33,15 +33,15 @@ from warpxm.variable.state_3d import DGState3D
 
 comptime P: Int = 2
 comptime NX: Int = 32
-comptime NY: Int = 4
-comptime NZ: Int = 4
+comptime NY: Int = 2
+comptime NZ: Int = 2
 comptime GAMMA: Real = 5.0 / 3.0
 comptime ALPHA_1: Real = -1.0
 comptime ALPHA_2: Real = +1.0
 comptime EPS0: Real = 1.0
 comptime DELTA: Real = 0.01
 comptime P0: Real = 1.0e-4
-comptime DT: Real = 1.0e-3
+comptime DT: Real = 2.5e-3
 
 
 def main() raises:

@@ -228,5 +228,5 @@ def main() raises:
     # ρ_max ≲ 0.5 (≈ 2.3 × d_0) at t = 0.3, well below this bound.
     assert_true(max_rho < Real(10.0) * d0, "density blew up — unstable shock")
     # GLM ψ² should be O(B²·c_p²) at most; a loose bound catches divergence.
-    assert_true(psi2_T < Real(1.0e-2), "GLM ψ² grew uncontrollably")
+    assert_true(psi2_T < Real(1.0e-3), "GLM ψ² grew uncontrollably")
     print("PASSED")

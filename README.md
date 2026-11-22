@@ -30,7 +30,7 @@ Then:
 
 ```fish
 pixi run build              # type-check every example (~30s)
-pixi run test               # full 66-test regression suite (~5 min)
+pixi run test               # full regression suite, in parallel (~1 min)
 ```
 
 Both should report no failures on a working install.

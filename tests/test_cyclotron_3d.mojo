@@ -94,7 +94,9 @@ def main() raises:
     var stepper = SSPRK3_TwoFluid_3D[P](ctx, mesh.num_elements)
 
     var t_final = TWO_PI
-    var dt: Real = Real(1.0e-3)
+    # dt divides the period exactly, so the run ends at t = 2π and the
+    # closure error below is the scheme's, not a truncated last step.
+    var dt: Real = t_final / Real(1257)
     # ε₀ = 1e30 effectively disables the current back-reaction so the
     # cyclotron test isolates the Lorentz response (matches the 2D test).
     var eps0_decoupled: Real = 1.0e30
@@ -146,8 +148,8 @@ def main() raises:
     print("  max |ΔE|      =", max_d_e)
     print("  max |ΔB_z|    =", max_d_Bz)
 
-    assert_true(max_d_mx < Real(1.0e-3), "ρu_x didn't close the cyclotron loop")
-    assert_true(max_d_my < Real(1.0e-3), "ρu_y residual after one period")
+    assert_true(max_d_mx < Real(1.0e-6), "ρu_x didn't close the cyclotron loop")
+    assert_true(max_d_my < Real(1.0e-6), "ρu_y residual after one period")
     assert_true(max_d_rho < Real(1.0e-12), "density drifted during cyclotron motion")
     assert_true(max_d_e < Real(1.0e-12), "total energy drifted (magnetic force should do no work)")
     assert_true(max_d_Bz < Real(1.0e-12), "B_z should be untouched")

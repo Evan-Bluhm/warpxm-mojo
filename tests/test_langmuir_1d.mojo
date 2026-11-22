@@ -53,7 +53,7 @@ comptime ALPHA: Real = -1.0
 comptime EPS0: Real = 1.0
 comptime DELTA: Real = 0.01
 comptime P0: Real = 1.0e-4
-comptime DT: Real = 1.0e-3
+comptime DT: Real = 2.5e-3
 
 
 def main() raises:

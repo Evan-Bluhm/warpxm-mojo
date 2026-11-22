@@ -15,9 +15,10 @@
 #     ρ = 1, P = 1, B = (1, δ cos(2π x), δ sin(2π x))
 #     u = (0, -δ cos(2π x) / √ρ, -δ sin(2π x) / √ρ)   [Walen]
 #
-# After T = λ/c_A = 1 the solution returns to the IC.
+# After T = λ/c_A = 1 the solution returns to the IC; the test stops at
+# T/2, where it is the IC with the transverse perturbation negated.
 #
-# Sweep: `P ∈ {1, 2, 3}` × `NX ∈ {16, 32}`. `NY = NZ = 4` fixed slab.
+# Sweep: `P ∈ {1, 2, 3}` × `NX ∈ {16, 32}`. `NY = NZ = 2` fixed slab.
 # CFL pinned to `dt = 5·10⁻⁴`.
 #
 # Note: smaller NX values than the 2D test (16 / 32 vs 32 / 64). The
@@ -47,15 +48,18 @@ from warpxm.temporal.ssprk3_3d import SSPRK3_3D
 from warpxm.variable.state_3d import DGState3D
 
 
-comptime NY: Int = 4
-comptime NZ: Int = 4
+comptime NY: Int = 2
+comptime NZ: Int = 2
 comptime GAMMA: Real = 5.0 / 3.0
 comptime RHO0: Real = 1.0
 comptime P0: Real = 1.0
 comptime B0: Real = 1.0
 comptime DELTA: Real = 0.1
 comptime DT: Real = 5.0e-4
-comptime T_FINAL: Real = 1.0
+# Half a period: the wave has moved by λ/2, so the exact solution is the
+# IC with the transverse perturbation negated. Half the steps of a full
+# period, same convergence rates.
+comptime T_FINAL: Real = 0.5
 
 
 def _one_run[P: Int](
@@ -165,10 +169,10 @@ def _one_run[P: Int](
                                 )
                                 var c_v = cos(k_wave * x)
                                 var s_v = sin(k_wave * x)
-                                var By_ex = DELTA * c_v
-                                var Bz_ex = DELTA * s_v
-                                var uy_ex = -DELTA * c_v * inv_sqrt_rho
-                                var uz_ex = -DELTA * s_v * inv_sqrt_rho
+                                var By_ex = -DELTA * c_v
+                                var Bz_ex = -DELTA * s_v
+                                var uy_ex = DELTA * c_v * inv_sqrt_rho
+                                var uz_ex = DELTA * s_v * inv_sqrt_rho
                                 var n = kn * P1 * P1 + jn * P1 + in_
                                 var b = (e * nodes_per_elem + n) * MHD_NC
                                 var rho = h[b + IDX_RHO]
