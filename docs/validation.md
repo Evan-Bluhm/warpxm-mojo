@@ -16,6 +16,19 @@ program per test). Run it with `pixi run test`; see
 | 3D MHD Alfvén-wave conv         | observed rates 2.98 / 4.02 at P=2,3 (theoretical P+1)   |
 | 1D1V Vlasov free-streaming conv | observed rates 1.78 / 3.10 / 4.29 (theoretical P+1)     |
 | 1D2V Vlasov free-streaming conv | observed rates 1.97 / 3.00 / 3.99 (theoretical P+1)     |
+| 1D3V Vlasov free-streaming conv | observed rate 2.99 at P=2 (theoretical P+1)             |
+| 1D3V gyration + E×B + E∥ (oblique B) | observed rate 2.82 at P=2, mass change 5e-8 / 2e-10 |
+| 1D3V Vlasov RHS vs analytic operator | relative L2 0.116 → 0.031 (P=2), 0.051 → 0.008 (P=3), all six field components active |
+| 2D2V Vlasov RHS vs analytic operator | relative L2 0.098 → 0.026 (P=2), fields varying in x and y |
+| Generic vs hand-written Vlasov RHS | 1D1V and 1D2V agree to 1e-14 (periodic and copy-out) |
+| 1D3V specular walls (free streaming, image solution) | observed rates 1.95 / 3.04 at P=1,2; mass change < 1e-13 (copy-out walls: error 0.4, 27 % of the mass lost) |
+| 2D2V channel, specular walls in y | observed rate 3.01 at P=2; mass change < 5e-13 |
+| 1D3V specular walls, confined equilibrium ($E_x$ into the walls, arbitrary $\mathbf{B}$) | error 1.4e-2 → 3.1e-3 (rate 2.15; 2.41 for the same problem without walls); mass change 2e-9, all through the velocity boundary (copy-out walls: 5e-3) |
+| 1D3V specular walls, bounce + gyration | observed rate 2.78 at P=2 (copy-out walls: error 0.44) |
+| 1D3V Vlasov-Maxwell closed box (specular + PEC walls) | mass change 2e-12; total energy change 1e-6 of the field energy while 31 % of it goes to the particles (copy-out walls: 7e-3 and 6.7 field energies) |
+| 2D2V Vlasov-Maxwell oblique Langmuir mode | amplitude within 2.7e-4 of linear theory; W_Ex/W_Ey within 3e-3 of (k_x/k_y)²; energy change 7e-4 of the field energy |
+| 2D3V / 3D3V Vlasov RHS on polynomial data | exact to 2e-14 / 3e-14 at P=1,2 |
+| 1D3V / 2D2V velocity moments    | drifting Maxwellian: n, n u, energy to 6e-9 / 1e-8 at every node |
 | 2D Euler hydrostatic balance    | \|v\| ~ 4e-16 after 50 steps (well-balanced source)     |
 | 2D Sod tube                     | analytic plateaus match to 3e-3                         |
 | 1D Langmuir (single-fluid)      | mass drift 2.73e-13, ρ at sample within 7e-6 of IC after period |
@@ -51,6 +64,7 @@ program per test). Run it with `pixi run test`; see
 | Vlasov-Maxwell uniform oscillator | E and J match E0 cos t, −E0 sin t to 2e-6 each quarter period |
 | Vlasov-Maxwell Weibel growth    | fitted γ 0.36445 vs kinetic theory 0.36436             |
 | Vlasov-Maxwell Landau-damped EM wave | period within 5e-4, damping within 5e-3 of kinetic root |
+| 1D3V Vlasov-Maxwell EM waves    | both polarisations, (E_y, B_z) and (E_z, B_y): period within 5e-4, damping within 5e-3 of kinetic root |
 | Adaptive DP45 (2D entropy wave) | 200 steps for t=1, dt 5.3e-4..1e-2, ρ L2 6.6e-7        |
 | Adaptive DP45 (2D MHD Alfvén)   | 169 steps for t=1 (vs 1000 SSPRK3), L2 ~4.3e-6 on B/u  |
 | 1D Maxwell PEC cavity TM        | L2 E_z 8e-6 after one period, unexcited components 0.0 |

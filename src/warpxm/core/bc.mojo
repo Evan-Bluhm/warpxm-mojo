@@ -46,3 +46,14 @@ comptime BC_PMC_WALL: Int = 5
 # `BC_COPYOUT`, which mirrors the interior and would inject `f_interior`
 # back across the truncation boundary.
 comptime BC_VLASOV_OUTFLOW: Int = 6
+
+# Vlasov specular (reflecting) wall, for a configuration-space boundary of
+# a kinetic phase mesh. A particle that hits the wall leaves with its
+# normal velocity reversed, so the ghost state at velocity `v` is the
+# interior state at the mirrored velocity (`v_n → −v_n`, tangential
+# components unchanged), read at the same wall node. The velocity mesh
+# must be symmetric about zero along the wall-normal axis, so that the
+# mirror of a GLL node is a GLL node. The upwind flux then carries no net
+# mass through the wall. Pair it with `BC_PEC_WALL` on the field solver
+# for a conducting wall.
+comptime BC_VLASOV_REFLECT: Int = 7

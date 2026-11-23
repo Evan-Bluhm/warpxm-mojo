@@ -123,6 +123,46 @@ struct VlasovMaxwell(ImplicitlyCopyable, Movable):
         full gyration-driving piece of the 1D2V Lorentz force."""
         return (charge_mass_ratio / skin_depth_norm) * (ey - v1 * bz)
 
+    @staticmethod
+    @always_inline
+    def lorentz_acceleration_static[VDIM: Int, axis: Int](
+        ex: Real, ey: Real, ez: Real,
+        bx: Real, by: Real, bz: Real,
+        v1: Real, v2: Real, v3: Real,
+        factor: Real,
+    ) -> Real:
+        """Lorentz acceleration along velocity axis `axis` with `VDIM`
+        velocity dimensions: `factor · (E + v × B)_axis`, `factor =
+        (q/m) / λ_skin`. Velocity components at or beyond `VDIM` are zero
+        and their terms are left out at compile time (a run-time
+        `0.0 * B` is not folded away), so the `v` arguments for those
+        components are ignored. With `VDIM = 1` this is
+        `acceleration_v_1d1v_static`; with `VDIM = 2` the two 1D2V
+        accelerations.
+
+        The result never depends on the velocity component along `axis`
+        itself, which is what makes the acceleration single-valued on a
+        velocity face and constant along a velocity line of nodes."""
+        comptime assert axis >= 0 and axis < VDIM, "axis must be below VDIM"
+        var s: Real
+        comptime match axis:
+            case 0:
+                # (v × B)_x = v2 B_z − v3 B_y
+                s = ex
+                comptime if VDIM >= 2:
+                    s = s + v2 * bz
+                comptime if VDIM >= 3:
+                    s = s - v3 * by
+            case 1:
+                # (v × B)_y = v3 B_x − v1 B_z
+                s = ey - v1 * bz
+                comptime if VDIM >= 3:
+                    s = s + v3 * bx
+            case _:
+                # (v × B)_z = v1 B_y − v2 B_x
+                s = ez + v1 * by - v2 * bx
+        return factor * s
+
     # ------------------------------------------------------------------
     # Internal fluxes — linear in `f`, so they're just `c · f` with `c`
     # the per-node signal speed (v-coordinate for the x-axis, Lorentz

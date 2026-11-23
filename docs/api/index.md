@@ -16,9 +16,9 @@ src/warpxm/
                # solvers, adjusters, sources, VTU preset)
   core/        # Real-type alias, math helpers, BC kinds
   basis/       # GLL nodal basis tables (P = 1..4)
-  mesh/        # BlockMesh[NDIM, P], PhaseMesh1D1V / 1D2V, and the host-side
+  mesh/        # BlockMesh[NDIM, P], PhaseMesh[XDIM, VDIM, P_x, P_v] (and 1D1V / 1D2V), the host-side
                # helpers (fill, visit_nodes, integrate, l2_error)
-  variable/    # DGState[NDIM, P, NC], PhaseState1D1V / 1D2V
+  variable/    # DGState[NDIM, P, NC], PhaseState[XDIM, VDIM, ...] (and 1D1V / 1D2V)
   apps/        # Physics modules, one file per physics (advection, euler,
                # maxwell, imhd, imhd_glm, vlasovmaxwell). The struct is
                # dimension-agnostic; the DG core supplies the normal
@@ -64,8 +64,9 @@ src/warpxm/
   `suggest_dt`). Used by the kernels.
 * `NDIM` is a `comptime` parameter, always first: `BlockMesh[2, P]`,
   `DGState[2, P, NC]`, `DGEulerSolver[2, P]`,
-  `MoeRossmanith[2, P, NC]`, `SSPRK3[2, P, NC]`. Only the kinetic
-  (Vlasov) types carry a dimension suffix (`1D1V`, `1D2V`).
+  `MoeRossmanith[2, P, NC]`, `SSPRK3[2, P, NC]`. The kinetic (Vlasov)
+  types take `[XDIM, VDIM, P_x, P_v]` (`PhaseMesh[1, 3, P_x, P_v]`); the
+  original ones carry a dimension suffix instead (`1D1V`, `1D2V`).
 * Index constants: each fixed-NC physics module (`euler`, `maxwell`,
   `imhd`, `imhd_glm`) exports `IDX_*` constants (e.g. `IDX_RHO`,
   `IDX_MX`, `IDX_BX`) and a `*_NC` constant. Single source of truth

@@ -89,6 +89,18 @@ var q_maxwell = DGState[2, P, MAXWELL_NC](ctx, mesh.num_elements)
 ## Phase-space states
 
 ```mojo
+from warpxm.variable.phase_state import PhaseState
+
+var f = PhaseState[1, 3, P_x, P_v, VLASOV_NC](ctx, mesh.num_phase_elements)
+```
+
+`PhaseState[XDIM, VDIM, P_x, P_v, NC]` is the generic phase-space state.
+Phase elements are numbered with the last axis innermost, local nodes
+with the first axis innermost, and
+`PhaseState.index(elem, node, comp)` gives the flat index. For `XDIM = 1`
+the layout is identical to the two original types below.
+
+```mojo
 from warpxm.variable.phase_state_1d1v import PhaseState1D1V
 from warpxm.variable.phase_state_1d2v import PhaseState1D2V
 

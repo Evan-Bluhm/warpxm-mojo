@@ -254,6 +254,9 @@ Adds $-(c_h^{2}/c_p^{2})\psi$ to the $\psi$ RHS. The function squares
 
 | File | Contents |
 | ---- | -------- |
+| `dg_vlasov.mojo` | `DGVlasovSolver[XDIM, VDIM, P_x, P_v]`: generic phase-space DG residual with the full Lorentz force, `compute_rhs(ctx, mesh, f, fields, rhs)`, `suggest_dt(ctx, mesh, fields)` |
+| `vlasov_moments.mojo` | `VlasovMoments[XDIM, VDIM, P_x, P_v](ctx, mesh).compute`: density, three flux components and energy into one `DGState[XDIM, P_x, VLASOV_MOMENT_NC]`, in one pass |
+| `vlasov_current_source.mojo` | `apply_vlasov_current_source[XDIM, VDIM, P]`: flux moments into the Maxwell RHS |
 | `dg_vlasov_1d1v.mojo`, `dg_vlasov_1d2v.mojo` | `DGVlasovSolver1D1V[P_x, P_v]`, `DGVlasovSolver1D2V[P_x, P_v1, P_v2]`: phase-space DG residual, `compute_rhs(ctx, mesh, f, aux, rhs)` |
 | `vlasov_moments_1d1v.mojo`, `vlasov_moments_1d2v.mojo` | `VlasovMoments1D1V` / `1D2V`: density, current and kinetic-energy moments into `DGState[1, P_x, 1]` |
 | `vlasov_current_source_1d.mojo`, `vlasov_current_source_1d2v.mojo` | `apply_vlasov_current_source_1d` / `_1d2v`: moment current into the Maxwell RHS |

@@ -14,6 +14,8 @@ a capture list).
 | `dormand_prince.mojo` | `DormandPrince45[NDIM, P, NC]` | fixed-step or adaptive 5(4) RK, any single-state problem |
 | `ssprk3_twofluid.mojo` | `SSPRK3_TwoFluid[NDIM, P]` | one Euler fluid + Maxwell |
 | `ssprk3_plasma.mojo` | `SSPRK3_Plasma[NDIM, P]` | two Euler species + Maxwell |
+| `ssprk3_phase.mojo` | `SSPRK3Phase[XDIM, VDIM, P_x, P_v, NC]`, `no_op_adjust_phase` | a phase-space state alone, any dimensions |
+| `ssprk3_vlasov_maxwell.mojo` | `SSPRK3VlasovMaxwell[XDIM, VDIM, P_x, P_v]` | Vlasov + Maxwell, any dimensions |
 | `ssprk3_1d1v.mojo`, `ssprk3_1d2v.mojo` | `SSPRK3_1D1V[P_x, P_v, NC]`, `SSPRK3_1D2V[P_x, P_v1, P_v2, NC]` | a phase-space state alone |
 | `ssprk3_vlasov_maxwell_1d1v.mojo`, `..._1d2v.mojo` | `SSPRK3_VlasovMaxwell_1D1V[P_x, P_v]`, `SSPRK3_VlasovMaxwell_1D2V[P_x, P_v1, P_v2]` | Vlasov + 1D Maxwell |
 
@@ -172,6 +174,16 @@ adjuster, and neither has a CFL-driven variant: the plasma-frequency
 source terms, not only the wave speeds, limit the step.
 
 ## Kinetic steppers
+
+`SSPRK3Phase` and `SSPRK3VlasovMaxwell` are the generic kinetic steppers
+(constructed from `mesh.num_phase_elements`, plus `mesh.num_x_elements`
+for the coupled one). Besides `step` and `run_until` they have
+`run_until_cfl`, whose `suggest_dt` closure takes the phase state (and
+the Maxwell state, for the coupled stepper). They keep two scratch
+copies of the state rather than four (`stage` and `rhs`), because the
+number of copies of `f` is what limits a kinetic run. `CflPacer`
+(`temporal/pacing.mojo`) is the step-size bookkeeping shared by the
+`run_until_cfl` loops. The original per-dimension steppers follow.
 
 `SSPRK3_1D1V` / `SSPRK3_1D2V` advance one phase-space state with the
 same `step(ctx, f, dt, compute_rhs, adjust)` shape (adjuster

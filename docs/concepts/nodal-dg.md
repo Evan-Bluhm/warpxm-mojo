@@ -120,7 +120,7 @@ See the [`core.bc`](../api/core.md) module for the full enum and
 | Shared DG core                | `src/warpxm/spatial/dg_core.mojo`                             |
 | Host-side kernel launcher     | `src/warpxm/spatial/dg_launch.mojo`                           |
 | Per-physics DG kernels        | `src/warpxm/spatial/dg_{advection,euler,maxwell,imhd,imhd_glm}.mojo` |
-| Phase-space (kinetic) DG      | `src/warpxm/spatial/kinetic/dg_vlasov_1d{1,2}v.mojo`          |
+| Phase-space (kinetic) DG      | `src/warpxm/spatial/kinetic/dg_vlasov.mojo` (generic), `dg_vlasov_1d{1,2}v.mojo` |
 | Volume vs surface split       | `dg_core.mojo` — the "Volume term" and "Surface term" blocks  |
 
 Reading one wrapper (`spatial/dg_euler.mojo` is a good target) and the

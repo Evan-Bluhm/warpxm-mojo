@@ -157,6 +157,36 @@ own coordinate buffer and closed-form integrals.
 
 ## Phase-space meshes
 
+The generic mesh covers every supported phase space (axes are listed x
+first, then v):
+
+```mojo
+from warpxm.mesh.phase_mesh import PhaseMesh
+
+var m = PhaseMesh[1, 3, P_x, P_v](            # 1D3V
+    ctx,
+    lo=[x_min, v1_min, v2_min, v3_min],
+    hi=[x_max, v1_max, v2_max, v3_max],
+    n=[NX, NV1, NV2, NV3],
+    periodic=[True],
+    # bc=[BC_VLASOV_REFLECT, BC_COPYOUT],     # optional, per x side:
+    #   BC_COPYOUT, BC_VLASOV_OUTFLOW or BC_VLASOV_REFLECT (specular wall;
+    #   needs v_min = −v_max on the wall-normal velocity axis)
+)
+```
+
+Members: `n`, `lo`, `hi`, `dx`, `jacobian` (arrays over the axes),
+`num_x_elements`, `num_v_elements`, `num_phase_elements`. Helpers:
+`fill(f, ic)`, `visit_nodes(f, visit)` and `integrate(f)`, the closures
+taking the coordinates in axis order (`ic(x, v1, v2, v3)`,
+`visit(x, v1, v2, v3, w, f_node)`). It stores no face tables; neighbours
+come from index arithmetic. `x_block_element(phase_e)` gives the element
+of the companion `BlockMesh[XDIM, P_x]`, and `check_companion(x_mesh)`
+raises unless that mesh has the same extent, element counts and
+periodicity.
+
+The original per-dimension meshes:
+
 ```mojo
 from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
 from warpxm.mesh.phase_mesh_1d2v import PhaseMesh1D2V

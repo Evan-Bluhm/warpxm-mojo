@@ -59,6 +59,7 @@ from warpxm.core.bc import (
     BC_PEC_WALL,    # 4 — perfectly-conducting wall (Maxwell, ideal MHD)
     BC_PMC_WALL,    # 5 — perfectly-magnetic wall (Maxwell)
     BC_VLASOV_OUTFLOW,  # 6 — zero ghost state on velocity-space boundaries
+    BC_VLASOV_REFLECT,  # 7 — specular wall for a kinetic distribution
 )
 ```
 
@@ -69,7 +70,9 @@ each ghost-face evaluation; the BC adjustment is then physics-aware
 `BC_PEC_WALL` flips tangential $\mathbf{E}$). A kind a physics does not
 implement falls through to copy-out; GLM-MHD treats every kind as
 copy-out. The phase meshes set `BC_VLASOV_OUTFLOW` on the velocity-space
-boundaries themselves.
+boundaries themselves. `BC_VLASOV_REFLECT` is accepted only by the
+generic `PhaseMesh`, on a configuration boundary: the ghost state is the
+interior state at the mirrored normal velocity.
 
 Per-axis BC selection is in each mesh's `__init__`:
 

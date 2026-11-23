@@ -39,9 +39,10 @@ src/warpxm/
                # vtu_presets.mojo: per-physics field lists. frame_writer.mojo:
                # time series + .pvd.
   mesh/        # block.mojo: BlockMesh[NDIM, P] (periodic + per-side BCs).
-               # phase_mesh_*.mojo: the phase meshes. Meshes own the
-               # host-side helpers: fill, visit_nodes, integrate,
-               # integrate_fn, l2_error.
+               # phase_mesh.mojo: PhaseMesh[XDIM, VDIM, P_x, P_v], the
+               # generic phase mesh. phase_mesh_1d{1,2}v.mojo: the original
+               # per-dimension ones. Meshes own the host-side helpers:
+               # fill, visit_nodes, integrate, integrate_fn, l2_error.
   spatial/     # dg_core.mojo: the DG core, generic over NDIM. dg_launch.mojo:
                # the one host-side launcher. dg_<phys>.mojo: one wrapper per
                # physics (flux closures + BC function + solver struct, e.g.
@@ -49,12 +50,19 @@ src/warpxm/
     sources/   # Pointwise source kernels, generic over NDIM: gravity,
                # Lorentz, Maxwell current, GLM damping.
     kinetic/   # Vlasov phase-space DG, moments, BGK, current coupling.
+               # dg_vlasov.mojo, vlasov_moments.mojo and
+               # vlasov_current_source.mojo are generic over [XDIM, VDIM];
+               # the *_1d1v / *_1d2v files are the original ones.
   temporal/    # ssprk3.mojo, dormand_prince.mojo: generic over NDIM.
                # ssprk3_plasma.mojo / ssprk3_twofluid.mojo: coupled fluid +
-               # Maxwell. ssprk3_1d{1,2}v.mojo, ssprk3_vlasov_maxwell_*.mojo:
-               # kinetic. Every stepper has `step` and `run_until`.
+               # Maxwell. ssprk3_phase.mojo, ssprk3_vlasov_maxwell.mojo:
+               # kinetic, generic over [XDIM, VDIM]. ssprk3_1d{1,2}v.mojo,
+               # ssprk3_vlasov_maxwell_1d{1,2}v.mojo: the original kinetic
+               # ones. Every stepper has `step` and `run_until`.
+               # pacing.mojo: CflPacer, shared by the run_until_cfl loops.
   testing/     # ExactRiemann, check_convergence (shared by tests).
-  variable/    # DGState[NDIM, P, NC]; PhaseState1D{1,2}V.
+  variable/    # DGState[NDIM, P, NC]; PhaseState[XDIM, VDIM, P_x, P_v, NC];
+               # PhaseState1D{1,2}V.
 examples/      # polished driver programs (one .mojo per physics setup)
 tests/         # regression tests, named test_<physics>_<problem>_<dim>.mojo
 scripts/       # gll_tables.py (GLL table generator), run_tests.sh (pixi
@@ -250,7 +258,10 @@ This mirrors upstream WARPXM's pattern: the *flux launcher* owns
 dimensionality; the *app* operates on local node values. The DG core, the
 mesh, the per-physics wrappers (`dg_<phys>.mojo`) and the adjusters are all
 generic over `NDIM`; nothing in `src/warpxm` is written per dimension
-except the kinetic (1D1V / 1D2V) code. Callers import
+except the original kinetic 1D1V / 1D2V code. New kinetic work goes on
+the generic `[XDIM, VDIM]` stack (`PhaseMesh`, `PhaseState`,
+`DGVlasovSolver`, `VlasovMoments`, `SSPRK3Phase`, `SSPRK3VlasovMaxwell`),
+not on a new per-dimension copy. Callers import
 the canonical struct directly: `from warpxm.apps.euler import Euler`,
 `from warpxm.apps.imhd import IMHD`, etc.
 

@@ -29,7 +29,8 @@ of physics.
 constant, leaving no useful 1D MHD problem.)
 
 There is also a continuum-kinetic **Vlasov-Maxwell** solver (phase-space
-DG) in 1D1V and 1D2V, with moments, a BGK collision operator and
+DG), generic over the phase-space dimensions (1D1V, 1D2V, 1D3V, 2D2V
+tested), with moments, a BGK collision operator (1D1V) and
 self-consistent coupling to Maxwell.
 
 Plus:

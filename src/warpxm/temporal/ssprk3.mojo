@@ -43,6 +43,7 @@ from std.math import ceildiv
 from layout import TileTensor, TensorLayout, row_major
 
 from warpxm.core.types import Real, WXM_DTYPE
+from warpxm.temporal.pacing import CflPacer
 from warpxm.variable.state import DGState
 
 
@@ -286,23 +287,13 @@ struct SSPRK3[NDIM: Int, P: Int, NC: Int]:
         is more useful than stalling.
         """
         var time = t
-        var dt: Real = 0.0
-        var since_refresh = dt_interval
+        var pacer = CflPacer(dt_interval, dt_min)
         while time < t_target:
-            if since_refresh >= dt_interval:
-                dt = suggest_dt_fn(u)
-                since_refresh = 0
-                if not (dt > dt_min):
-                    raise Error(
-                        "run_until_cfl: suggested dt " + String(dt)
-                        + " at t = " + String(time)
-                        + " is not above dt_min = " + String(dt_min)
-                    )
+            if pacer.due():
+                pacer.refresh(suggest_dt_fn(u), time)
             var remaining = t_target - time
-            # Take the remainder in one step if it is within round-off of dt.
-            var dt_use = dt if dt < remaining * (Real(1.0) - Real(1.0e-12)) else remaining
+            var dt_use = pacer.next(remaining)
             self.step(ctx, u, dt_use, compute_rhs_fn, adjust_fn)
-            since_refresh += 1
             if dt_use == remaining:
                 return t_target
             time += dt_use

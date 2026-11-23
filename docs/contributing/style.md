@@ -41,8 +41,9 @@ hit a parse error.
   written once for all dimensions (apps, `mesh/block.mojo`,
   `variable/state.mojo`, `spatial/dg_core.mojo`, `dg_euler.mojo`, the
   adjusters, `temporal/ssprk3.mojo`, the source kernels in
-  `spatial/sources/`, `io/vtu.mojo`). Kinetic files end in `_1d1v` /
-  `_1d2v`.
+  `spatial/sources/`, `io/vtu.mojo`). The original kinetic files end in `_1d1v` /
+  `_1d2v`; the generic kinetic files (`phase_mesh.mojo`,
+  `dg_vlasov.mojo`, ...) have no suffix.
 * Source kernels are named `<thing>_source.mojo`; tests are
   `test_<physics>_<problem>_<dim>.mojo`.
 * Underscored prefixes mark "internal helpers": `_load_node`,

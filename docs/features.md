@@ -24,7 +24,8 @@ Supporting infrastructure:
 
 - **BCs**: `BC_PERIODIC` (implicit), `BC_COPYOUT`, `BC_WALL_FREESLIP`,
   `BC_PEC_WALL` (Maxwell, ideal MHD 2D/3D), `BC_PMC_WALL` (Maxwell),
-  `BC_VLASOV_OUTFLOW` (velocity-space boundaries). GLM-MHD treats every
+  `BC_VLASOV_OUTFLOW` (velocity-space boundaries), `BC_VLASOV_REFLECT`
+  (specular wall for the kinetic `PhaseMesh`). GLM-MHD treats every
   kind as copy-out. Per-axis selection in the mesh constructor.
 - **GLL polynomial orders**: P = 1, 2, 3, 4 tables; convergence rates of
   P+1 verified for P=1, 2, 3 on the 1D advection convergence test.
@@ -40,18 +41,48 @@ Supporting infrastructure:
 
 Phase-space DG (continuum kinetic), separate from the fluid matrix above.
 
-|                                   | 1D1V | 1D2V |
-| --------------------------------- | :--: | :--: |
-| Vlasov free streaming             | ✅   | ✅   |
-| Vlasov-Maxwell (self-consistent)  | ✅   | ✅   |
-| Moments (density, current, energy)| ✅   | ✅   |
-| BGK collision operator            | ✅   | —    |
-| 5-moment → kinetic initialisation | ✅   | —    |
-| Velocity-space outflow BC         | ✅   | ✅   |
+|                                   | 1D1V | 1D2V | 1D3V | 2D2V |
+| --------------------------------- | :--: | :--: | :--: | :--: |
+| Vlasov free streaming             | ✅   | ✅   | ✅   | ✅   |
+| Lorentz force (E + v × B)         | ✅   | ✅   | ✅   | ✅   |
+| Vlasov-Maxwell (self-consistent)  | ✅   | ✅   | ✅   | ✅   |
+| Moments (density, current, energy)| ✅   | ✅   | ✅   | ✅   |
+| CFL step (`suggest_dt`)           | ✅   | ✅   | ✅   | ✅   |
+| BGK collision operator            | ✅   | —    | —    | —    |
+| 5-moment → kinetic initialisation | ✅   | —    | —    | —    |
+| Velocity-space outflow BC         | ✅   | ✅   | ✅   | ✅   |
+| Specular (reflecting) wall        | ◑    | ◑    | ✅   | ✅   |
 
-Sources: `src/warpxm/spatial/kinetic/`, `mesh/phase_mesh_*.mojo`,
-`variable/phase_state_*.mojo`, `temporal/ssprk3_1d{1,2}v.mojo` and
-`ssprk3_vlasov_maxwell_*.mojo`. See [Vlasov-Maxwell](physics/vlasov.md).
+◑: available through the generic stack (`PhaseMesh[1, 1, …]`,
+`PhaseMesh[1, 2, …]`), not on the hand-written types, and not tested at
+that dimension.
+
+1D3V and 2D2V come from the dimension-generic stack
+(`PhaseMesh[XDIM, VDIM, P_x, P_v]` and friends), which also reproduces
+1D1V and 1D2V to round-off. The same code runs 2D3V and 3D3V: their
+right-hand side is tested (exact to round-off on polynomial data), but
+no time-dependent or coupled run is.
+
+The generic kernel runs one phase element per GPU block, so
+`(P_x + 1)^XDIM (P_v + 1)^VDIM` cannot exceed the 1024 threads of a
+block (a compile-time error otherwise). That caps the polynomial order
+by dimension:
+
+| Phase space       | 1D1V–1D3V, 2D2V | 2D3V | 3D3V |
+| ----------------- | :-------------: | :--: | :--: |
+| Largest `P`       | 4 (the basis limit) | 3 (exactly 1024) | 2 |
+
+The specular wall is tested in free streaming, in prescribed electric
+and magnetic fields, and in a coupled run with conducting walls on the
+field solver (all 1D3V; free streaming also 2D2V).
+
+BGK and the 5-moment initialiser exist only on the original hand-written
+1D1V types.
+
+Sources: `src/warpxm/spatial/kinetic/`, `mesh/phase_mesh*.mojo`,
+`variable/phase_state*.mojo`, `temporal/ssprk3_phase.mojo`,
+`ssprk3_1d{1,2}v.mojo` and `ssprk3_vlasov_maxwell*.mojo`. See
+[Vlasov-Maxwell](physics/vlasov.md).
 
 ## Capability notes
 
@@ -101,5 +132,6 @@ Feature-matrix-complete, apart from 1D MHD (an intentional gap: ∇·B = 0
 makes it degenerate). What remains is scale:
 
 1. **MPI halo exchange** for multi-GPU runs.
-2. **Kinetic solver in more dimensions** (2D2V and up) and profiling of the
-   1D1V kernels, which have not had the 1D2V treatment.
+2. **Kinetic solver**: the generic stack reaches 1D3V and 2D2V; still
+   open are curvilinear (cylindrical) configuration coordinates, BGK and the fluid initialiser on the generic
+   types, and retiring the hand-written 1D1V / 1D2V code in its favour.

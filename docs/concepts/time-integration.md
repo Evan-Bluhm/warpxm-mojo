@@ -174,5 +174,6 @@ Single fluid + Maxwell      → SSPRK3_TwoFluid[NDIM, P]
     → both take compute_joint_rhs_fn(*states_in, *rhs_out)
 
 Kinetic (Vlasov, Vlasov-Maxwell)
-    → SSPRK3_1D1V / SSPRK3_1D2V, SSPRK3_VlasovMaxwell_1D1V / _1D2V
+    → SSPRK3Phase[XDIM, VDIM, ...], SSPRK3VlasovMaxwell[XDIM, VDIM, ...]
+      (originals: SSPRK3_1D1V / _1D2V, SSPRK3_VlasovMaxwell_1D1V / _1D2V)
 ```
