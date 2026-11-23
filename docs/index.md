@@ -1,6 +1,6 @@
 # warpxm-mojo
 
-A GPU-only rewrite of [WARPXM](https://github.com/csumlak/warpxm) in
+A GPU-only rewrite of [WARPXM](https://github.com/UW-Computational-Plasma-Group/warpxm) in
 [Mojo](https://www.modular.com/mojo). WARPXM is a C++ framework developed
 at the University of Washington's Computational Plasma Dynamics Laboratory
 for solving hyperbolic conservation laws — particularly plasma fluid

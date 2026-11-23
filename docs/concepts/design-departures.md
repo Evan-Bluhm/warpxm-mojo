@@ -1,6 +1,6 @@
 # Design departures from upstream
 
-warpxm-mojo is a *port* of [WARPXM](https://github.com/csumlak/warpxm),
+warpxm-mojo is a *port* of [WARPXM](https://github.com/UW-Computational-Plasma-Group/warpxm),
 not a translation. Two design decisions diverge from upstream
 deliberately. Everything else — the physics modules, the DG
 formulation, the SSPRK3 and limiter algorithms — is faithful.
