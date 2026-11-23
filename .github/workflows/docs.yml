@@ -1,0 +1,52 @@
+name: docs
+
+# Build the Zensical site and publish it to GitHub Pages on every push to
+# main. The repository's Pages source must be set to "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Let a deployment in progress finish; queue at most one behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Skip forks and mirrors, which have no Pages site to deploy to.
+    if: github.repository == 'Evan-Bluhm/warpxm-mojo'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The `docs` environment holds only Python and Zensical (no Mojo / MAX).
+      - uses: prefix-dev/setup-pixi@v0.9.0
+        with:
+          environments: docs
+          locked: true
+          cache: true
+
+      - name: Build site
+        run: pixi run --environment docs docs-build
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

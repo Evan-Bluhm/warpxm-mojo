@@ -28,7 +28,12 @@ numpy = ">=2.0"
 # `pixi run --environment docs docs-serve` (or `pixi run docs-serve` if the
 # `docs` env is active) builds and serves the Zensical site at
 # http://localhost:8000. The dependency is gated behind a feature so the
-# default GPU-runtime environment doesn't drag in the docs toolchain.
+# default GPU-runtime environment doesn't drag in the docs toolchain, and
+# the `docs` environment leaves out the default feature (Mojo, MAX) so that
+# CI can build the site without downloading the GPU runtime.
+[tool.pixi.feature.docs.dependencies]
+python = ">=3.11"
+
 [tool.pixi.feature.docs.pypi-dependencies]
 zensical = "*"
 
@@ -38,7 +43,7 @@ docs-build = "zensical build"
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
-docs = { features = ["docs"], solve-group = "default" }
+docs = { features = ["docs"], no-default-feature = true }
 
 [tool.pixi.tasks]
 mojo-version = "mojo --version"
