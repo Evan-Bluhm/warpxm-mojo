@@ -17,43 +17,43 @@ limiter:
 
 1. Computes the **cell mean** $\bar{q}_c(e)$ from GLL quadrature.
 2. Finds the per-element min / max nodal values $q_{c,\min}(e),
-   q_{c,\max}(e)$.
+    q_{c,\max}(e)$.
 3. Looks at the cell means of the **neighbours** to derive an upper
-   and lower bound on what the polynomial should attain inside the
-   element:
+    and lower bound on what the polynomial should attain inside the
+    element:
 
-   $$
-   \text{upper}_c = \max\!\bigl(\bar{q}_c(e) + \alpha,\, \max_{n\in\partial e} \bar{q}_c(n)\bigr),
-   $$
+    $$
+    \text{upper}_c = \max\!\bigl(\bar{q}_c(e) + \alpha,\, \max_{n\in\partial e} \bar{q}_c(n)\bigr),
+    $$
 
-   $$
-   \text{lower}_c = \min\!\bigl(\bar{q}_c(e) - \alpha,\, \min_{n\in\partial e} \bar{q}_c(n)\bigr),
-   $$
+    $$
+    \text{lower}_c = \min\!\bigl(\bar{q}_c(e) - \alpha,\, \min_{n\in\partial e} \bar{q}_c(n)\bigr),
+    $$
 
-   with $\alpha = \alpha_{\text{coeff}}\cdot dx^{3/2}$ a smoothness
-   margin that disables the limiter in smooth regions.
+    with $\alpha = \alpha_{\text{coeff}}\cdot dx^{3/2}$ a smoothness
+    margin that disables the limiter in smooth regions.
 
 4. Computes per-component shrink factors and clips them through a
-   non-linear $\varphi$ function:
+    non-linear $\varphi$ function:
 
-   $$
-   y_M = \frac{\text{upper}_c - \bar{q}_c}{q_{c,\max} - \bar{q}_c + \varepsilon},
-   \quad
-   y_m = \frac{\text{lower}_c - \bar{q}_c}{q_{c,\min} - \bar{q}_c + \varepsilon},
-   $$
+    $$
+    y_M = \frac{\text{upper}_c - \bar{q}_c}{q_{c,\max} - \bar{q}_c + \varepsilon},
+    \quad
+    y_m = \frac{\text{lower}_c - \bar{q}_c}{q_{c,\min} - \bar{q}_c + \varepsilon},
+    $$
 
-   $$
-   \varphi(y) = \max\!\bigl(\min(|y|/1.1, 1), 0\bigr),
-   \quad
-   \theta_c = \min(\varphi(y_M), \varphi(y_m)).
-   $$
+    $$
+    \varphi(y) = \max\!\bigl(\min(|y|/1.1, 1), 0\bigr),
+    \quad
+    \theta_c = \min(\varphi(y_M), \varphi(y_m)).
+    $$
 
 5. Takes the **minimum θ over all components** in the element and
-   shrinks the polynomial toward the cell mean:
+    shrinks the polynomial toward the cell mean:
 
-   $$
-   q_{c}^{\text{new}}(e, i) = \bar{q}_c(e) + \theta(e)\,(q_c^{\text{old}}(e, i) - \bar{q}_c(e)).
-   $$
+    $$
+    q_{c}^{\text{new}}(e, i) = \bar{q}_c(e) + \theta(e)\,(q_c^{\text{old}}(e, i) - \bar{q}_c(e)).
+    $$
 
 Because $\bar{q}_c$ is the GLL-quadrature mean and θ shrinks each node
 linearly toward it, the **cell mean is invariant** — mass / momentum /

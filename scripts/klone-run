@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# klone-run: build and run a driver on UW Klone (Slurm + Apptainer) in one
+# srun allocation, one GPU per MPI rank.
+#
+# Ported from the mojoxm project's script of the same name.
+#
+# Why build inside the allocation: Mojo emits GPU code for the device it
+# sees at build time, so a binary built on one node type fails on another
+# with CUDA_ERROR_NO_BINARY_FOR_GPU.
+#
+# Usage (from anywhere in the repo):
+#
+#   scripts/klone-run <driver.mojo | name> [driver args...]
+#
+# `<name>` is looked up in examples/, tests/mpi/ and bench/. Cluster
+# parameters come from the environment:
+#
+#   NP          MPI ranks = GPUs, all on one node          (default 1)
+#   GPU         a40 | a100 | l40 | l40s | ...              (default a40)
+#   CONSTRAINT  Slurm --constraint, instead of GPU         (default empty)
+#   TIME        walltime                                   (default 30:00)
+#   ACCOUNT     Slurm account                              (default aaplasma)
+#   PARTITION   Slurm partition                            (default ckpt)
+#   MEM         memory                                     (default 16G)
+#   SIF         Apptainer image (default mojo.sif in the repo root; build
+#               it with `apptainer build --fakeroot mojo.sif mojo.def`)
+#   NO_BUILD=1  run the binary from the last build
+#   PROFILE_WRAPPER  executable spliced between mpirun and apptainer, once
+#               per rank on the host (e.g. an `nsys profile ... "$@"` script)
+#   HOST_MPI / HOST_GCC / HOST_CUDA  host toolchain prefixes (defaults
+#               below are Klone's /sw paths)
+#   MOJO_BUILD_FLAGS  extra `mojo build` arguments, e.g. "-D N=96"
+#
+# Examples:
+#
+#   NP=4 scripts/klone-run imhd_orszag_tang_2d_vtu
+#   NP=8 GPU=a100 TIME=2:00:00 MOJO_BUILD_FLAGS="-D N=96" \
+#       scripts/klone-run bench_mpi_weak_imhd_glm_3d
+#   NP=4 CONSTRAINT='a40|l40|l40s|a100' scripts/klone-run test_mpi_euler_blast_2d
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
+
+: "${NP:=1}"
+: "${GPU:=a40}"
+: "${CONSTRAINT:=}"
+: "${TIME:=30:00}"
+: "${ACCOUNT:=aaplasma}"
+: "${PARTITION:=ckpt}"
+: "${MEM:=16G}"
+: "${SIF:=$PROJECT_DIR/mojo.sif}"
+: "${NO_BUILD:=0}"
+: "${PROFILE_WRAPPER:=}"
+: "${HOST_MPI:=/sw/ompi/4.1.6-2}"
+: "${HOST_GCC:=/sw/gcc/13.2.0}"
+: "${HOST_CUDA:=/sw/cuda/12.9.1}"
+: "${MOJO_BUILD_FLAGS:=}"
+
+if [ $# -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    sed -n '2,40p' "$0" | cut -c3-
+    exit 1
+fi
+DRIVER_SRC=""
+for candidate in "$1" "examples/$1.mojo" "tests/mpi/$1.mojo" "bench/$1.mojo"; do
+    if [ -f "$candidate" ]; then DRIVER_SRC="$candidate"; break; fi
+done
+if [ -z "$DRIVER_SRC" ]; then
+    echo "error: no driver '$1' (looked in examples/, tests/mpi/, bench/)" >&2
+    exit 1
+fi
+shift
+DRIVER_ARGS=("$@")
+if [ ! -f "$SIF" ]; then
+    echo "error: Apptainer image not found at $SIF" >&2
+    echo "       build it with: apptainer build --fakeroot mojo.sif mojo.def" >&2
+    exit 1
+fi
+if [ -n "$PROFILE_WRAPPER" ]; then
+    if [ ! -x "$PROFILE_WRAPPER" ]; then
+        echo "error: PROFILE_WRAPPER=$PROFILE_WRAPPER is not executable" >&2
+        exit 1
+    fi
+    PROFILE_WRAPPER="$(cd "$(dirname "$PROFILE_WRAPPER")" && pwd)/$(basename "$PROFILE_WRAPPER")"
+fi
+
+# One srun task runs mpirun, which starts the NP ranks: enough CPUs and
+# one GPU per rank, all on one node.
+CORES_PER_RANK=2
+SRUN_ARGS=(
+    -A "$ACCOUNT" -p "$PARTITION"
+    --ntasks=1 --cpus-per-task="$(( NP * CORES_PER_RANK ))"
+    --mem="$MEM" --time="$TIME"
+)
+if [ -n "$CONSTRAINT" ]; then
+    SRUN_ARGS+=(--gres="gpu:$NP" "--constraint=$CONSTRAINT")
+else
+    SRUN_ARGS+=(--gres="gpu:${GPU}:$NP")
+fi
+
+export WXM_DRIVER_SRC="$DRIVER_SRC"
+export WXM_BINARY="$PROJECT_DIR/build/mpi/$(basename "$DRIVER_SRC" .mojo)"
+export WXM_SIF="$SIF"
+export WXM_NP="$NP"
+export WXM_NO_BUILD="$NO_BUILD"
+export WXM_DRIVER_ARGS="${DRIVER_ARGS[*]-}"
+export WXM_PROFILE_WRAPPER="$PROFILE_WRAPPER"
+export WXM_HOST_MPI="$HOST_MPI" WXM_HOST_GCC="$HOST_GCC" WXM_HOST_CUDA="$HOST_CUDA"
+export WXM_MOJO_BUILD_FLAGS="$MOJO_BUILD_FLAGS"
+
+echo "===> srun ${SRUN_ARGS[*]}  (driver=$DRIVER_SRC, np=$NP)"
+exec srun "${SRUN_ARGS[@]}" bash <<'INNER_SCRIPT'
+set -euo pipefail
+
+# Host MPI, compiler runtime and CUDA by absolute path (no `module load`),
+# visible inside the container through the /sw bind mount.
+HOST_LIB_PATH=$WXM_HOST_GCC/lib64:$WXM_HOST_GCC/lib:$WXM_HOST_MPI/lib:$WXM_HOST_CUDA/lib64
+export LD_LIBRARY_PATH=$HOST_LIB_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export PATH=$WXM_HOST_GCC/bin:$WXM_HOST_MPI/bin:$PATH
+export APPTAINERENV_LD_LIBRARY_PATH="$HOST_LIB_PATH"
+APPTAINER_FLAGS="--nv --bind /sw --bind /gscratch"
+
+if [ "$WXM_NO_BUILD" != "1" ]; then
+    echo "===> mpi_build $WXM_DRIVER_SRC"
+    # The shim is compiled on the host by the host's mpicc; Mojo runs in
+    # the container and links against the host MPI.
+    MOJO="apptainer exec $APPTAINER_FLAGS $WXM_SIF mojo" \
+    MPICC="$WXM_HOST_MPI/bin/mpicc" \
+        scripts/mpi_build.sh -o "$WXM_BINARY" "$WXM_DRIVER_SRC" $WXM_MOJO_BUILD_FLAGS
+fi
+
+read -r -a DRV_ARGS <<< "$WXM_DRIVER_ARGS"
+PROFILER_PREFIX=()
+if [ -n "$WXM_PROFILE_WRAPPER" ]; then
+    PROFILER_PREFIX=("$WXM_PROFILE_WRAPPER")
+fi
+
+# One GPU per rank: rank k on the node sees only device k. (The solver's
+# `rank_device_context()` would spread ranks over the visible GPUs by
+# itself; pinning here also keeps every other library on the right one.)
+GPU_PIN_WRAPPER=(
+    bash -c 'export APPTAINERENV_CUDA_VISIBLE_DEVICES="${OMPI_COMM_WORLD_LOCAL_RANK:-0}"; exec "$@"' _
+)
+
+# Slurm granted one task, so Open MPI needs --oversubscribe to start NP
+# ranks; the CPUs for them were requested above.
+echo "===> mpirun -np $WXM_NP ${PROFILER_PREFIX[*]-} apptainer exec $APPTAINER_FLAGS $WXM_SIF $WXM_BINARY ${DRV_ARGS[*]-}"
+mpirun -np "$WXM_NP" --oversubscribe \
+    "${GPU_PIN_WRAPPER[@]}" \
+    ${PROFILER_PREFIX[@]+"${PROFILER_PREFIX[@]}"} \
+    apptainer exec $APPTAINER_FLAGS "$WXM_SIF" \
+    "$WXM_BINARY" ${DRV_ARGS[@]+"${DRV_ARGS[@]}"}
+INNER_SCRIPT

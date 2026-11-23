@@ -42,12 +42,12 @@ comptime State = DGState[2, P, MHD_GLM_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     var d0: Real = Real(25.0) / (Real(36.0) * PI)
     var p0: Real = Real(5.0) / (Real(12.0) * PI)
@@ -80,7 +80,7 @@ def main() raises:
         c_p_sq=C_P_SQ,
     )
     var spatial = DGImhdGLMSolver[2, P](app)
-    var stepper = SSPRK3[2, P, MHD_GLM_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[2, P, MHD_GLM_NC](ctx, mesh.num_elements, mesh.num_ghost)
     # The limiter acts on deviations above α = alpha_coeff · dx^1.5. The
     # default coefficient (1000) gives α ≈ 0.7 here, above every density in
     # the problem (ρ ≤ 0.6), so the limiter would be idle and the run would
@@ -88,7 +88,7 @@ def main() raises:
     # α ≈ 0.07 keeps the limiter working without flattening the extrema:
     # ρ ∈ [0.042, 0.45] at t = 0.3 against Athena's [0.047, 0.55].
     var limiter = MoeRossmanith[2, P, MHD_GLM_NC](
-        ctx, mesh.num_elements, alpha_coeff=Real(100.0),
+        ctx, mesh.num_elements, mesh.num_ghost, alpha_coeff=Real(100.0),
     )
     var positivity = PositivityMHD[2, P, MHD_GLM_NC](
         num_elements=mesh.num_elements,
@@ -115,16 +115,16 @@ def main() raises:
     var mass_0 = mesh.integrate(q, IDX_RHO)
     var e_0 = mesh.integrate(q, IDX_E)
 
-    print("Orszag-Tang vortex (Athena units) — domain [0,1]², P =", P, ", grid", NX, "x", NY)
-    print("  d_0 =", d0, " p_0 =", p0, " B_0 =", B0)
-    print("time   ∫ρ dV   ∫E dV   ∫ψ² dV   rel Δmass   rel ΔE   CFL dt")
+    root_print("Orszag-Tang vortex (Athena units) — domain [0,1]², P =", P, ", grid", NX, "x", NY)
+    root_print("  d_0 =", d0, " p_0 =", p0, " B_0 =", B0)
+    root_print("time   ∫ρ dV   ∫E dV   ∫ψ² dV   rel Δmass   rel ΔE   CFL dt")
 
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
         dump_imhd_glm_frame(fw.next_path(t), mesh, q, GAMMA)
         var mass = mesh.integrate(q, IDX_RHO)
         var e_tot = mesh.integrate(q, IDX_E)
-        print(
+        root_print(
             t, mass, e_tot, mesh.integrate_fn(q, psi_squared),
             (mass - mass_0) / mass_0, (e_tot - e_0) / e_0, suggest_dt(q),
         )
@@ -136,4 +136,4 @@ def main() raises:
             )
 
     fw.write_pvd()
-    print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/orszag_tang_athena.pvd")
+    root_print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/orszag_tang_athena.pvd")

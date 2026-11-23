@@ -52,13 +52,13 @@ comptime Field = DGState[2, P, MAXWELL_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0 / 8.0),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q_fluid = Fluid(ctx, mesh.num_elements)
-    var q_maxwell = Field(ctx, mesh.num_elements)
+    var q_fluid = Fluid(ctx, mesh.num_elements, mesh.num_ghost)
+    var q_maxwell = Field(ctx, mesh.num_elements, mesh.num_ghost)
 
     def fluid_initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
         return [
@@ -80,7 +80,7 @@ def main() raises:
     var maxwell_app = Maxwell(c_light=Real(1.0), cfl_max=Real(0.5))
     var fluid_spatial = DGEulerSolver[2, P](fluid_app)
     var maxwell_spatial = DGMaxwellSolver[2, P](maxwell_app)
-    var stepper = SSPRK3_TwoFluid[2, P](ctx, mesh.num_elements)
+    var stepper = SSPRK3_TwoFluid[2, P](ctx, mesh.num_elements, mesh.num_ghost)
 
     var fw_fluid = FrameWriter("langmuir_fluid", OUTPUT_DIR)
     var fw_maxwell = FrameWriter("langmuir_maxwell", OUTPUT_DIR)
@@ -105,15 +105,15 @@ def main() raises:
         return v[IDX_EX] * v[IDX_EX]
 
     var mass_0 = mesh.integrate(q_fluid, IDX_RHO)
-    print("2D Langmuir oscillation, ω_pe =", omega_p, ", T =", T, ", dt =", dt)
-    print("time   ∫ρ_e dV   ∫E_x² dV   rel Δmass")
+    root_print("2D Langmuir oscillation, ω_pe =", omega_p, ", T =", T, ", dt =", dt)
+    root_print("time   ∫ρ_e dV   ∫E_x² dV   rel Δmass")
 
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
         dump_euler_frame(fw_fluid.next_path(t), mesh, q_fluid, GAMMA)
         dump_maxwell_frame(fw_maxwell.next_path(t), mesh, q_maxwell)
         var mass = mesh.integrate(q_fluid, IDX_RHO)
-        print(
+        root_print(
             t, mass, mesh.integrate_fn(q_maxwell, ex_squared),
             (mass - mass_0) / mass_0,
         )
@@ -127,5 +127,5 @@ def main() raises:
 
     fw_fluid.write_pvd()
     fw_maxwell.write_pvd()
-    print("Wrote", NUM_FRAMES, "fluid +", NUM_FRAMES, "Maxwell frames at", OUTPUT_DIR)
-    print("Open langmuir_fluid.pvd or langmuir_maxwell.pvd in ParaView.")
+    root_print("Wrote", NUM_FRAMES, "fluid +", NUM_FRAMES, "Maxwell frames at", OUTPUT_DIR)
+    root_print("Open langmuir_fluid.pvd or langmuir_maxwell.pvd in ParaView.")

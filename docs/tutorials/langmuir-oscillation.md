@@ -22,6 +22,7 @@ Initial condition: a small density perturbation
 $\rho_e(x, 0) = 1 + \delta\sin(2\pi x)$ with $\delta = 0.01$. The
 net charge density is $\rho_q = \alpha\rho_e + n_0 = -\delta\sin(2\pi
 x)$, which by Gauss's law fixes the initial E-field:
+
 $$
 E_x(x, 0) = \frac{\delta}{k\,\varepsilon_0}\cos(2\pi x).
 $$

@@ -32,7 +32,9 @@
 # in smooth-flow regions. Default α_coeff = 1000 (upstream default).
 #
 # The neighbors are the 2·NDIM face neighbors; at a domain boundary the
-# element stands in for its missing neighbor. One θ per element shrinks
+# element stands in for its missing neighbor. Across a partition face the
+# neighbor is a ghost element, whose cell mean is fetched from the owning
+# rank between the two kernels below. One θ per element shrinks
 # every node's deviation from the cell mean, so cell means are untouched.
 
 from max.gpu import global_idx
@@ -44,6 +46,7 @@ from warpxm.core.math_compat import fabs, fmin, fmax, sqrt
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.adjusters.cell_mean import gll_cell_weight
 from warpxm.mesh.block import BlockMesh
+from warpxm.parallel.halo import HaloBuffers, exchange_halo
 from warpxm.variable.state import DGState
 
 
@@ -208,13 +211,23 @@ struct MoeRossmanith[NDIM: Int, P: Int, NC: Int]:
     var q_min_buf: DeviceBuffer[Real.dtype]
     var q_max_buf: DeviceBuffer[Real.dtype]
 
+    var num_ghost: Int
+    var avg_halo: Optional[HaloBuffers]
+    """Wire buffers for the ghost cell means; `None` without ghosts."""
+
     def __init__(
         out self, var ctx: DeviceContext, num_elements: Int,
+        num_ghost: Int = 0,
         alpha_coeff: Real = Real(1000.0),
     ) raises:
+        """Pass the mesh's counts, as for a `DGState`."""
         self.alpha_coeff = alpha_coeff
         self.num_elements = num_elements
-        var n = num_elements * Self.NC
+        self.num_ghost = num_ghost
+        self.avg_halo = None
+        if num_ghost > 0:
+            self.avg_halo = HaloBuffers(ctx, num_ghost * Self.NC)
+        var n = (num_elements + num_ghost) * Self.NC
         self.q_avg_buf = ctx.enqueue_create_buffer[Real.dtype](n)
         self.q_min_buf = ctx.enqueue_create_buffer[Real.dtype](n)
         self.q_max_buf = ctx.enqueue_create_buffer[Real.dtype](n)
@@ -230,7 +243,8 @@ struct MoeRossmanith[NDIM: Int, P: Int, NC: Int]:
         var grid = ceildiv(self.num_elements, BLOCK)
 
         var q_layout = row_major(Int(q.buf_len))
-        var bounds_layout = row_major(Int(self.num_elements * Self.NC))
+        var bounds_len = (self.num_elements + self.num_ghost) * Self.NC
+        var bounds_layout = row_major(Int(bounds_len))
         var face_layout = row_major(Int(mesh.num_faces))
         var ef_layout = row_major(Int(mesh.num_elements * 2 * Self.NDIM))
 
@@ -247,6 +261,19 @@ struct MoeRossmanith[NDIM: Int, P: Int, NC: Int]:
             q_view, qa_view, qmn_view, qmx_view, Int64(self.num_elements),
             grid_dim=grid, block_dim=BLOCK,
         )
+
+        if mesh.num_ghost > 0:
+            if self.num_ghost != mesh.num_ghost:
+                raise Error(
+                    "this mesh is shared between ranks: construct the"
+                    + " limiter with (ctx, mesh.num_elements, mesh.num_ghost)"
+                )
+            exchange_halo[
+                (Self.P + 1) ** Self.NDIM, Self.P + 1, Self.NC, False,
+            ](
+                ctx, mesh.halo, self.q_avg_buf, bounds_len,
+                self.avg_halo.value(),
+            )
 
         comptime k_apply = _apply_kernel[
             Self.P, Self.NDIM, Self.NC,

@@ -29,15 +29,34 @@ struct SSPRK3_TwoFluid[NDIM: Int, P: Int]:
     var m_stage2: DGState[Self.NDIM, Self.P, MAXWELL_NC]
     var m_rhs: DGState[Self.NDIM, Self.P, MAXWELL_NC]
 
-    def __init__(out self, var ctx: DeviceContext, num_elements: Int) raises:
-        self.uf_save = DGState[Self.NDIM, Self.P, EULER_NC](ctx, num_elements)
-        self.f_stage1 = DGState[Self.NDIM, Self.P, EULER_NC](ctx, num_elements)
-        self.f_stage2 = DGState[Self.NDIM, Self.P, EULER_NC](ctx, num_elements)
-        self.f_rhs = DGState[Self.NDIM, Self.P, EULER_NC](ctx, num_elements)
-        self.um_save = DGState[Self.NDIM, Self.P, MAXWELL_NC](ctx, num_elements)
-        self.m_stage1 = DGState[Self.NDIM, Self.P, MAXWELL_NC](ctx, num_elements)
-        self.m_stage2 = DGState[Self.NDIM, Self.P, MAXWELL_NC](ctx, num_elements)
-        self.m_rhs = DGState[Self.NDIM, Self.P, MAXWELL_NC](ctx, num_elements)
+    def __init__(
+        out self, var ctx: DeviceContext, num_elements: Int,
+        num_ghost: Int = 0,
+    ) raises:
+        self.uf_save = DGState[Self.NDIM, Self.P, EULER_NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.f_stage1 = DGState[Self.NDIM, Self.P, EULER_NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.f_stage2 = DGState[Self.NDIM, Self.P, EULER_NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.f_rhs = DGState[Self.NDIM, Self.P, EULER_NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.um_save = DGState[Self.NDIM, Self.P, MAXWELL_NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.m_stage1 = DGState[Self.NDIM, Self.P, MAXWELL_NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.m_stage2 = DGState[Self.NDIM, Self.P, MAXWELL_NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.m_rhs = DGState[Self.NDIM, Self.P, MAXWELL_NC](
+            ctx, num_elements, num_ghost,
+        )
 
     def step[
         ComputeJointRhs: def(

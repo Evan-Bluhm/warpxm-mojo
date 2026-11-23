@@ -30,20 +30,31 @@
 # `BC_VLASOV_OUTFLOW`: the velocity domain truncates the real line where
 # `f` is negligible.
 #
+# Several ranks. In an MPI build the configuration axes are cut between
+# ranks exactly as the companion `BlockMesh` cuts them (both call
+# `parallel/partition.mojo` with the same element counts); velocity space
+# is never cut. `n` and the element counts are then this rank's, `lo` /
+# `hi` stay global. A partition face gets the kind `BC_HALO`, and the far
+# side of it is a ghost phase element stored after the owned ones, in the
+# order of the owned elements on that face (`kernel_ghost_first`).
+#
 # The configuration-space fields (Maxwell state, moments) live on a
 # `BlockMesh[XDIM, P_x]` with the same extents; see `x_block_element` for
 # the element correspondence when XDIM > 1.
 
-from std.collections import Array
+from std.collections import Array, List
 from max.gpu.host import DeviceBuffer, DeviceContext
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import (
-    BC_INTERIOR, BC_COPYOUT, BC_VLASOV_OUTFLOW, BC_VLASOV_REFLECT,
+    BC_INTERIOR, BC_COPYOUT, BC_VLASOV_OUTFLOW, BC_VLASOV_REFLECT, BC_HALO,
 )
 from warpxm.core.math_compat import fabs, fmax
 from warpxm.core.types import Real, WXM_DTYPE
 from warpxm.mesh.block import BlockMesh
+from warpxm.parallel import mpi
+from warpxm.parallel.halo import HaloPlan
+from warpxm.parallel.partition import Partition, decompose
 from warpxm.variable.phase_state import PhaseState
 
 
@@ -66,7 +77,7 @@ struct PhaseMesh[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
     )
 
     var n: Array[Int, Self.ND]
-    """Elements along each axis (x axes, then v axes)."""
+    """Elements along each axis (x axes, then v axes), on this rank."""
 
     var lo: Array[Real, Self.ND]
     var hi: Array[Real, Self.ND]
@@ -85,6 +96,16 @@ struct PhaseMesh[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
     var num_x_elements: Int
     var num_v_elements: Int
     var num_phase_elements: Int
+    """Elements owned by this rank."""
+
+    var num_ghost: Int
+    """Ghost phase elements across the partition faces."""
+
+    var partition: Partition
+    """This rank's box of the configuration mesh (as on the companion
+    `BlockMesh`)."""
+
+    var halo: HaloPlan
 
     var node_v_len: Int
     var node_v_buf: DeviceBuffer[Real.dtype]
@@ -115,7 +136,19 @@ struct PhaseMesh[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
         )
         comptime P1v = Self.P_v + 1
 
+        # This rank's box: the configuration axes are cut like the
+        # companion BlockMesh, the velocity axes not at all.
+        var x_n: Array[Int, 3] = [1, 1, 1]
+        var x_periodic: Array[Bool, 3] = [True, True, True]
+        for a in range(Self.XDIM):
+            x_n[a] = n[a]
+            x_periodic[a] = periodic[a]
+        self.partition = decompose(
+            x_n, x_periodic, Self.XDIM, mpi.rank(), mpi.size(),
+        )
         self.n = n.copy()
+        for a in range(Self.XDIM):
+            self.n[a] = self.partition.n[a]
         self.lo = lo.copy()
         self.hi = hi.copy()
         self.periodic = periodic.copy()
@@ -135,7 +168,7 @@ struct PhaseMesh[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
             self.dx[a] = (hi[a] - lo[a]) / Real(n[a])
             self.jacobian[a] = self.dx[a] * Real(0.5)
             if a < Self.XDIM:
-                self.num_x_elements *= n[a]
+                self.num_x_elements *= self.n[a]
             else:
                 self.num_v_elements *= n[a]
                 self.node_v_len += n[a] * P1v
@@ -164,6 +197,28 @@ struct PhaseMesh[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
                     + " needs a velocity mesh symmetric about zero on the"
                     + " matching velocity axis"
                 )
+
+        # Phase elements exchanged across each partition face: the layer
+        # of owned elements next to it, in increasing element order.
+        var halo_count = Array[Int, 6](fill=0)
+        var send_elem = List[Int32]()
+        for d in range(2 * Self.XDIM):
+            if self.partition.neighbor[d] < 0:
+                continue
+            var a = d // 2
+            var stride = 1
+            for b in range(a + 1, Self.ND):
+                stride *= self.n[b]
+            var layer = self.n[a] - 1 if d % 2 == 1 else 0
+            halo_count[d] = self.num_phase_elements // self.n[a]
+            for e in range(self.num_phase_elements):
+                if (e // stride) % self.n[a] == layer:
+                    send_elem.append(Int32(e))
+        self.halo = HaloPlan(
+            ctx, self.num_phase_elements, self.partition.neighbor,
+            halo_count, send_elem,
+        )
+        self.num_ghost = self.halo.num_ghost
 
         var ref_v = NodalBasis1D[Self.P_v].nodes()
         var node_v_host = ctx.enqueue_create_host_buffer[Real.dtype](
@@ -279,12 +334,23 @@ struct PhaseMesh[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
         return out
 
     def kernel_bc(self) -> PhaseInts:
-        """BC kind per configuration-axis side, `BC_INTERIOR` standing for
-        a periodic axis."""
+        """Kind of each configuration-axis side of this rank's box:
+        `BC_HALO` for a face shared with another rank, `BC_INTERIOR` for a
+        periodic axis that wraps onto the rank itself, else the BC."""
         var out = PhaseInts(Int64(BC_INTERIOR))
         for s in range(2 * Self.XDIM):
-            if not self.periodic[s // 2]:
+            if self.partition.neighbor[s] >= 0:
+                out[s] = Int64(BC_HALO)
+            elif not self.periodic[s // 2]:
                 out[s] = Int64(self.bc[s])
+        return out
+
+    def kernel_ghost_first(self) -> PhaseInts:
+        """Index of the first ghost phase element of each configuration
+        side (meaningful where `kernel_bc` says `BC_HALO`)."""
+        var out = PhaseInts(0)
+        for s in range(2 * Self.XDIM):
+            out[s] = Int64(self.num_phase_elements + self.halo.ghost_offset(s))
         return out
 
     def kernel_inv_jacobian(self) -> PhaseReals:
@@ -319,8 +385,12 @@ struct PhaseMesh[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
             rem_n = rem_n // p1
             var xi = ref_x[i] if a < Self.XDIM else ref_v[i]
             var wi = w_x[i] if a < Self.XDIM else w_v[i]
+            # Element position in the whole mesh along this axis.
+            var e_global = e_axis[a]
+            if a < Self.XDIM:
+                e_global += self.partition.start[a]
             out[a] = (
-                self.lo[a] + Real(e_axis[a]) * self.dx[a]
+                self.lo[a] + Real(e_global) * self.dx[a]
                 + (Real(1.0) + xi) * self.jacobian[a]
             )
             w = w * wi * self.jacobian[a]
@@ -490,6 +560,42 @@ struct PhaseMesh[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
                         h[f.index(e, n, 0)],
                     )
 
+    def checksum[NC: Int](
+        self,
+        mut f: PhaseState[Self.XDIM, Self.VDIM, Self.P_x, Self.P_v, NC],
+    ) raises -> UInt64:
+        """A hash of every value of `f` over the whole mesh that does not
+        depend on how the mesh is split between ranks (see
+        `BlockMesh.checksum`)."""
+        var total: UInt64 = 0
+        with f.buf.map_to_host() as h:
+            for e in range(self.num_phase_elements):
+                # Index of this element in the whole mesh.
+                var ge = 0
+                var radix = 1
+                var rem = e
+                for k in range(Self.ND):
+                    var a = Self.ND - 1 - k
+                    var pos = rem % self.n[a]
+                    var count = self.n[a]
+                    rem = rem // self.n[a]
+                    if a < Self.XDIM:
+                        pos += self.partition.start[a]
+                        count = self.partition.global_n[a]
+                    ge += pos * radix
+                    radix *= count
+                for n in range(Self.num_nodes_per_elem):
+                    for c in range(NC):
+                        var key = UInt64(
+                            (ge * Self.num_nodes_per_elem + n) * NC + c
+                        )
+                        var bits = rebind[UInt64](h[f.index(e, n, c)].to_bits())
+                        var z = bits ^ (key * 0x9E3779B97F4A7C15)
+                        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
+                        z = (z ^ (z >> 27)) * 0x94D049BB133111EB
+                        total += z ^ (z >> 31)
+        return mpi.global_sum(total)
+
     def integrate[NC: Int](
         self,
         mut f: PhaseState[Self.XDIM, Self.VDIM, Self.P_x, Self.P_v, NC],
@@ -501,4 +607,4 @@ struct PhaseMesh[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
                 for n in range(Self.num_nodes_per_elem):
                     var p = self._node(e, n)
                     acc += p[6] * h[f.index(e, n, 0)]
-        return acc
+        return mpi.global_sum(acc)

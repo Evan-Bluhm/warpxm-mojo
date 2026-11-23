@@ -13,7 +13,8 @@ warpxm-mojo/
 ├── docs/                 # documentation Markdown sources
 ├── examples/             # driver programs, one per problem
 ├── scripts/              # run_tests.sh, build_examples.sh, run_example.sh,
-│                         # gll_tables.py (GLL table generator)
+│                         # gll_tables.py (GLL table generator),
+│                         # mpi_build.sh, run_mpi_tests.sh, klone-run
 ├── src/warpxm/
 │   ├── prelude.mojo      # re-exports everything not tied to one physics
 │   ├── physics/          # one re-export module per physics
@@ -31,8 +32,10 @@ warpxm-mojo/
 │   │                     # kinetic steppers
 │   ├── adjusters/        # Moe-Rossmanith limiter, Zhang-Shu positivity
 │   ├── io/               # generic VTU writer, presets, FrameWriter
+│   ├── parallel/         # MPI binding, domain decomposition, halo exchange
 │   └── testing/          # ExactRiemann, check_convergence
 └── tests/                # regression tests, test_<physics>_<problem>_<dim>.mojo
+    └── mpi/              # multi-rank tests, run by `pixi run test-mpi`
 ```
 
 `pixi run` tasks: `test` (the suite), `build` (type-check every

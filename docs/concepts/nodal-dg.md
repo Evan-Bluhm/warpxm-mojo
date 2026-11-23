@@ -83,8 +83,8 @@ At element interfaces we need a single *upwind* flux. warpxm-mojo
 implements two:
 
 * **Rusanov / Lax-Friedrichs** — the default, simple, dissipative. Picks
-  the maximum-speed wave to set the diffusion: $\mathbf{F}^\ast = \tfrac{1}{2}(\mathbf{F}_L
-  + \mathbf{F}_R) - \tfrac{1}{2}\lambda_{\max}\,(\mathbf{q}_R - \mathbf{q}_L)$.
+  the maximum-speed wave to set the diffusion:
+  $\mathbf{F}^\ast = \tfrac{1}{2}(\mathbf{F}_L + \mathbf{F}_R) - \tfrac{1}{2}\lambda_{\max}\,(\mathbf{q}_R - \mathbf{q}_L)$.
 * **HLLD** (MHD only) — five-state Miyoshi-Kusano solver that resolves
   fast magnetosonic, Alfvén and contact waves. Much sharper shocks.
 

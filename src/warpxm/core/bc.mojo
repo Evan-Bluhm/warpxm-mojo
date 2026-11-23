@@ -57,3 +57,10 @@ comptime BC_VLASOV_OUTFLOW: Int = 6
 # mass through the wall. Pair it with `BC_PEC_WALL` on the field solver
 # for a conducting wall.
 comptime BC_VLASOV_REFLECT: Int = 7
+
+# A face shared with another MPI rank. Never chosen by a driver: the
+# structured kinetic mesh marks a partition face with it so that the Vlasov
+# kernel, which has no face tables, reads the far side from the ghost
+# elements (`parallel/halo.mojo`). `BlockMesh` needs no such kind: its face
+# tables point at the ghost element directly.
+comptime BC_HALO: Int = 8

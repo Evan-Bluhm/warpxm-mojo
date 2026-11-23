@@ -62,12 +62,12 @@ def _shape(y: Real) -> Real:
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
         var S = _shape(y)
@@ -89,8 +89,8 @@ def main() raises:
         min_pressure=Real(1e-12), cfl_max=Real(1.0),
     )
     var spatial = DGEulerSolver[2, P](app)
-    var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith[2, P, EULER_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements, mesh.num_ghost)
+    var limiter = MoeRossmanith[2, P, EULER_NC](ctx, mesh.num_elements, mesh.num_ghost)
     var fw = FrameWriter("kh")
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
@@ -104,15 +104,15 @@ def main() raises:
 
     var mass_0 = mesh.integrate(q, IDX_RHO)
     var e_0 = mesh.integrate(q, IDX_E)
-    print("Kelvin-Helmholtz instability, P=", P, ", N=", NX, "x", NY)
-    print("time   ∫ρ dV   ∫E dV   rel Δmass   rel ΔE   CFL dt")
+    root_print("Kelvin-Helmholtz instability, P=", P, ", N=", NX, "x", NY)
+    root_print("time   ∫ρ dV   ∫E dV   rel Δmass   rel ΔE   CFL dt")
 
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
         dump_euler_frame(fw.next_path(t), mesh, q, GAMMA)
         var mass = mesh.integrate(q, IDX_RHO)
         var e_tot = mesh.integrate(q, IDX_E)
-        print(
+        root_print(
             t, mass, e_tot, (mass - mass_0) / mass_0, (e_tot - e_0) / e_0,
             suggest_dt(q),
         )
@@ -123,4 +123,4 @@ def main() raises:
             )
 
     fw.write_pvd()
-    print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/kh.pvd")
+    root_print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/kh.pvd")

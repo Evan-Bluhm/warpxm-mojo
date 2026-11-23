@@ -22,7 +22,7 @@ def run_once[P: Int](
     """Run advection at order P with N elements and return the post-period L2 error."""
     comptime State = DGState[1, P, 1]
     var mesh = BlockMesh[1, P](ctx, Real(-0.5), Real(0.5), num_elements, periodic=True)
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def wave(x: Real) -> Real:
         return sin(TWO_PI * x)
@@ -32,7 +32,7 @@ def run_once[P: Int](
 
     var app = Advection[1](velocity_x=Real(1.0), cfl_max=Real(1.0))
     var spatial = DGAdvectionSolver[1, P, 1](app)
-    var stepper = SSPRK3[1, P, 1](ctx, mesh.num_elements)
+    var stepper = SSPRK3[1, P, 1](ctx, mesh.num_elements, mesh.num_ghost)
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
@@ -55,7 +55,7 @@ def sweep_p[P: Int](var ctx: DeviceContext) raises:
     var err_lo = run_once[P](ctx, 32, dt, t_final)
     var err_hi = run_once[P](ctx, 64, dt, t_final)
     var rate = log2(err_lo / err_hi)
-    print(
+    root_print(
         "  P =", P,
         " N = 32 ⇒ L2 =", err_lo,
         " | N = 64 ⇒ L2 =", err_hi,
@@ -66,8 +66,8 @@ def sweep_p[P: Int](var ctx: DeviceContext) raises:
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
-    var ctx = DeviceContext()
-    print("1D advection convergence — sin(2π x) on [-0.5, 0.5], one period")
+    var ctx = rank_device_context()
+    root_print("1D advection convergence — sin(2π x) on [-0.5, 0.5], one period")
     sweep_p[1](ctx)
     sweep_p[2](ctx)
     sweep_p[3](ctx)

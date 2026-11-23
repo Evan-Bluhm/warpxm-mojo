@@ -51,6 +51,34 @@ pixi run mojo run -I src tests/test_advection_convergence_1d.mojo
 
 A single test takes a few seconds, most of it compilation.
 
+## Multi-rank tests
+
+```fish
+pixi run test-mpi           # tests/mpi/, each at several rank counts
+pixi run test-mpi euler     # by name
+pixi run test-mpi -v        # print the output of failing runs
+```
+
+The `test-mpi` task (`scripts/run_mpi_tests.sh`) needs a system MPI
+(`mpicc`, `mpirun`). It builds each `tests/mpi/*.mojo` once with
+`scripts/mpi_build.sh` and runs it under `mpirun` at the rank counts named
+in the test's `# MPI_RANKS:` line (default `1 2 3 4`); the ranks share
+whatever GPUs are visible. A test passes if every run prints `PASSED`
+**and** its `CHECKSUM` lines are identical at every rank count:
+
+```mojo
+var sum = mesh.checksum(q)        # hash of the field, any decomposition
+if is_root():
+    print("CHECKSUM", sum)
+```
+
+So a multi-rank test asserts that the decomposition does not change the
+field by a single bit. Give the mesh element counts that the rank counts
+do not divide evenly, and make it small: the ranks take turns on one GPU.
+A test of anything that sums over ranks in floating point (the adaptive
+Dormand-Prince step) should print no checksum for that part and check it
+against a tolerance instead.
+
 ## Writing a test
 
 Tests use the same helpers as any driver, so they contain the problem

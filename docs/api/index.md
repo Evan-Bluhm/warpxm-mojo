@@ -34,6 +34,7 @@ src/warpxm/
                # positivity preservers (Euler, MHD), generic over the
                # dimension
   io/          # Generic VTU writer, per-physics presets, FrameWriter
+  parallel/    # MPI binding, domain decomposition, halo exchange
   testing/     # ExactRiemann, check_convergence (shared by the tests)
 ```
 

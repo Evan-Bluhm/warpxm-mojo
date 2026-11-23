@@ -34,6 +34,14 @@ pixi run test               # full regression suite, in parallel (~1 min)
 pixi run example            # list the examples; add a name to run one
 ```
 
+To run on several GPUs, one MPI rank each (needs a system MPI):
+
+```fish
+pixi run mpi-build examples/imhd_orszag_tang_2d_vtu.mojo
+mpirun -np 4 build/mpi/imhd_orszag_tang_2d_vtu
+pixi run test-mpi           # multi-rank regression suite
+```
+
 The first two should report no failures on a working install.
 
 ## Documentation

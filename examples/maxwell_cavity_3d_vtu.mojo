@@ -40,7 +40,7 @@ comptime State = DGState[3, P, MAXWELL_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[3, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, nz=NZ,
@@ -49,7 +49,7 @@ def main() raises:
         bc_bottom=BC_PEC_WALL, bc_top=BC_PEC_WALL,
         bc_down=BC_PEC_WALL, bc_up=BC_PEC_WALL,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real, y: Real, z: Real) -> Array[Real, MAXWELL_NC]:
         var v = Array[Real, MAXWELL_NC](fill=Real(0.0))
@@ -59,7 +59,7 @@ def main() raises:
 
     var app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
     var spatial = DGMaxwellSolver[3, P](app)
-    var stepper = SSPRK3[3, P, MAXWELL_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[3, P, MAXWELL_NC](ctx, mesh.num_elements, mesh.num_ghost)
     var fw = FrameWriter("cavity", "output/maxwell_cavity_3d")
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
@@ -77,15 +77,15 @@ def main() raises:
 
     var t_final = sqrt(Real(2.0)) / C_LIGHT
     var dt = spatial.suggest_dt(mesh)
-    print("CFL dt =", dt)
-    print("frame   time   ∫E_energy dV   ∫B_energy dV   ∫total dV")
+    root_print("CFL dt =", dt)
+    root_print("frame   time   ∫E_energy dV   ∫B_energy dV   ∫total dV")
 
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
         dump_maxwell_frame(fw.next_path(t), mesh, q)
         var ee = mesh.integrate_fn(q, e_energy)
         var be = mesh.integrate_fn(q, b_energy)
-        print(frame, t, ee, be, ee + be)
+        root_print(frame, t, ee, be, ee + be)
 
         if frame < NUM_FRAMES - 1:
             t = stepper.run_until(
@@ -94,4 +94,4 @@ def main() raises:
             )
 
     fw.write_pvd()
-    print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/cavity.pvd")
+    root_print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/cavity.pvd")

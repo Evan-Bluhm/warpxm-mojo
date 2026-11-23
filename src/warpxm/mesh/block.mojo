@@ -23,17 +23,34 @@
 # `e`: dir = 2·axis for the negative side, 2·axis + 1 for the positive
 # side (left, right, bottom, top, down, up).
 #
+# ## Several ranks
+#
+# In an MPI build (`parallel/mpi.mojo`) the constructor takes the *global*
+# mesh and keeps only this rank's box of it (`parallel/partition.mojo`).
+# `nx`, `ny`, `nz`, `num_elements` and all the numbering above are then
+# local to the rank; the bounds (`x_min` ...) and `volume()` stay global.
+# A face shared with another rank gets a *ghost element* as its far side:
+# index `num_elements + g`, a slot past the owned elements of every state
+# buffer that `launch_dg` refreshes from the neighbour before each
+# right-hand side (`parallel/halo.mojo`). A serial build, or one rank, has
+# no ghosts and is the mesh described above.
+#
 # The mesh also owns the host-side helpers (`fill`, `visit_nodes`,
 # `integrate`, `integrate_fn`, `l2_error`), which hide the node ordering
-# and the `DGState` buffer layout from drivers.
+# and the `DGState` buffer layout from drivers. `fill` and `visit_nodes`
+# act on this rank's elements; `integrate`, `integrate_fn` and `l2_error`
+# return the value over the whole mesh, on every rank.
 
-from std.collections import Array
+from std.collections import Array, List
 from max.gpu.host import DeviceBuffer, DeviceContext
 
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT
 from warpxm.core.math_compat import sqrt
 from warpxm.core.types import Real, INDEX_DTYPE
+from warpxm.parallel import mpi
+from warpxm.parallel.halo import HaloPlan
+from warpxm.parallel.partition import Partition, decompose
 from warpxm.variable.state import DGState
 
 # Sentinels in `face_neg_elem` / `face_pos_elem` for a face on the domain
@@ -50,6 +67,17 @@ comptime FACE_DIR_DOWN: Int = 4
 comptime FACE_DIR_UP: Int = 5
 
 
+def _face_slot(cell: Array[Int, 3], n: Array[Int, 3], axis: Int) -> Int:
+    """Position of `cell` within the layer of elements on a face normal to
+    `axis`: transverse row-major order, the order of the ghost blocks
+    (`parallel/halo.mojo`)."""
+    var c = cell.copy()
+    var m = n.copy()
+    c[axis] = 0
+    m[axis] = 1
+    return (c[2] * m[1] + c[1]) * m[0] + c[0]
+
+
 struct BlockMesh[NDIM: Int, P: Int]:
     """Uniform DG block mesh with `(P + 1)^NDIM` GLL nodes per element."""
 
@@ -59,10 +87,22 @@ struct BlockMesh[NDIM: Int, P: Int]:
     var nx: Int
     var ny: Int
     var nz: Int
-    """Elements along each axis (1 for axes beyond NDIM)."""
+    """Elements along each axis (1 for axes beyond NDIM), on this rank."""
 
     var num_elements: Int
+    """Elements owned by this rank."""
+
+    var num_ghost: Int
+    """Ghost elements: copies of other ranks' elements across the
+    partition faces, stored after the owned elements of each state."""
+
     var num_faces: Int
+
+    var partition: Partition
+    """This rank's box of the global mesh."""
+
+    var halo: HaloPlan
+    """What to exchange with which rank to keep the ghosts current."""
 
     var periodic_x: Bool
     var periodic_y: Bool
@@ -180,10 +220,51 @@ struct BlockMesh[NDIM: Int, P: Int]:
         comptime NPE = Self.num_nodes_per_elem
         comptime NFE = Self.num_faces_per_elem
 
-        self.nx = n[0]
-        self.ny = n[1]
-        self.nz = n[2]
-        self.num_elements = n[0] * n[1] * n[2]
+        # Everything below is built for this rank's box: `n_loc` holds its
+        # element counts, `first` the global index of its first element
+        # along each axis, and an axis wraps onto itself only if it is
+        # periodic and not cut between ranks.
+        var global_n = n.copy()
+        self.partition = decompose(
+            global_n, periodic, Self.NDIM, mpi.rank(), mpi.size(),
+        )
+        var n_loc = self.partition.n.copy()
+        var first = self.partition.start.copy()
+        var nbr_rank = self.partition.neighbor.copy()
+        var wraps = Array[Bool, 3](fill=True)
+        for a in range(3):
+            wraps[a] = periodic[a] and self.partition.procs[a] == 1
+        # Elements exchanged across each partition face, and the owned
+        # ones to send: the layer next to the face, in `_face_slot` order.
+        var num_owned = n_loc[0] * n_loc[1] * n_loc[2]
+        var halo_count = Array[Int, 6](fill=0)
+        var send_elem = List[Int32]()
+        for d in range(6):
+            if nbr_rank[d] < 0:
+                continue
+            var a = d // 2
+            halo_count[d] = num_owned // n_loc[a]
+            var m = n_loc.copy()
+            m[a] = 1
+            for k in range(m[2]):
+                for j in range(m[1]):
+                    for i in range(m[0]):
+                        var cell: Array[Int, 3] = [i, j, k]
+                        cell[a] = n_loc[a] - 1 if d % 2 == 1 else 0
+                        send_elem.append(Int32(
+                            (cell[2] * n_loc[1] + cell[1]) * n_loc[0] + cell[0]
+                        ))
+        self.halo = HaloPlan(ctx, num_owned, nbr_rank, halo_count, send_elem)
+        self.num_ghost = self.halo.num_ghost
+        # First ghost element of each direction.
+        var ghost_first = Array[Int, 6](fill=0)
+        for d in range(6):
+            ghost_first[d] = self.halo.num_owned + self.halo.ghost_offset(d)
+
+        self.nx = n_loc[0]
+        self.ny = n_loc[1]
+        self.nz = n_loc[2]
+        self.num_elements = n_loc[0] * n_loc[1] * n_loc[2]
         self.periodic_x = periodic[0]
         self.periodic_y = periodic[1]
         self.periodic_z = periodic[2]
@@ -193,9 +274,9 @@ struct BlockMesh[NDIM: Int, P: Int]:
         self.y_max = hi[1]
         self.z_min = lo[2]
         self.z_max = hi[2]
-        self.dx = (hi[0] - lo[0]) / Real(n[0])
-        self.dy = (hi[1] - lo[1]) / Real(n[1])
-        self.dz = (hi[2] - lo[2]) / Real(n[2])
+        self.dx = (hi[0] - lo[0]) / Real(global_n[0])
+        self.dy = (hi[1] - lo[1]) / Real(global_n[1])
+        self.dz = (hi[2] - lo[2]) / Real(global_n[2])
         self.jacobian_x = self.dx * Real(0.5)
         self.jacobian_y = self.dy * Real(0.5)
         self.jacobian_z = self.dz * Real(0.5)
@@ -205,9 +286,9 @@ struct BlockMesh[NDIM: Int, P: Int]:
         var face_offset = Array[Int, 3](fill=0)
         var num_faces = 0
         for a in range(Self.NDIM):
-            n_faces_along[a] = n[a] if periodic[a] else n[a] + 1
+            n_faces_along[a] = n_loc[a] if wraps[a] else n_loc[a] + 1
             face_offset[a] = num_faces
-            num_faces += (self.num_elements // n[a]) * n_faces_along[a]
+            num_faces += (self.num_elements // n_loc[a]) * n_faces_along[a]
         self.num_faces = num_faces
 
         # --- node coordinates ------------------------------------------------
@@ -219,12 +300,12 @@ struct BlockMesh[NDIM: Int, P: Int]:
         var node_host = ctx.enqueue_create_host_buffer[Real.dtype](total)
         for e in range(self.num_elements):
             var cell: Array[Int, 3] = [
-                e % n[0], (e // n[0]) % n[1], e // (n[0] * n[1]),
+                e % n_loc[0], (e // n_loc[0]) % n_loc[1], e // (n_loc[0] * n_loc[1]),
             ]
             for node in range(NPE):
                 var stride = 1
                 for a in range(Self.NDIM):
-                    var corner = lo[a] + Real(cell[a]) * width[a]
+                    var corner = lo[a] + Real(first[a] + cell[a]) * width[a]
                     var xi = ref_nodes[(node // stride) % P1]
                     node_host[(e * NPE + node) * Self.NDIM + a] = (
                         corner + (Real(1.0) + xi) * jac[a]
@@ -245,7 +326,7 @@ struct BlockMesh[NDIM: Int, P: Int]:
 
         for a in range(Self.NDIM):
             # Extents of the face lattice for this axis.
-            var m = n.copy()
+            var m = n_loc.copy()
             m[a] = n_faces_along[a]
             for k in range(m[2]):
                 for j in range(m[1]):
@@ -258,23 +339,31 @@ struct BlockMesh[NDIM: Int, P: Int]:
                         var c = pos[a]
                         var has_neg = True
                         var has_pos = True
-                        if periodic[a]:
-                            neg[a] = (c - 1 + n[a]) % n[a]
+                        if wraps[a]:
+                            neg[a] = (c - 1 + n_loc[a]) % n_loc[a]
                         else:
                             neg[a] = c - 1
                             has_neg = c > 0
-                            has_pos = c < n[a]
+                            has_pos = c < n_loc[a]
                         if has_neg:
-                            var neg_e = (neg[2] * n[1] + neg[1]) * n[0] + neg[0]
+                            var neg_e = (neg[2] * n_loc[1] + neg[1]) * n_loc[0] + neg[0]
                             fn_host[f] = Int32(neg_e)
                             efd_host[neg_e * NFE + 2 * a + 1] = Int32(f)
+                        elif nbr_rank[2 * a] >= 0:
+                            fn_host[f] = Int32(
+                                ghost_first[2 * a] + _face_slot(pos, n_loc, a)
+                            )
                         else:
                             fn_host[f] = GHOST_NEG
                             fbc_host[f] = Int32(bc[2 * a])
                         if has_pos:
-                            var pos_e = (pos[2] * n[1] + pos[1]) * n[0] + pos[0]
+                            var pos_e = (pos[2] * n_loc[1] + pos[1]) * n_loc[0] + pos[0]
                             fp_host[f] = Int32(pos_e)
                             efd_host[pos_e * NFE + 2 * a] = Int32(f)
+                        elif nbr_rank[2 * a + 1] >= 0:
+                            fp_host[f] = Int32(
+                                ghost_first[2 * a + 1] + _face_slot(neg, n_loc, a)
+                            )
                         else:
                             fp_host[f] = GHOST_POS
                             fbc_host[f] = Int32(bc[2 * a + 1])
@@ -332,7 +421,7 @@ struct BlockMesh[NDIM: Int, P: Int]:
         var out = Array[Real, 4](fill=Real(0.0))
         var in_ = node % P1
         out[0] = (
-            self.x_min + Real(e % self.nx) * self.dx
+            self.x_min + Real(self.partition.start[0] + e % self.nx) * self.dx
             + (Real(1.0) + ref_nodes[in_]) * self.jacobian_x
         )
         var w = weights[in_]
@@ -340,7 +429,9 @@ struct BlockMesh[NDIM: Int, P: Int]:
         comptime if Self.NDIM >= 2:
             var jn = (node // P1) % P1
             out[1] = (
-                self.y_min + Real((e // self.nx) % self.ny) * self.dy
+                self.y_min
+                + Real(self.partition.start[1] + (e // self.nx) % self.ny)
+                * self.dy
                 + (Real(1.0) + ref_nodes[jn]) * self.jacobian_y
             )
             w = w * weights[jn]
@@ -348,7 +439,9 @@ struct BlockMesh[NDIM: Int, P: Int]:
         comptime if Self.NDIM >= 3:
             var kn = node // (P1 * P1)
             out[2] = (
-                self.z_min + Real(e // (self.nx * self.ny)) * self.dz
+                self.z_min
+                + Real(self.partition.start[2] + e // (self.nx * self.ny))
+                * self.dz
                 + (Real(1.0) + ref_nodes[kn]) * self.jacobian_z
             )
             w = w * weights[kn]
@@ -462,6 +555,31 @@ struct BlockMesh[NDIM: Int, P: Int]:
                         v[c] = h[base + c]
                     visit(p[0], p[1], p[2], p[3], v)
 
+    def checksum[NC: Int](
+        self, mut q: DGState[Self.NDIM, Self.P, NC],
+    ) raises -> UInt64:
+        """A hash of every value of `q` over the whole mesh that does not
+        depend on how the mesh is split between ranks: equal checksums
+        mean bitwise-equal fields. The regression tests use it to compare
+        a multi-rank run with the single-rank one."""
+        var total: UInt64 = 0
+        with q.buf.map_to_host() as h:
+            for e in range(self.num_elements):
+                var ge = self.partition.global_element(e)
+                for n in range(Self.num_nodes_per_elem):
+                    for c in range(NC):
+                        var key = UInt64((ge * Self.num_nodes_per_elem + n) * NC + c)
+                        var bits = rebind[UInt64](
+                            h[q.index(e, n, c)].to_bits()
+                        )
+                        # Mix position and value (splitmix64 finaliser), so
+                        # swapped or shifted values change the sum.
+                        var z = bits ^ (key * 0x9E3779B97F4A7C15)
+                        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
+                        z = (z ^ (z >> 27)) * 0x94D049BB133111EB
+                        total += z ^ (z >> 31)
+        return mpi.global_sum(total)
+
     def integrate[NC: Int](
         self, mut q: DGState[Self.NDIM, Self.P, NC], comp: Int,
     ) raises -> Real:
@@ -471,7 +589,7 @@ struct BlockMesh[NDIM: Int, P: Int]:
             for e in range(self.num_elements):
                 for n in range(Self.num_nodes_per_elem):
                     total += self._node(e, n)[3] * h[q.index(e, n, comp)]
-        return total
+        return mpi.global_sum(total)
 
     def integrate_fn[NC: Int, F: def(Array[Real, NC]) -> Real](
         self, mut q: DGState[Self.NDIM, Self.P, NC], f: F,
@@ -487,7 +605,7 @@ struct BlockMesh[NDIM: Int, P: Int]:
                     for c in range(NC):
                         v[c] = h[base + c]
                     total += self._node(e, n)[3] * f(v)
-        return total
+        return mpi.global_sum(total)
 
     def l2_error[NC: Int, Exact: def(Real) -> Real](
         self, mut q: DGState[Self.NDIM, Self.P, NC], comp: Int, exact: Exact,
@@ -501,7 +619,7 @@ struct BlockMesh[NDIM: Int, P: Int]:
                     var p = self._node(e, n)
                     var d = h[q.index(e, n, comp)] - exact(p[0])
                     total += p[3] * d * d
-        return sqrt(total)
+        return sqrt(mpi.global_sum(total))
 
     def l2_error[NC: Int, Exact: def(Real, Real) -> Real](
         self, mut q: DGState[Self.NDIM, Self.P, NC], comp: Int, exact: Exact,
@@ -515,7 +633,7 @@ struct BlockMesh[NDIM: Int, P: Int]:
                     var p = self._node(e, n)
                     var d = h[q.index(e, n, comp)] - exact(p[0], p[1])
                     total += p[3] * d * d
-        return sqrt(total)
+        return sqrt(mpi.global_sum(total))
 
     def l2_error[NC: Int, Exact: def(Real, Real, Real) -> Real](
         self, mut q: DGState[Self.NDIM, Self.P, NC], comp: Int, exact: Exact,
@@ -529,4 +647,4 @@ struct BlockMesh[NDIM: Int, P: Int]:
                     var p = self._node(e, n)
                     var d = h[q.index(e, n, comp)] - exact(p[0], p[1], p[2])
                     total += p[3] * d * d
-        return sqrt(total)
+        return sqrt(mpi.global_sum(total))

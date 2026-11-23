@@ -63,6 +63,7 @@ Everything not tied to one physics.
 | `variable` | `DGState` |
 | `temporal` | `SSPRK3`, `no_op_adjust`, `DormandPrince45` |
 | `io` | `FrameWriter`, `write_vtu` |
+| `parallel.mpi` | `rank_device_context`, `root_print`, `is_root`, `num_ranks`, `global_sum`, `global_min`, `global_max` |
 
 Not included: `DeviceContext` (from `max.gpu.host`), `Array` (from
 `std.collections`), and `std.math` functions such as `sin` and `exp`.

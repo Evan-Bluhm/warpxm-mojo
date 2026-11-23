@@ -143,11 +143,22 @@ struct SSPRK3[NDIM: Int, P: Int, NC: Int]:
     var stage2: DGState[Self.NDIM, Self.P, Self.NC]
     var rhs: DGState[Self.NDIM, Self.P, Self.NC]
 
-    def __init__(out self, var ctx: DeviceContext, num_elements: Int) raises:
-        self.u_save = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.stage1 = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.stage2 = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.rhs = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
+    def __init__(
+        out self, var ctx: DeviceContext, num_elements: Int,
+        num_ghost: Int = 0,
+    ) raises:
+        self.u_save = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.stage1 = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.stage2 = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.rhs = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
 
     def step[
         ComputeRhs: def(

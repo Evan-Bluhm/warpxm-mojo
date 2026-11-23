@@ -37,20 +37,20 @@ A standard PI-free controller:
 
 1. Compute the scaled RMS error norm
 
-   $$
-   \text{err} = \sqrt{\frac{1}{N}\sum_i \!\left(\frac{|y_{5,i} - y_{4,i}|}{\text{atol} + \text{rtol}\cdot\max(|u_n^{i}|, |y_5^{i}|)}\right)^{2}}.
-   $$
+    $$
+    \text{err} = \sqrt{\frac{1}{N}\sum_i \!\left(\frac{|y_{5,i} - y_{4,i}|}{\text{atol} + \text{rtol}\cdot\max(|u_n^{i}|, |y_5^{i}|)}\right)^{2}}.
+    $$
 
 2. Compute the new step size
 
-   $$
-   \Delta t_{\text{new}} = \Delta t \cdot \text{clip}(0.9\cdot \text{err}^{-1/5},\; [0.2,\, 5]).
-   $$
+    $$
+    \Delta t_{\text{new}} = \Delta t \cdot \text{clip}(0.9\cdot \text{err}^{-1/5},\; [0.2,\, 5]).
+    $$
 
 3. If $\text{err} \leq 1$: accept the step, return $\Delta t_{\text{new}}$
-   as the next guess.
+    as the next guess.
 4. If $\text{err} > 1$: reject, restore $\mathbf{u}^{n}$ from the
-   snapshot, retry with the smaller $\Delta t_{\text{new}}$.
+    snapshot, retry with the smaller $\Delta t_{\text{new}}$.
 
 ## API
 

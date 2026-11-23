@@ -39,7 +39,7 @@ comptime State = DGState[1, P, EULER_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[1, P](
         ctx,
         Real(0.0),
@@ -49,7 +49,7 @@ def main() raises:
         bc_left=BC_COPYOUT,
         bc_right=BC_COPYOUT,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real) -> Array[Real, EULER_NC]:
         var rho: Real = 1.0 if x < Real(0.5) else 0.125
@@ -64,8 +64,8 @@ def main() raises:
         cfl_max=Real(0.5),
     )
     var spatial = DGEulerSolver[1, P](app)
-    var stepper = SSPRK3[1, P, EULER_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith[1, P, EULER_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[1, P, EULER_NC](ctx, mesh.num_elements, mesh.num_ghost)
+    var limiter = MoeRossmanith[1, P, EULER_NC](ctx, mesh.num_elements, mesh.num_ghost)
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
@@ -82,9 +82,11 @@ def main() raises:
     )
 
     # Print rho, u, P at element centroids (the P = 2 mid node) for a quick
-    # text view.
-    print("# Sod shock tube at t =", t, " final CFL dt =", suggest_dt(q))
-    print("# x, rho, u, P")
+    # text view. (On several ranks this lists rank 0's part of the tube,
+    # which starts at x_min; use the VTU examples for output from a
+    # multi-rank run.)
+    root_print("# Sod shock tube at t =", t, " final CFL dt =", suggest_dt(q))
+    root_print("# x, rho, u, P")
     var mid_node = State.num_nodes_per_elem // 2
     with q.buf.map_to_host() as h:
         for e in range(mesh.num_elements):
@@ -93,4 +95,4 @@ def main() raises:
             var u = h[State.index(e, mid_node, IDX_MX)] / rho
             var ke = Real(0.5) * rho * u * u
             var p_local = (GAMMA - Real(1.0)) * (h[State.index(e, mid_node, IDX_E)] - ke)
-            print(x, ",", rho, ",", u, ",", p_local)
+            root_print(x, ",", rho, ",", u, ",", p_local)

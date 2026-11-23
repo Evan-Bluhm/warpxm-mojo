@@ -1,0 +1,40 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+# Build container for clusters whose host glibc is too old for Mojo
+# (UW Klone: Rocky 8, glibc 2.28; Mojo needs >= 2.34).
+#
+# Inside: the pinned Mojo toolchain (the versions in pyproject.toml) in a
+# conda environment at /opt/mojoenv. MPI is NOT inside: the binary links
+# and runs against the host's GPU-aware MPI, bind-mounted at run time, so
+# that ranks talk over the cluster's fabric. `scripts/klone-run` does the
+# binding.
+#
+#     apptainer build --fakeroot mojo.sif mojo.def
+#
+# Rebuild when the Mojo pin in pyproject.toml changes, and keep the two
+# version numbers below in step with it.
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl bzip2 build-essential libc6-dev
+    rm -rf /var/lib/apt/lists/*
+
+    curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest \
+        | tar -xj -C /usr/local bin/micromamba
+    micromamba create -y -p /opt/mojoenv \
+        -c https://conda.modular.com/max -c conda-forge \
+        "mojo==1.2.0" "max-core==26.7.0"
+    micromamba clean -a -y
+    chmod -R a+rX /opt/mojoenv
+
+%environment
+    export CONDA_PREFIX=/opt/mojoenv
+    export MODULAR_HOME=/opt/mojoenv/share/max
+    export PATH=/opt/mojoenv/bin:/usr/local/bin:/usr/bin:/bin
+
+%runscript
+    exec "$@"

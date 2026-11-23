@@ -106,9 +106,11 @@ struct SSPRK3Phase[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int, NC: Int]:
 
     def __init__(
         out self, var ctx: DeviceContext, num_phase_elements: Int,
+        num_ghost: Int = 0,
     ) raises:
-        self.stage = Self.State(ctx, num_phase_elements)
-        self.rhs = Self.State(ctx, num_phase_elements)
+        """Pass `mesh.num_phase_elements` and `mesh.num_ghost`."""
+        self.stage = Self.State(ctx, num_phase_elements, num_ghost)
+        self.rhs = Self.State(ctx, num_phase_elements, num_ghost)
 
     def step[
         ComputeRhs: def(mut Self.State, mut Self.State) raises -> None,

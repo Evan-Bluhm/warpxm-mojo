@@ -40,12 +40,12 @@ comptime State = DGState[3, P, MHD_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[3, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, nz=NZ,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real, y: Real, z: Real) -> Array[Real, MHD_NC]:
         var r2 = (
@@ -65,8 +65,8 @@ def main() raises:
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )
     var spatial = DGImhdSolver[3, P](app)
-    var stepper = SSPRK3[3, P, MHD_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith[3, P, MHD_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[3, P, MHD_NC](ctx, mesh.num_elements, mesh.num_ghost)
+    var limiter = MoeRossmanith[3, P, MHD_NC](ctx, mesh.num_elements, mesh.num_ghost)
     var fw = FrameWriter("blast", "output/imhd_blast_3d")
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
@@ -81,7 +81,7 @@ def main() raises:
     var mass_0 = mesh.integrate(q, IDX_RHO)
     var bx_0 = mesh.integrate(q, IDX_BX)
     var e_0 = mesh.integrate(q, IDX_E)
-    print("frame   time   ∫ρ dV   ∫B_x dV   ∫E dV   rel Δmass   rel ΔB_x   rel ΔE   CFL dt")
+    root_print("frame   time   ∫ρ dV   ∫B_x dV   ∫E dV   rel Δmass   rel ΔB_x   rel ΔE   CFL dt")
 
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
@@ -89,7 +89,7 @@ def main() raises:
         var mass = mesh.integrate(q, IDX_RHO)
         var bx_int = mesh.integrate(q, IDX_BX)
         var e_int = mesh.integrate(q, IDX_E)
-        print(
+        root_print(
             frame, t, mass, bx_int, e_int,
             (mass - mass_0) / mass_0, (bx_int - bx_0) / bx_0,
             (e_int - e_0) / e_0, suggest_dt(q),
@@ -102,4 +102,4 @@ def main() raises:
             )
 
     fw.write_pvd()
-    print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/blast.pvd")
+    root_print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/blast.pvd")

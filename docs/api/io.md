@@ -105,5 +105,10 @@ fw.write_pvd()
 
 ## ParaView usage
 
+On several ranks each rank writes its own piece of a frame
+(`<stem>_p<rank>.vtu`) and rank 0 writes `<stem>.pvtu`, the index that
+lists them; the `.pvd` then points at the `.pvtu` files. Call the writers
+on every rank with the same path.
+
 Open the `.pvd`, hit Apply, colour by field. See
 [Viewing output in ParaView](../getting-started/paraview.md).

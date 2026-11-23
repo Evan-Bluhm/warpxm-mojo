@@ -20,10 +20,10 @@ the interface. The choice of $\lambda_{\max}$ depends on the physics:
 
 | Physics | $\lambda_{\max}$ |
 | ------- | ---------------- |
-| Advection | $\max(|v_n|_L, |v_n|_R)$ (or just upwind directly) |
-| Euler | $\max\!\left(|u_n|_L + c_{s,L},\, |u_n|_R + c_{s,R}\right)$, $c_s = \sqrt{\gamma P / \rho}$ |
+| Advection | $\max(\lvert v_n\rvert_L, \lvert v_n\rvert_R)$ (or just upwind directly) |
+| Euler | $\max\!\left(\lvert u_n\rvert_L + c_{s,L},\, \lvert u_n\rvert_R + c_{s,R}\right)$, $c_s = \sqrt{\gamma P / \rho}$ |
 | Maxwell | $c$ (speed of light) |
-| MHD | $\max\!\left(|u_n|_L + c_{f,L},\, |u_n|_R + c_{f,R}\right)$, $c_f$ the fast magnetosonic speed |
+| MHD | $\max\!\left(\lvert u_n\rvert_L + c_{f,L},\, \lvert u_n\rvert_R + c_{f,R}\right)$, $c_f$ the fast magnetosonic speed |
 
 Fast magnetosonic for MHD:
 

@@ -26,8 +26,16 @@ construction.
 | `q.buf_len` | total scalar count, `total_nodes * NC` |
 | `q.total_nodes` | `num_elements * (P+1)^NDIM` |
 | `q.num_elements` | element count |
+| `q.num_ghost` | ghost elements stored after the owned ones (0 on one rank) |
+| `q.alloc_len` | length of `q.buf` including the ghosts |
 | `DGState[NDIM, P, NC].num_nodes_per_elem` | comptime, `(P+1)^NDIM` |
 | `DGState[NDIM, P, NC].index(elem, node, comp)` | static; flat buffer index |
+
+A driver that should run on several ranks passes the mesh's ghost count
+as well, `DGState[2, P, NC](ctx, mesh.num_elements, mesh.num_ghost)`.
+`num_elements`, `total_nodes` and `buf_len` always count owned data, so
+kernels sized by them never touch a ghost
+([Running on several GPUs](../concepts/parallel.md)).
 
 A driver usually names the type once:
 

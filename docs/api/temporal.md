@@ -20,7 +20,9 @@ a capture list).
 The state buffer is flat in every dimension, so the RK combine kernels
 do not depend on `NDIM`; it only fixes the state type. Each stepper owns
 its scratch states and is constructed as `Stepper[...](ctx, num_elements)`
-(the kinetic ones take the phase-mesh element counts).
+(the kinetic ones take the phase-mesh element counts). For a run on
+several ranks add the mesh's ghost count, as for a state:
+`Stepper[...](ctx, mesh.num_elements, mesh.num_ghost)`.
 
 ## `SSPRK3`
 

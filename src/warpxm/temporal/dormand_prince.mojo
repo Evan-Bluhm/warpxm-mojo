@@ -35,6 +35,7 @@ from layout import TileTensor, TensorLayout, row_major, stack_allocation
 from std.math import ceildiv
 
 from warpxm.core.math_compat import sqrt
+from warpxm.parallel import mpi
 from warpxm.core.types import Real, WXM_DTYPE
 from warpxm.variable.state import DGState
 
@@ -242,17 +243,40 @@ struct DormandPrince45[NDIM: Int, P: Int, NC: Int]:
     """One-element scratch buffer: target of the GPU-side error-norm reduction
     in `step_adaptive`. Avoids three full-buffer `map_to_host` copies per step."""
 
-    def __init__(out self, var ctx: DeviceContext, num_elements: Int) raises:
-        self.u_save = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.y_stage = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.k1 = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.k2 = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.k3 = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.k4 = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.k5 = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.k6 = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.k7 = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
-        self.err_buf = DGState[Self.NDIM, Self.P, Self.NC](ctx, num_elements)
+    def __init__(
+        out self, var ctx: DeviceContext, num_elements: Int,
+        num_ghost: Int = 0,
+    ) raises:
+        self.u_save = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.y_stage = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.k1 = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.k2 = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.k3 = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.k4 = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.k5 = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.k6 = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.k7 = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
+        self.err_buf = DGState[Self.NDIM, Self.P, Self.NC](
+            ctx, num_elements, num_ghost,
+        )
         self.sum_sq_buf = ctx.enqueue_create_buffer[Real.dtype](1)
 
     def step[
@@ -439,7 +463,9 @@ struct DormandPrince45[NDIM: Int, P: Int, NC: Int]:
             var sum_sq: Real
             with self.sum_sq_buf.map_to_host() as sh:
                 sum_sq = sh[0]
-            var err = sqrt(sum_sq / Real(size))
+            var err = sqrt(
+                mpi.global_sum(sum_sq) / mpi.global_sum(Real(size))
+            )
 
             # Standard PI-free controller: dt_new = dt · 0.9 · err^(-1/5),
             # clipped to [0.2·dt, 5·dt].

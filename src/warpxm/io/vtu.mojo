@@ -19,11 +19,17 @@
 # (`format="appended"`, UInt64 block headers, little-endian). About 3x
 # smaller and far faster to write and load than ASCII, which matters at 3D
 # resolutions.
+#
+# Several ranks: each rank writes its own elements to a piece file
+# `<stem>_p<rank>.vtu`, and rank 0 writes `<stem>.pvtu`, the file to open,
+# which lists the pieces. On one rank the output is the single `.vtu`.
 
 from std.collections import Array, List
+from std.os.path import basename
 
 from warpxm.core.types import Real
 from warpxm.mesh.block import BlockMesh
+from warpxm.parallel import mpi
 from warpxm.variable.state import DGState
 
 
@@ -163,6 +169,55 @@ def _write_vtu_file[NDIM: Int, P: Int](
     out.close()
 
 
+def _stem(path: String) -> String:
+    """`path` without its `.vtu` extension."""
+    return String(path.removesuffix(".vtu"))
+
+
+def parallel_vtu_path(path: String) -> String:
+    """The file to open for a frame written to `path`: the `.pvtu` index
+    on several ranks, `path` itself on one."""
+    if mpi.size() == 1:
+        return path
+    return _stem(path) + ".pvtu"
+
+
+def _piece_path(path: String, rank: Int) -> String:
+    return _stem(path) + "_p" + String(rank) + ".vtu"
+
+
+def _write_pvtu(path: String, names: List[String]) raises:
+    """The index file of a multi-rank frame: array declarations and one
+    `Piece` per rank, named relative to the index."""
+    var out = open(parallel_vtu_path(path), "w")
+    out.write("<?xml version=\"1.0\"?>\n")
+    out.write(
+        "<VTKFile type=\"PUnstructuredGrid\" version=\"1.0\""
+        + " byte_order=\"LittleEndian\" header_type=\"UInt64\">\n"
+    )
+    out.write("  <PUnstructuredGrid GhostLevel=\"0\">\n")
+    out.write("    <PPoints>\n")
+    out.write("      <PDataArray type=\"Float64\" NumberOfComponents=\"3\"/>\n")
+    out.write("    </PPoints>\n")
+    if len(names) > 0:
+        out.write("    <PPointData Scalars=\"" + names[0] + "\">\n")
+    else:
+        out.write("    <PPointData>\n")
+    for k in range(len(names)):
+        out.write(
+            "      <PDataArray type=\"Float64\" Name=\"" + names[k] + "\"/>\n"
+        )
+    out.write("    </PPointData>\n")
+    for r in range(mpi.size()):
+        out.write(
+            "    <Piece Source=\"" + String(basename(_piece_path(path, r)))
+            + "\"/>\n"
+        )
+    out.write("  </PUnstructuredGrid>\n")
+    out.write("</VTKFile>\n")
+    out.close()
+
+
 def write_vtu[
     NDIM: Int, P: Int, NC: Int, NF: Int,
     Fields: def(Array[Real, NC]) -> Array[Real, NF],
@@ -174,7 +229,10 @@ def write_vtu[
     fields: Fields,
 ) raises:
     """Write `fields(q_node)` at every node of a 2D or 3D field as point
-    data named by `names` (one name per returned value)."""
+    data named by `names` (one name per returned value).
+
+    Call it on every rank with the same `path`; see the header for the
+    files a multi-rank run produces."""
     comptime assert NDIM == 2 or NDIM == 3, "VTU output is 2D or 3D"
     debug_assert(len(names) == NF, "one name per field")
     var points = List[Float64](capacity=q.total_nodes * 3)
@@ -201,4 +259,12 @@ def write_vtu[
             for k in range(NF):
                 data.append(f[k])
         mesh.visit_nodes(q, gather_3d)
-    _write_vtu_file[NDIM, P](path, mesh.num_elements, points, data, names)
+    if mpi.size() == 1:
+        _write_vtu_file[NDIM, P](path, mesh.num_elements, points, data, names)
+    else:
+        _write_vtu_file[NDIM, P](
+            _piece_path(path, mpi.rank()), mesh.num_elements, points, data,
+            names,
+        )
+        if mpi.is_root():
+            _write_pvtu(path, names)

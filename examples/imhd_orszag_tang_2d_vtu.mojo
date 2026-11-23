@@ -31,12 +31,12 @@ comptime State = DGState[2, P, MHD_GLM_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[2, P](
         ctx, Real(0.0), TWO_PI, Real(0.0), TWO_PI,
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real, y: Real) -> Array[Real, MHD_GLM_NC]:
         var rho = GAMMA * GAMMA
@@ -65,8 +65,8 @@ def main() raises:
         c_h=C_H, c_p_sq=C_P_SQ,
     )
     var spatial = DGImhdGLMSolver[2, P](app)
-    var stepper = SSPRK3[2, P, MHD_GLM_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith[2, P, MHD_GLM_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[2, P, MHD_GLM_NC](ctx, mesh.num_elements, mesh.num_ghost)
+    var limiter = MoeRossmanith[2, P, MHD_GLM_NC](ctx, mesh.num_elements, mesh.num_ghost)
     var fw = FrameWriter("orszag_tang")
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
@@ -84,14 +84,14 @@ def main() raises:
 
     var mass_0 = mesh.integrate(q, IDX_RHO)
     var energy_0 = mesh.integrate(q, IDX_E)
-    print("time   ∫ρ dV   ∫E dV   ∫ψ² dV   rel Δmass   rel ΔE")
+    root_print("time   ∫ρ dV   ∫E dV   ∫ψ² dV   rel Δmass   rel ΔE")
 
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
         dump_imhd_glm_frame(fw.next_path(t), mesh, q, GAMMA)
         var mass = mesh.integrate(q, IDX_RHO)
         var energy = mesh.integrate(q, IDX_E)
-        print(
+        root_print(
             t, mass, energy, mesh.integrate_fn(q, psi_squared),
             (mass - mass_0) / mass_0, (energy - energy_0) / energy_0,
         )
@@ -102,4 +102,4 @@ def main() raises:
             )
 
     fw.write_pvd()
-    print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/orszag_tang.pvd")
+    root_print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/orszag_tang.pvd")

@@ -27,14 +27,14 @@ comptime State = DGState[2, P, EULER_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(0.1),
         nx=NX, ny=NY, periodic_x=False, periodic_y=False,
         bc_left=BC_COPYOUT, bc_right=BC_COPYOUT,
         bc_bottom=BC_WALL_FREESLIP, bc_top=BC_WALL_FREESLIP,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
         var rho: Real = 1.0 if x < Real(0.5) else 0.125
@@ -47,8 +47,8 @@ def main() raises:
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )
     var spatial = DGEulerSolver[2, P](app)
-    var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith[2, P, EULER_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements, mesh.num_ghost)
+    var limiter = MoeRossmanith[2, P, EULER_NC](ctx, mesh.num_elements, mesh.num_ghost)
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
@@ -67,5 +67,5 @@ def main() raises:
     makedirs(OUTPUT_DIR, exist_ok=True)
     var path = OUTPUT_DIR + "/sod_2d.vtu"
     dump_euler_frame(path, mesh, q, GAMMA)
-    print("t =", t, " final CFL dt =", suggest_dt(q), " ∫ρ dV =", mesh.integrate(q, IDX_RHO))
-    print("Wrote", path)
+    root_print("t =", t, " final CFL dt =", suggest_dt(q), " ∫ρ dV =", mesh.integrate(q, IDX_RHO))
+    root_print("Wrote", path)

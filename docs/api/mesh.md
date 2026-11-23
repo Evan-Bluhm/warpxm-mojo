@@ -56,6 +56,8 @@ every sum and product):
 | ----- | ---- | ------- |
 | `mesh.nx`, `ny`, `nz` | `Int` | elements along each axis |
 | `mesh.num_elements` | `Int` | `nx * ny * nz` |
+| `mesh.num_ghost` | `Int` | ghost elements stored after the owned ones (0 on one rank) |
+| `mesh.partition`, `mesh.halo` | `Partition`, `HaloPlan` | this rank's box and its halo exchange plan ([`parallel`](parallel.md)) |
 | `mesh.num_faces` | `Int` | total faces; per axis, `n` along a periodic axis and `n + 1` otherwise |
 | `mesh.x_min`, `x_max`, `y_min`, … `z_max` | `Real` | domain extent |
 | `mesh.dx`, `dy`, `dz` | `Real` | uniform element widths |
@@ -65,6 +67,13 @@ every sum and product):
 | `mesh.face_neg_elem_buf`, `face_pos_elem_buf` | `DeviceBuffer[INDEX_DTYPE]` | element on the negative / positive side of every face; `GHOST_NEG` / `GHOST_POS` on a boundary |
 | `mesh.elem_face_dir_buf` | `DeviceBuffer[INDEX_DTYPE]` | face id on each side of every element, `[e * 2 * NDIM + dir]` |
 | `mesh.face_bc_buf` | `DeviceBuffer[INDEX_DTYPE]` | BC kind per face (`BC_INTERIOR` on interior faces) |
+
+On several ranks ([Running on several GPUs](../concepts/parallel.md))
+the constructor still takes the global mesh; `nx`, `ny`, `nz`,
+`num_elements`, `num_faces` and the buffers then describe this rank's
+box, while the extents `x_min` … `z_max` stay global. A face shared with
+another rank has a ghost element (index `>= num_elements`) on its far
+side.
 
 Numbering:
 

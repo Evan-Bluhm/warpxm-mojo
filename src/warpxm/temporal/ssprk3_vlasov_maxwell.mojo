@@ -40,12 +40,16 @@ struct SSPRK3VlasovMaxwell[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
         var ctx: DeviceContext,
         num_phase_elements: Int,
         num_x_elements: Int,
+        num_phase_ghost: Int = 0,
+        num_x_ghost: Int = 0,
     ) raises:
-        """Pass `mesh.num_phase_elements` and `mesh.num_x_elements`."""
-        self.qp_stage = Self.Phase(ctx, num_phase_elements)
-        self.qp_rhs = Self.Phase(ctx, num_phase_elements)
-        self.qm_stage = Self.Fields(ctx, num_x_elements)
-        self.qm_rhs = Self.Fields(ctx, num_x_elements)
+        """Pass `mesh.num_phase_elements`, `mesh.num_x_elements` and, for
+        a run on several ranks, the ghost counts of the phase mesh
+        (`mesh.num_ghost`) and of the field mesh (`x_mesh.num_ghost`)."""
+        self.qp_stage = Self.Phase(ctx, num_phase_elements, num_phase_ghost)
+        self.qp_rhs = Self.Phase(ctx, num_phase_elements, num_phase_ghost)
+        self.qm_stage = Self.Fields(ctx, num_x_elements, num_x_ghost)
+        self.qm_rhs = Self.Fields(ctx, num_x_elements, num_x_ghost)
 
     def step[
         ComputeJointRhs: def(

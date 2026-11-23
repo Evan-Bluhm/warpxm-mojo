@@ -33,18 +33,18 @@ comptime State = DGState[1, P, 1]
 def dump_first_few(label: String, mut q: State) raises:
     """Map q to host and print the first NUM_PRINT_NODES values."""
     with q.buf.map_to_host() as h:
-        print(label)
+        root_print(label)
         var n = NUM_PRINT_NODES if NUM_PRINT_NODES < q.total_nodes else q.total_nodes
         for k in range(n):
-            print("  q[", k, "] =", h[k])
+            root_print("  q[", k, "] =", h[k])
 
 
 def main() raises:
     comptime assert has_accelerator(), "warpxm-mojo requires a GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[1, P](ctx, X_MIN, X_MAX, NUM_ELEMENTS, periodic=True)
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real) -> Array[Real, 1]:
         return [sin(TWO_PI * x)]
@@ -53,7 +53,7 @@ def main() raises:
 
     var app = Advection[1](velocity_x=VELOCITY, cfl_max=CFL)
     var spatial = DGAdvectionSolver[1, P, 1](app)
-    var stepper = SSPRK3[1, P, 1](ctx, mesh.num_elements)
+    var stepper = SSPRK3[1, P, 1](ctx, mesh.num_elements, mesh.num_ghost)
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
@@ -64,10 +64,10 @@ def main() raises:
         ctx, q, Real(0.0), T_FINAL, dt, compute_rhs, no_op_adjust[1, P, 1],
     )
 
-    print("\nIntegrated to t =", t, "with dt =", dt)
+    root_print("\nIntegrated to t =", t, "with dt =", dt)
     dump_first_few("Final q (first nodes):", q)
 
     # After one period on a periodic domain the exact solution is the IC.
     def exact(x: Real) -> Real:
         return sin(TWO_PI * x)
-    print("L2 error vs IC after one period:", mesh.l2_error(q, 0, exact))
+    root_print("L2 error vs IC after one period:", mesh.l2_error(q, 0, exact))

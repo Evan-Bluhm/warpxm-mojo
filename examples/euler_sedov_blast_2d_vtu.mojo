@@ -46,12 +46,12 @@ comptime State = DGState[2, P, EULER_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real, y: Real) -> Array[Real, EULER_NC]:
         var r2 = (x - Real(0.5)) * (x - Real(0.5)) + (y - Real(0.5)) * (y - Real(0.5))
@@ -74,13 +74,13 @@ def main() raises:
     # which shrinks dt, which lets it evacuate further. α ≈ 0.2 keeps the
     # limiter working on the blast without flattening it.
     var limiter = MoeRossmanith[2, P, EULER_NC](
-        ctx, mesh.num_elements, alpha_coeff=Real(100.0),
+        ctx, mesh.num_elements, mesh.num_ghost, alpha_coeff=Real(100.0),
     )
     var positivity = PositivityEuler[2, P](
         num_elements=mesh.num_elements, gamma=GAMMA,
         rho_eps=Real(1.0e-10), p_eps=Real(1.0e-10),
     )
-    var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements, mesh.num_ghost)
     var fw = FrameWriter("sedov")
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
@@ -93,7 +93,7 @@ def main() raises:
     def suggest_dt(mut q_: State) raises {imm} -> Real:
         return spatial.suggest_dt(ctx, mesh, q_)
 
-    print("frame   time   ∫ρ dV   ∫E dV   max|u|   min ρ   min P_gas   rel Δmass   rel ΔE   CFL dt")
+    root_print("frame   time   ∫ρ dV   ∫E dV   max|u|   min ρ   min P_gas   rel Δmass   rel ΔE   CFL dt")
 
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
@@ -113,9 +113,13 @@ def main() raises:
             min_rho = fmin(min_rho, rho)
             min_p = fmin(min_p, (GAMMA - Real(1.0)) * (v[IDX_E] - ke))
         mesh.visit_nodes(q, extrema)
+        # `visit_nodes` covers this rank's elements; combine across ranks.
+        max_u = global_max(max_u)
+        min_rho = global_min(min_rho)
+        min_p = global_min(min_p)
         var mass = mesh.integrate(q, IDX_RHO)
         var e_int = mesh.integrate(q, IDX_E)
-        print(
+        root_print(
             frame, t, mass, e_int, max_u, min_rho, min_p,
             fabs(mass - mass_0) / mass_0, fabs(e_int - e_0) / e_0,
             suggest_dt(q),
@@ -128,4 +132,4 @@ def main() raises:
             )
 
     fw.write_pvd()
-    print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/sedov.pvd")
+    root_print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/sedov.pvd")

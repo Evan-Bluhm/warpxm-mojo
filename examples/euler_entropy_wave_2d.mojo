@@ -41,12 +41,12 @@ comptime State = DGState[2, P, EULER_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(1.0),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def exact_rho(x: Real, y: Real) -> Real:
         return Real(1.0) + EPS * sin(TWO_PI * (x + y))
@@ -70,7 +70,7 @@ def main() raises:
         cfl_max=Real(0.8),
     )
     var spatial = DGEulerSolver[2, P](app)
-    var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[2, P, EULER_NC](ctx, mesh.num_elements, mesh.num_ghost)
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
@@ -84,7 +84,7 @@ def main() raises:
         no_op_adjust[2, P, EULER_NC], suggest_dt, dt_interval=20,
     )
 
-    print("Integrated to t =", t, " CFL dt =", suggest_dt(q))
-    print("ρ L2 error vs exact:", mesh.l2_error(q, IDX_RHO, exact_rho))
-    print("Net mass drift (should be ~0 by conservation):",
+    root_print("Integrated to t =", t, " CFL dt =", suggest_dt(q))
+    root_print("ρ L2 error vs exact:", mesh.l2_error(q, IDX_RHO, exact_rho))
+    root_print("Net mass drift (should be ~0 by conservation):",
           mesh.integrate(q, IDX_RHO) - mass_0)

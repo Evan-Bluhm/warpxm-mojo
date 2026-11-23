@@ -27,12 +27,12 @@ comptime State = DGState[2, P, NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[2, P](
         ctx, Real(-0.5), Real(0.5), Real(-0.5), Real(0.5),
         nx=NX, ny=NY, periodic_x=True, periodic_y=True,
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real, y: Real) -> Array[Real, NC]:
         return [sin(TWO_PI * x) * cos(TWO_PI * y)]
@@ -42,7 +42,7 @@ def main() raises:
         velocity_x=Real(1.0), velocity_y=Real(1.0), cfl_max=CFL,
     )
     var spatial = DGAdvectionSolver[2, P, NC](app)
-    var stepper = SSPRK3[2, P, NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[2, P, NC](ctx, mesh.num_elements, mesh.num_ghost)
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, q_out)
@@ -55,5 +55,5 @@ def main() raises:
 
     def exact(x: Real, y: Real) -> Real:
         return sin(TWO_PI * x) * cos(TWO_PI * y)
-    print("Integrated to t =", t, "with dt =", dt)
-    print("L2 error after one period:", mesh.l2_error(q, 0, exact))
+    root_print("Integrated to t =", t, "with dt =", dt)
+    root_print("L2 error after one period:", mesh.l2_error(q, 0, exact))

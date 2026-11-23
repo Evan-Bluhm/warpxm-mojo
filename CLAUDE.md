@@ -34,10 +34,15 @@ src/warpxm/
                # positivity preservers (PositivityEuler[NDIM, P],
                # PositivityMHD[NDIM, P, NC]).
   basis/       # GLL nodal basis (P = 1..4)
-  core/        # real-type alias, math helpers, BC kinds
+  core/        # real-type alias, math helpers, BC kinds, tensors.mojo
+               # (FlatLayout / RealTensor / IndexTensor kernel-argument types)
   io/          # vtu.mojo: one generic appended-binary VTU writer (2D / 3D).
                # vtu_presets.mojo: per-physics field lists. frame_writer.mojo:
                # time series + .pvd.
+  parallel/    # Multi-rank runs. mpi.mojo: the MPI binding behind the
+               # comptime switch USE_MPI (-D WXM_MPI=1), over mpi_shim.c.
+               # partition.mojo: Cartesian decomposition. halo.mojo:
+               # HaloPlan, HaloBuffers, exchange_halo. See "Several ranks".
   mesh/        # block.mojo: BlockMesh[NDIM, P] (periodic + per-side BCs).
                # phase_mesh.mojo: PhaseMesh[XDIM, VDIM, P_x, P_v], the
                # kinetic phase mesh. Meshes own the host-side helpers:
@@ -61,8 +66,11 @@ src/warpxm/
   variable/    # DGState[NDIM, P, NC]; PhaseState[XDIM, VDIM, P_x, P_v, NC].
 examples/      # polished driver programs (one .mojo per physics setup)
 tests/         # regression tests, named test_<physics>_<problem>_<dim>.mojo
+  mpi/         # multi-rank tests, test_mpi_<physics>_<problem>_<dim>.mojo
 scripts/       # gll_tables.py (GLL table generator), run_tests.sh (pixi
-               # `test`), build_examples.sh (`build`), run_example.sh (`example`).
+               # `test`), build_examples.sh (`build`), run_example.sh (`example`),
+               # mpi_build.sh (`mpi-build`), run_mpi_tests.sh (`test-mpi`),
+               # klone-run (Slurm + Apptainer launcher, with mojo.def).
 ```
 
 The subtree organisation mirrors upstream's `src/apps/`,
@@ -85,6 +93,19 @@ pixi run mojo run -I src tests/test_advection_convergence_1d.mojo
 
 `pixi run mojo run -I src <file>` is the canonical incantation: `-I src` adds
 the `warpxm` package to the module search path.
+
+Multi-rank builds need a system MPI (`mpicc`, `mpirun`; not a pixi
+dependency) and go through `mojo build`, not `mojo run`:
+
+```fish
+pixi run mpi-build examples/euler_sod_2d_vtu.mojo   # -> build/mpi/euler_sod_2d_vtu
+mpirun -np 4 build/mpi/euler_sod_2d_vtu
+pixi run test-mpi                # tests/mpi/ at several rank counts
+pixi run test-mpi euler          # by name; -v prints failing output
+```
+
+After a change to the mesh, the DG launcher, a stepper, an adjuster or
+anything in `parallel/`, run both `pixi run test` and `pixi run test-mpi`.
 
 ## Where the rest lives
 
@@ -130,6 +151,11 @@ t = stepper.run_until_cfl(ctx, q, t, t_next, compute_rhs, adjust, suggest_dt)
 - Output goes through `FrameWriter(name)` (default `./output/<name>/`,
   created on demand) and `dump_<phys>_frame` or `write_vtu` with your own
   field closure. No `/tmp` paths.
+- To run on several ranks a driver passes the ghost count wherever the
+  element count goes (`State(ctx, mesh.num_elements, mesh.num_ghost)`, and
+  the same for steppers and `MoeRossmanith`), takes its device from
+  `rank_device_context()` and prints with `root_print(...)`. Examples do
+  all three; tests in `tests/` may stay single-rank. See "Several ranks".
 - Tests print `PASSED` last and name themselves
   `test_<physics>_<problem>_<dim>.mojo`. Shared test code (exact Riemann
   solver, rate check) lives in `src/warpxm/testing/`.
@@ -230,6 +256,42 @@ on a guard path deadlocks the warp when the block is only partly valid
 `DG_CORE_ELEMS_PER_BLOCK`). Clamp the index, do the work, and return
 after the barrier instead (see `past_end` in `spatial/dg_core.mojo`;
 `tests/test_advection_odd_mesh.mojo` covers it).
+
+### Several ranks
+
+Design: `docs/concepts/parallel.md`; API: `docs/api/parallel.md`. What to
+keep true when editing:
+
+- **A serial build is untouched.** Everything MPI sits behind
+  `comptime if USE_MPI` or a `num_ghost > 0` test on the host. Do not add
+  work to a kernel, or an unconditional host call, for the sake of the
+  multi-rank path.
+- **Ghost elements live after the owned ones** in every state buffer
+  (`num_elements` owned, then `num_ghost`). `num_elements`, `total_nodes`
+  and `buf_len` count owned data; only a kernel that reads a neighbour
+  element sizes its view by `alloc_len`. A kernel launched over
+  `q.buf_len` or `q.total_nodes` is therefore correct on any rank count
+  as it stands.
+- **A kernel that reads neighbour elements needs current ghosts.**
+  `launch_dg` calls `exchange_ghosts` on its input; `MoeRossmanith.apply`
+  exchanges its cell means; `DGVlasovSolver.compute_rhs` exchanges `f`. A
+  new neighbour-reading kernel must do the same before its launch.
+  Pointwise and element-local kernels (sources, positivity, RK combines)
+  need nothing.
+- **`BlockMesh` reaches a ghost through its face tables; `PhaseMesh` has
+  none**, so its kernel takes the kind `BC_HALO` and `ghost_first` and
+  computes the ghost index (`_face_slot` in `kinetic/dg_vlasov.mojo`).
+- **Mesh counts are per rank, extents are global.** `nx`, `num_elements`
+  and element indices are local; `x_min` … `z_max`, `volume()` and `dx`
+  are those of the whole mesh. Node coordinates are computed from the
+  global element position so that they are bitwise those of a serial run.
+- **Reductions are collective.** `integrate`, `integrate_fn`, `l2_error`,
+  `checksum`, `suggest_dt` and `global_sum/min/max` must be called on
+  every rank in the same order, never under `if is_root():`. A new
+  host-side reduction ends in `mpi.global_*`.
+- **The answer must not depend on the decomposition.** `tests/mpi/`
+  compares `mesh.checksum(q)` across rank counts bit for bit. A new
+  feature that touches neighbours gets a test there.
 
 ### Apps architecture
 

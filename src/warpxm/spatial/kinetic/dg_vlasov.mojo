@@ -58,13 +58,29 @@ from warpxm.apps.vlasovmaxwell import (
     AUX_EX, AUX_EY, AUX_EZ, AUX_BX, AUX_BY, AUX_BZ,
 )
 from warpxm.basis.nodal_basis_1d import NodalBasis1D
-from warpxm.core.bc import BC_INTERIOR, BC_COPYOUT, BC_VLASOV_REFLECT
+from warpxm.core.bc import (
+    BC_INTERIOR, BC_COPYOUT, BC_VLASOV_REFLECT, BC_HALO,
+)
 from warpxm.core.math_compat import fabs, fmax, fmin
 from warpxm.core.types import Real, WXM_DTYPE, WXM_TINY, WXM_INF
 from warpxm.mesh.phase_mesh import PhaseMesh, PhaseInts, PhaseReals
+from warpxm.parallel.halo import exchange_halo
+from warpxm.parallel.mpi import USE_MPI, global_max
 from warpxm.spatial.dg_launch import RealTensor
 from warpxm.variable.phase_state import PhaseState
 from warpxm.variable.state import DGState
+
+
+@always_inline
+def _face_slot[ND: Int, axis: Int](n: Array[Int, ND], e: Array[Int, ND]) -> Int:
+    """Position of element `e` in the layer of elements on a face normal
+    to `axis`: its index with that axis left out, which is how the ghosts
+    of a partition face are ordered (`PhaseMesh`)."""
+    var slot = 0
+    comptime for b in range(ND):
+        comptime if b != axis:
+            slot = slot * n[b] + e[b]
+    return slot
 
 
 def _vlasov_rhs_kernel[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int](
@@ -74,13 +90,16 @@ def _vlasov_rhs_kernel[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int](
     aux: RealTensor,
     counts: PhaseInts,
     x_bc: PhaseInts,
+    ghost_first: PhaseInts,
     inv_jacobian: PhaseReals,
     accel_factor: Real,
 ):
     """Per-phase-node DG residual of the Vlasov equation.
 
     `counts[a]` is the element count of axis `a`, `x_bc[2·a + side]` the BC
-    kind of a configuration boundary (`BC_INTERIOR` for a periodic axis),
+    kind of a configuration boundary (`BC_INTERIOR` for a periodic axis,
+    `BC_HALO` for a face shared with another rank, whose ghost elements
+    start at `ghost_first[2·a + side]`),
     `inv_jacobian[a]` is `2 / Δ_a` and `accel_factor` is `(q/m) / λ`.
 
     Every block is exactly one phase element and the grid is exactly the
@@ -236,6 +255,14 @@ def _vlasov_rhs_kernel[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int](
                             (phase_e + (n[a] - 1) * stride[a]) * NPE
                             + nbr_node
                         ])
+                    elif kind == BC_HALO:
+                        f_nbr = rebind[Real](q[
+                            (
+                                Int(ghost_first[2 * a])
+                                + _face_slot[ND, a](n, e)
+                            ) * NPE
+                            + nbr_node
+                        ])
                     elif kind == BC_COPYOUT:
                         f_nbr = f_n
                     elif kind == BC_VLASOV_REFLECT:
@@ -259,6 +286,14 @@ def _vlasov_rhs_kernel[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int](
                     if kind == BC_INTERIOR:
                         f_nbr = rebind[Real](q[
                             (phase_e - (n[a] - 1) * stride[a]) * NPE
+                            + nbr_node
+                        ])
+                    elif kind == BC_HALO:
+                        f_nbr = rebind[Real](q[
+                            (
+                                Int(ghost_first[2 * a + 1])
+                                + _face_slot[ND, a](n, e)
+                            ) * NPE
                             + nbr_node
                         ])
                     elif kind == BC_COPYOUT:
@@ -361,7 +396,21 @@ struct DGVlasovSolver[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
                 + " elements, mesh has " + String(mesh.num_x_elements)
                 + " configuration elements)"
             )
-        var q_layout = row_major(Int(q.buf_len))
+        # Bring the ghost phase elements of `q` up to date (a mesh shared
+        # between ranks only).
+        comptime if USE_MPI:
+            if mesh.num_ghost > 0:
+                if q.num_ghost != mesh.num_ghost:
+                    raise Error(
+                        "this mesh is shared between ranks: construct phase"
+                        + " states and steppers with"
+                        + " (ctx, mesh.num_phase_elements, mesh.num_ghost)"
+                    )
+                exchange_halo[NXN * NVN, Self.P_x + 1, VLASOV_NC, True](
+                    ctx, mesh.halo, q.buf, q.alloc_len, q.halo.value(),
+                )
+        var q_layout = row_major(Int(q.alloc_len))
+        var rhs_layout = row_major(Int(rhs.alloc_len))
         var node_v_layout = row_major(Int(mesh.node_v_len))
         var fields_layout = row_major(Int(fields.buf_len))
 
@@ -383,11 +432,12 @@ struct DGVlasovSolver[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
         ]
         ctx.enqueue_function[kernel](
             TileTensor(q.buf, q_layout),
-            TileTensor(rhs.buf, q_layout),
+            TileTensor(rhs.buf, rhs_layout),
             TileTensor(mesh.node_v_buf, node_v_layout),
             TileTensor(fields.buf, fields_layout),
             mesh.kernel_counts(),
             mesh.kernel_bc(),
+            mesh.kernel_ghost_first(),
             mesh.kernel_inv_jacobian(),
             self.app.charge_mass_ratio / self.app.skin_depth_norm,
             grid_dim=(grid_x, grid_y, grid_z),
@@ -422,7 +472,7 @@ struct DGVlasovSolver[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
         var f_max = Array[Real, VLASOV_AUX_NC](fill=Real(0.0))
         with max_buf.map_to_host() as h:
             for c in range(VLASOV_AUX_NC):
-                f_max[c] = h[c]
+                f_max[c] = global_max(h[c])
         var v_max = Array[Real, 3](fill=Real(0.0))
         for d in range(Self.VDIM):
             v_max[d] = mesh.v_abs_max(d)

@@ -28,3 +28,4 @@ site/
 
 # Example output (FrameWriter default: ./output/<name>)
 /output/
+/build/

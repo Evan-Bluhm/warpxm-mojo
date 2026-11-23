@@ -13,11 +13,17 @@
 # path to write to. `write_pvd()` finalises a ParaView Collection (.pvd)
 # file pointing at each frame with its simulation time, so ParaView's
 # time-slider lets the user scrub through the run.
+#
+# On several ranks every rank holds a `FrameWriter` and makes the same
+# calls: `write_vtu` turns each frame into per-rank pieces plus a `.pvtu`
+# index, and rank 0 writes the `.pvd`, which then lists the indices.
 
 from std.collections import List
 from std.os import makedirs
 
 from warpxm.core.types import Real
+from warpxm.io.vtu import parallel_vtu_path
+from warpxm.parallel import mpi
 
 
 struct FrameWriter:
@@ -63,6 +69,8 @@ struct FrameWriter:
 
     def write_pvd(self) raises:
         """Emit `<directory>/<basename>.pvd` pointing at every frame."""
+        if not mpi.is_root():
+            return
         var pvd_path = self.directory + "/" + self.basename + ".pvd"
         var out = open(pvd_path, "w")
         out.write("<?xml version=\"1.0\"?>\n")
@@ -72,7 +80,7 @@ struct FrameWriter:
             out.write("    <DataSet timestep=\"")
             out.write(String(self.frame_times[i]))
             out.write("\" group=\"\" part=\"0\" file=\"")
-            out.write(self.frame_files[i])
+            out.write(parallel_vtu_path(self.frame_files[i]))
             out.write("\"/>\n")
         out.write("  </Collection>\n")
         out.write("</VTKFile>\n")

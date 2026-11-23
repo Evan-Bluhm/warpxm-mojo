@@ -19,6 +19,7 @@ All cells with a check have an end-to-end regression test passing on the GPU.
 | ParaView VTU + .pvd output | —   | ✅  | ✅  |
 | Non-periodic BCs           | ✅  | ✅  | ✅  |
 | CFL time-step selection    | ✅  | ✅  | ✅  |
+| Multi-rank (MPI) runs      | ✅  | ✅  | ✅  |
 
 Supporting infrastructure:
 
@@ -36,6 +37,13 @@ Supporting infrastructure:
 - **Sources**: gravity (Euler), Lorentz force (Maxwell → fluid), current
   density (fluid → Maxwell), parabolic ψ damping (GLM-MHD). Reusable
   generic-NC infrastructure.
+
+- **Several GPUs**: one MPI rank per GPU, Cartesian domain decomposition
+  with one layer of ghost elements, for every physics above and for the
+  kinetic solver (configuration space is decomposed, velocity space is
+  not). Results are bitwise independent of the number of ranks
+  (`pixi run test-mpi`). See
+  [Running on several GPUs](concepts/parallel.md).
 
 ## Kinetic Vlasov-Maxwell
 
@@ -127,7 +135,11 @@ Sources: `src/warpxm/spatial/kinetic/`, `mesh/phase_mesh.mojo`,
 Feature-matrix-complete, apart from 1D MHD (an intentional gap: ∇·B = 0
 makes it degenerate). What remains is scale:
 
-1. **MPI halo exchange** for multi-GPU runs.
+1. **Multi-GPU scaling**: the halo exchange is in place (see below) but
+   has only been run with ranks sharing one GPU. Open are a measured
+   weak-scaling curve (`bench/bench_mpi_weak_imhd_glm_3d.mojo`), a run
+   with GPU-aware MPI, and overlapping the exchange with the interior
+   right-hand side if the curve calls for it.
 2. **Kinetic solver**: still open are curvilinear (cylindrical)
    configuration coordinates, positivity preservation for `f`, and a
    second species.

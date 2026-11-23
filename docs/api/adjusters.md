@@ -25,6 +25,10 @@ var limiter = MoeRossmanith[2, P, NC](
 limiter.apply(ctx, mesh, q)
 ```
 
+On several ranks pass the ghost count after the element count
+(`ctx, mesh.num_elements, mesh.num_ghost`): the limiter fetches the cell
+means of the elements across a partition face from their owners.
+
 The limiter acts only on deviations larger than
 $\alpha = \texttt{alpha\_coeff}\cdot\Delta x^{1.5}$. With the default
 (upstream's) that is about 0.35 on a 200-cell unit domain, so on a

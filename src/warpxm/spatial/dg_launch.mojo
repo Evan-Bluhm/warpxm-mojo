@@ -30,17 +30,14 @@ from max.gpu.host import DeviceContext
 from layout import TileTensor, row_major
 from std.math import ceildiv
 
+from warpxm.core.tensors import FlatLayout, RealTensor, IndexTensor
 from warpxm.core.types import Real, WXM_DTYPE, INDEX_DTYPE
 from warpxm.mesh.block import BlockMesh
+from warpxm.parallel.halo import exchange_halo
+from warpxm.parallel.mpi import USE_MPI
 from warpxm.spatial.dg_core import DG_CORE_ELEMS_PER_BLOCK, InvJacobian
 from warpxm.variable.state import DGState
 
-
-comptime FlatLayout = type_of(row_major(Int(0)))
-"""Layout of every flat device buffer: rank 1, runtime length."""
-
-comptime RealTensor = TileTensor[WXM_DTYPE, FlatLayout, MutAnyOrigin]
-comptime IndexTensor = TileTensor[INDEX_DTYPE, FlatLayout, MutAnyOrigin]
 
 comptime MAX_KERNEL_PARAMS: Int = 8
 comptime KernelParams = SIMD[WXM_DTYPE, MAX_KERNEL_PARAMS]
@@ -72,12 +69,20 @@ def launch_dg[
 ) raises:
     """Enqueue a DG kernel on `mesh`: one thread per node, with
     `DG_CORE_ELEMS_PER_BLOCK` elements per block (thread layout in
-    `dg_core.mojo`)."""
+    `dg_core.mojo`).
+
+    On a mesh shared by several ranks this first refreshes the ghost
+    elements of `q` from the neighbouring ranks, so every right-hand side
+    sees current neighbour data whatever the stepper or adjuster did to
+    `q` since the last one."""
+    comptime if USE_MPI:
+        exchange_ghosts(ctx, mesh, q)
     comptime EB = DG_CORE_ELEMS_PER_BLOCK
     comptime P1 = P + 1
     comptime BLOCK_Y = EB if NDIM == 1 else P1
     comptime BLOCK_Z = 1 if NDIM == 1 else (EB if NDIM == 2 else P1 * EB)
-    var q_layout = row_major(Int(q.buf_len))
+    var q_layout = row_major(Int(q.alloc_len))
+    var rhs_layout = row_major(Int(rhs.alloc_len))
     var face_layout = row_major(Int(mesh.num_faces))
     var ef_layout = row_major(Int(mesh.num_elements * 2 * NDIM))
     var inv_jacobian = InvJacobian(
@@ -86,7 +91,7 @@ def launch_dg[
     )
     ctx.enqueue_function[kernel](
         TileTensor(q.buf, q_layout),
-        TileTensor(rhs.buf, q_layout),
+        TileTensor(rhs.buf, rhs_layout),
         TileTensor(mesh.face_neg_elem_buf, face_layout),
         TileTensor(mesh.face_pos_elem_buf, face_layout),
         TileTensor(mesh.elem_face_dir_buf, ef_layout),
@@ -94,4 +99,26 @@ def launch_dg[
         inv_jacobian, Int64(mesh.num_elements), params,
         grid_dim=ceildiv(mesh.num_elements, EB),
         block_dim=(P1, BLOCK_Y, BLOCK_Z),
+    )
+
+
+def exchange_ghosts[NDIM: Int, P: Int, NC: Int](
+    var ctx: DeviceContext,
+    mesh: BlockMesh[NDIM, P],
+    mut q: DGState[NDIM, P, NC],
+) raises:
+    """Refresh the ghost elements of `q` (their face traces, which is what
+    the DG surface term reads). `launch_dg` calls this; a driver needs it
+    only for a hand-written kernel that reads neighbour elements. No-op on
+    a mesh held by one rank."""
+    if mesh.num_ghost == 0:
+        return
+    if q.num_ghost != mesh.num_ghost:
+        raise Error(
+            "this mesh is shared between ranks, but the state was created"
+            + " without ghost elements: construct states, steppers and"
+            + " limiters with (ctx, mesh.num_elements, mesh.num_ghost)"
+        )
+    exchange_halo[(P + 1) ** NDIM, P + 1, NC, True](
+        ctx, mesh.halo, q.buf, q.alloc_len, q.halo.value(),
     )

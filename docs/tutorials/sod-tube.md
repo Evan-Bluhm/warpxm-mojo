@@ -120,8 +120,7 @@ read-back) and shortens the last step to land on `T_FINAL`. It also
 takes `dt_min`: if the suggested step is at or below it, or is NaN, the
 call raises instead of stalling.
 
-`dump_euler_frame` writes $
-ho$, $u$, $v$, $w$, $P$. For intermediate
+`dump_euler_frame` writes $\rho$, $u$, $v$, $w$, $P$. For intermediate
 frames use a `FrameWriter` and call `fw.next_path(t)` at each frame
 time; see [`io`](../api/io.md).
 

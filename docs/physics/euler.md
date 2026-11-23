@@ -53,7 +53,7 @@ from warpxm.apps.euler import EULER_NC, IDX_RHO, IDX_MX, IDX_MY, IDX_MZ, IDX_E
 | `q[IDX_MX]`  | 1 | $\rho u_x$ |
 | `q[IDX_MY]`  | 2 | $\rho u_y$ |
 | `q[IDX_MZ]`  | 3 | $\rho u_z$ |
-| `q[IDX_E]`   | 4 | Total energy $E = P/(\gamma-1) + \tfrac{1}{2}\rho|\mathbf{u}|^{2}$ |
+| `q[IDX_E]`   | 4 | Total energy $E = P/(\gamma-1) + \tfrac{1}{2}\rho\lvert\mathbf{u}\rvert^{2}$ |
 
 The same constants serve every dimension: there are no per-dimension
 copies.

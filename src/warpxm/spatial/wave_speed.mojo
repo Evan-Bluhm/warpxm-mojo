@@ -7,7 +7,8 @@
 # where λ_d bounds the signal speed along axis d. For the nonlinear
 # systems we take one direction-independent bound λ (|u| + c for Euler,
 # |u| + the perpendicular fast speed for MHD) and reduce its maximum over
-# all nodes on the GPU, so only one scalar reaches the host.
+# all nodes on the GPU, so only one scalar reaches the host (and, on
+# several ranks, one `MPI_Allreduce`: every rank gets the same step).
 #
 # Every DG solver exposes this as `solver.suggest_dt(ctx, mesh, q)`, using
 # its app's `cfl_max`. With SSPRK3 on the GLL-collocation scheme used here,
@@ -26,6 +27,7 @@ from layout import TileTensor, row_major, stack_allocation
 from warpxm.apps.euler import Euler, EULER_NC
 from warpxm.apps.imhd import IMHD, MHD_NC
 from warpxm.apps.imhd_glm import ImhdGLM, MHD_GLM_NC
+from warpxm.parallel.mpi import global_max
 from warpxm.core.types import Real, WXM_DTYPE, WXM_TINY, WXM_INF
 from warpxm.spatial.dg_launch import KernelParams, RealTensor, kernel_params
 from warpxm.variable.state import DGState
@@ -120,7 +122,7 @@ def _max_speed[NDIM: Int, P: Int, NC: Int, KIND: Int](
     var speed: Real
     with out_buf.map_to_host() as h:
         speed = h[0]
-    return speed
+    return global_max(speed)
 
 
 def max_wave_speed_euler[NDIM: Int, P: Int](

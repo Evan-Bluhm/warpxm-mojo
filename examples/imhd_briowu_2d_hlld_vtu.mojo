@@ -35,14 +35,14 @@ comptime State = DGState[2, P, MHD_NC]
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
-    var ctx = DeviceContext()
+    var ctx = rank_device_context()
     var mesh = BlockMesh[2, P](
         ctx, Real(0.0), Real(1.0), Real(0.0), Real(0.1),
         nx=NX, ny=NY, periodic_x=False, periodic_y=False,
         bc_left=BC_COPYOUT, bc_right=BC_COPYOUT,
         bc_bottom=BC_COPYOUT, bc_top=BC_COPYOUT,  # v_y != 0 in Brio-Wu: y is an outflow, not a wall
     )
-    var q = State(ctx, mesh.num_elements)
+    var q = State(ctx, mesh.num_elements, mesh.num_ghost)
 
     def initial(x: Real, y: Real) -> Array[Real, MHD_NC]:
         var left = x < Real(0.5)
@@ -65,8 +65,8 @@ def main() raises:
         min_pressure=Real(1e-12), cfl_max=Real(0.5),
     )
     var spatial = DGImhdSolver[2, P, USE_HLLD=True](app)
-    var stepper = SSPRK3[2, P, MHD_NC](ctx, mesh.num_elements)
-    var limiter = MoeRossmanith[2, P, MHD_NC](ctx, mesh.num_elements)
+    var stepper = SSPRK3[2, P, MHD_NC](ctx, mesh.num_elements, mesh.num_ghost)
+    var limiter = MoeRossmanith[2, P, MHD_NC](ctx, mesh.num_elements, mesh.num_ghost)
     var fw = FrameWriter("briowu")
 
     def compute_rhs(mut q_in: State, mut q_out: State) raises {imm}:
@@ -79,26 +79,31 @@ def main() raises:
         return spatial.suggest_dt(ctx, mesh, q_)
 
     var mid_node = State.num_nodes_per_elem // 2
-    print("frame   time   ∫ρ dV   ∫B_x dV   rel Δmass   rel ΔB_x   max|Δρ/Δx|   CFL dt")
+    root_print("frame   time   ∫ρ dV   ∫B_x dV   rel Δmass   rel ΔB_x   max|Δρ/Δx|   CFL dt")
 
     var t: Real = 0.0
     for frame in range(NUM_FRAMES):
         dump_imhd_frame(fw.next_path(t), mesh, q, GAMMA)
 
-        # Largest jump in ρ between neighbouring element centres of the
-        # j = 0 row: a measure of how sharp the captured waves are.
+        # Largest jump in ρ between x-neighbouring element centres: a
+        # measure of how sharp the captured waves are. Each rank scans its
+        # own elements (`mesh.nx` per row) and the maximum is taken over
+        # ranks.
         var max_grad: Real = 0.0
         with q.buf.map_to_host() as h:
-            for i in range(NX - 1):
+            for e in range(mesh.num_elements):
+                if e % mesh.nx == mesh.nx - 1:
+                    continue
                 var g = fabs(
-                    h[State.index(i + 1, mid_node, IDX_RHO)]
-                    - h[State.index(i, mid_node, IDX_RHO)]
+                    h[State.index(e + 1, mid_node, IDX_RHO)]
+                    - h[State.index(e, mid_node, IDX_RHO)]
                 )
                 if g > max_grad: max_grad = g
+        max_grad = global_max(max_grad)
 
         var mass = mesh.integrate(q, IDX_RHO)
         var bx_int = mesh.integrate(q, IDX_BX)
-        print(
+        root_print(
             frame, t, mass, bx_int,
             fabs(mass - mass_0) / mass_0, fabs(bx_int - bx_0) / bx_0,
             max_grad, suggest_dt(q),
@@ -111,4 +116,4 @@ def main() raises:
             )
 
     fw.write_pvd()
-    print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/briowu.pvd")
+    root_print("Wrote", NUM_FRAMES, "frames and", fw.directory + "/briowu.pvd")

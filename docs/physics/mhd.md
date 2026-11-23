@@ -52,7 +52,7 @@ from warpxm.apps.imhd import (
 | `q[IDX_MX]`  | 1 | $\rho u_x$ |
 | `q[IDX_MY]`  | 2 | $\rho u_y$ |
 | `q[IDX_MZ]`  | 3 | $\rho u_z$ |
-| `q[IDX_E]`   | 4 | Total energy (incl. $\tfrac{1}{2}|\mathbf{B}|^{2}$) |
+| `q[IDX_E]`   | 4 | Total energy (incl. $\tfrac{1}{2}\lvert\mathbf{B}\rvert^{2}$) |
 | `q[IDX_BX]`  | 5 | $B_x$ |
 | `q[IDX_BY]`  | 6 | $B_y$ |
 | `q[IDX_BZ]`  | 7 | $B_z$ |

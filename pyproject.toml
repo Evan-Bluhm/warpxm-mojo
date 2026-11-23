@@ -13,6 +13,7 @@ requires-python = ">=3.11"
 #     pixi run mojo --version    # sanity check
 #     pixi run build             # compile all examples
 #     pixi run test              # run the test suite
+#     pixi run test-mpi          # multi-rank suite (needs a system MPI)
 # ----------------------------------------------------------------------
 
 [tool.pixi.workspace]
@@ -48,5 +49,7 @@ docs = { features = ["docs"], no-default-feature = true }
 [tool.pixi.tasks]
 mojo-version = "mojo --version"
 test = "./scripts/run_tests.sh"
+test-mpi = "./scripts/run_mpi_tests.sh"
+mpi-build = "./scripts/mpi_build.sh"
 build = "./scripts/build_examples.sh"
 example = "./scripts/run_example.sh"
