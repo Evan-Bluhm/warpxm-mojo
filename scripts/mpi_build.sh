@@ -10,7 +10,9 @@
 # shim and libmpi on the link line. The MPI compiler wrapper is taken from
 # $MPICC (default `mpicc`); the mojo command from $MOJO (default `mojo`; it
 # may be several words, e.g. `apptainer exec mojo.sif mojo`). Extra
-# arguments after the driver are passed to `mojo build`.
+# arguments after the driver are passed to `mojo build`, after those in
+# $MOJO_BUILD_FLAGS (e.g. "--target-accelerator sm_90" to build on a node
+# without a GPU).
 
 set -euo pipefail
 
@@ -65,4 +67,5 @@ for flag in $link_flags; do
 done
 
 # $MOJO is deliberately unquoted: it may carry a container prefix.
-exec $MOJO build -I "$ROOT/src" -D WXM_MPI=1 "${linker_args[@]}" -o "$out" "$driver" "$@"
+exec $MOJO build ${MOJO_BUILD_FLAGS:-} -I "$ROOT/src" -D WXM_MPI=1 "${linker_args[@]}" \
+    -o "$out" "$driver" "$@"

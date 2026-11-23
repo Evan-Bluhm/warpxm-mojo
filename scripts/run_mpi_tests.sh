@@ -16,6 +16,11 @@
 #   pixi run test-mpi euler 3d      # tests whose name contains a pattern
 #   ./scripts/run_mpi_tests.sh -v   # print the output of failing runs
 #   ./scripts/run_mpi_tests.sh -j 2 # build at most 2 tests at once (default 4)
+#   ./scripts/run_mpi_tests.sh -b   # only build, into build/mpi-tests/
+#   ./scripts/run_mpi_tests.sh -r   # run the binaries of an earlier -b
+#
+# -b honours MOJO_BUILD_FLAGS (see scripts/mpi_build.sh), so the suite can
+# be compiled on a node without a GPU and run later on one that has it.
 #
 # Environment: MPIRUN (default `mpirun`), MPIRUN_FLAGS (default
 # `--oversubscribe` when the launcher accepts it).
@@ -24,11 +29,14 @@ set -u
 
 JOBS=4
 VERBOSE=0
-while getopts "j:vh" opt; do
+MODE=both     # build then run; build (-b); prebuilt (-r)
+while getopts "j:vbrh" opt; do
     case "$opt" in
         j) JOBS="$OPTARG" ;;
         v) VERBOSE=1 ;;
-        h) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        b) MODE=build ;;
+        r) MODE=prebuilt ;;
+        h) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) exit 2 ;;
     esac
 done
@@ -38,13 +46,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
 MPIRUN="${MPIRUN:-mpirun}"
-for tool in mojo "$MPIRUN" "${MPICC:-mpicc}"; do
+case "$MODE" in
+    build) need=(mojo "${MPICC:-mpicc}") ;;
+    prebuilt) need=("$MPIRUN") ;;
+    *) need=(mojo "$MPIRUN" "${MPICC:-mpicc}") ;;
+esac
+for tool in "${need[@]}"; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "error: $tool not found (run under \`pixi run\`; MPI comes from the system)" >&2
         exit 1
     fi
 done
-if [[ -z "${MPIRUN_FLAGS+x}" ]]; then
+if [[ "$MODE" != build && -z "${MPIRUN_FLAGS+x}" ]]; then
     MPIRUN_FLAGS=""
     if "$MPIRUN" --oversubscribe -np 1 true >/dev/null 2>&1; then
         MPIRUN_FLAGS="--oversubscribe"
@@ -71,14 +84,28 @@ fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/warpxm-mpi-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+# Where the test binaries live: the scratch dir, or build/mpi-tests/ when
+# building and running are separate steps.
+BIN="$WORK"
+if [[ "$MODE" != both ]]; then BIN="$PWD/build/mpi-tests"; fi
 
+if [[ "$MODE" == prebuilt ]]; then
+    for name in "${tests[@]}"; do
+        if [[ -x "$BIN/$name" ]]; then
+            echo ok > "$WORK/$name.build"
+        else
+            echo "error: $BIN/$name missing; build it first with -b" >&2
+            exit 1
+        fi
+    done
+else
 # Build the shim once, up front, so that parallel builds do not race on it.
-mkdir -p build
+mkdir -p build "$BIN"
 "${MPICC:-mpicc}" -O2 -fPIC -c src/warpxm/parallel/mpi_shim.c -o build/mpi_shim.o || exit 1
 
 build_one() {
     local name="$1"
-    if ./scripts/mpi_build.sh -o "$WORK/$name" "tests/mpi/$name.mojo" \
+    if ./scripts/mpi_build.sh -o "$BIN/$name" "tests/mpi/$name.mojo" \
         > "$WORK/$name.build.log" 2>&1; then
         echo ok > "$WORK/$name.build"
     else
@@ -86,10 +113,24 @@ build_one() {
     fi
 }
 export -f build_one
-export WORK
+export WORK BIN
 
 printf "Building %d MPI tests...\n" "$total"
 printf '%s\n' "${tests[@]}" | xargs -P "$JOBS" -I{} bash -c 'build_one "$1"' _ {}
+fi
+
+if [[ "$MODE" == build ]]; then
+    failed=0
+    for name in "${tests[@]}"; do
+        if [[ "$(cat "$WORK/$name.build")" == ok ]]; then
+            printf "  %-44s built\n" "$name"
+        else
+            printf "  %-44s BUILD FAILED\n" "$name"; failed=1
+            (( VERBOSE == 1 )) && sed 's/^/    | /' "$WORK/$name.build.log"
+        fi
+    done
+    exit $failed
+fi
 
 passed=0
 failed_names=()
@@ -112,7 +153,7 @@ for name in "${tests[@]}"; do
         # different rank counts cannot be confused.
         mkdir -p "$WORK/$name.np$np.run"
         (cd "$WORK/$name.np$np.run" && \
-            $MPIRUN $MPIRUN_FLAGS -np "$np" "$WORK/$name" > "$log" 2>&1)
+            $MPIRUN $MPIRUN_FLAGS -np "$np" "$BIN/$name" > "$log" 2>&1)
         rc=$?
         sums="$(grep -a '^CHECKSUM' "$log")"
         if (( rc != 0 )) || ! grep -aq '^PASSED$' "$log"; then

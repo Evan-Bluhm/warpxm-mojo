@@ -16,6 +16,18 @@
 #   ./scripts/run_tests.sh -k        # stop launching tests after a failure
 #   ./scripts/run_tests.sh -v        # print the full output of failing tests
 #   ./scripts/run_tests.sh -t        # also list the ten slowest tests
+#   ./scripts/run_tests.sh -b        # only compile the tests, into build/tests/
+#   ./scripts/run_tests.sh -r        # run the binaries of an earlier -b
+#
+# -b and -r split compilation from running, so that a cluster job spends
+# its GPU time only on running: compile on a node without a GPU, naming
+# the target GPU in MOJO_BUILD_FLAGS (otherwise Mojo targets the GPU it
+# sees, and refuses to build where there is none):
+#
+#   MOJO_BUILD_FLAGS="--target-accelerator sm_90" ./scripts/run_tests.sh -b
+#   ./scripts/run_tests.sh -r        # later, on the GPU node
+#
+# Inside a Slurm job the parallelism is capped at the job's CPUs.
 #
 # Exit code: 0 if every selected test passed, 1 otherwise.
 
@@ -25,6 +37,7 @@ JOBS=16
 STOP_ON_FAIL=0
 VERBOSE=0
 SHOW_SLOWEST=0
+MODE=run      # run (mojo run), build (-b), prebuilt (-r)
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [-j N] [-k] [-v] [-t] [-h] [name-substring ...]
@@ -32,15 +45,19 @@ Usage: $(basename "$0") [-j N] [-k] [-v] [-t] [-h] [name-substring ...]
   -k    stop launching tests after the first failure
   -v    verbose — print the full output of any failing test
   -t    list the ten slowest tests at the end
+  -b    only compile, into build/tests/ (flags from \$MOJO_BUILD_FLAGS)
+  -r    run the binaries in build/tests/ instead of \`mojo run\`
   -h    this help
 EOF
 }
-while getopts "j:kvth" opt; do
+while getopts "j:kvtbrh" opt; do
     case "$opt" in
         j) JOBS="$OPTARG" ;;
         k) STOP_ON_FAIL=1 ;;
         v) VERBOSE=1 ;;
         t) SHOW_SLOWEST=1 ;;
+        b) MODE=build ;;
+        r) MODE=prebuilt ;;
         h) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -51,8 +68,13 @@ if ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
     echo "error: -j expects a positive integer, got '$JOBS'" >&2
     exit 2
 fi
-# `nproc` alone honours OMP_NUM_THREADS, which is often 1; ask for all cores.
-CORES=$(nproc --all 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+# Inside a Slurm job, use only the job's CPUs. Elsewhere `nproc` alone
+# honours OMP_NUM_THREADS, which is often 1; ask for all cores.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    CORES="${SLURM_CPUS_PER_TASK:-${SLURM_CPUS_ON_NODE:-1}}"
+else
+    CORES=$(nproc --all 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+fi
 if (( JOBS > CORES )); then JOBS=$CORES; fi
 
 # Run from the repo root regardless of where the script is invoked from.
@@ -93,8 +115,15 @@ run_one() {
         return 0
     fi
     start=$(date +%s.%N)
-    mojo run -I src "tests/$name.mojo" > "$WORK/$name.log" 2>&1
+    case "$MODE" in
+        run) mojo run -I src "tests/$name.mojo" > "$WORK/$name.log" 2>&1 ;;
+        build) mojo build $MOJO_BUILD_FLAGS -I src -o "build/tests/$name" \
+                   "tests/$name.mojo" > "$WORK/$name.log" 2>&1 ;;
+        prebuilt) "build/tests/$name" > "$WORK/$name.log" 2>&1 ;;
+    esac
     rc=$?
+    # A build passes on its exit status alone; a run must also print PASSED.
+    if [[ "$MODE" == build ]] && (( rc == 0 )); then echo PASSED >> "$WORK/$name.log"; fi
     end=$(date +%s.%N)
     awk -v a="$start" -v b="$end" 'BEGIN { printf "%.1f\n", b - a }' \
         > "$WORK/$name.time"
@@ -108,9 +137,23 @@ run_one() {
     fi
 }
 export -f run_one
-export WORK STOP_ON_FAIL
+MOJO_BUILD_FLAGS="${MOJO_BUILD_FLAGS:-}"
+export WORK STOP_ON_FAIL MODE MOJO_BUILD_FLAGS
 
-printf "Running %d regression tests, %d at a time...\n\n" "$total" "$JOBS"
+if [[ "$MODE" == build ]]; then
+    mkdir -p build/tests
+    printf "Building %d regression tests, %d at a time...\n\n" "$total" "$JOBS"
+else
+    if [[ "$MODE" == prebuilt ]]; then
+        for name in "${tests[@]}"; do
+            if [[ ! -x "build/tests/$name" ]]; then
+                echo "error: build/tests/$name missing; build it first with -b" >&2
+                exit 1
+            fi
+        done
+    fi
+    printf "Running %d regression tests, %d at a time...\n\n" "$total" "$JOBS"
+fi
 suite_start=$(date +%s.%N)
 printf '%s\n' "${tests[@]}" | xargs -P "$JOBS" -I{} bash -c 'run_one "$1"' _ {}
 suite_end=$(date +%s.%N)
