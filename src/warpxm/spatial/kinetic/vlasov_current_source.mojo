@@ -5,8 +5,7 @@
 #     ∂E_d/∂t += −α · Γ_d / ε₀        d = x, y, z up to VDIM
 #
 # where `Γ_d = ∫ v_d f dv` are the `MOM_FLUX_*` moments from
-# `VlasovMoments` and `α = q/m` for the species (the same convention as
-# `apply_vlasov_current_source_1d2v`). Call it once per species.
+# `VlasovMoments` and `α = q/m` for the species. Call it once per species.
 #
 # The moments and the Maxwell state live on the same
 # `BlockMesh[XDIM, P]`, so this is a pointwise kernel over its nodes.

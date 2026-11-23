@@ -1,6 +1,6 @@
 # 1D1V Vlasov DG convergence regression — confirm rate ≈ (P + 1)
 # on smooth free-streaming. Direct analogue of `test_advection_convergence_2d`
-# for the kinetic phase-space DG kernel (`spatial/dg_vlasov_1d1v.mojo`).
+# for the kinetic phase-space DG kernel (`spatial/kinetic/dg_vlasov.mojo`).
 #
 # Setup: zero Maxwell aux (`E = B = 0` ⇒ `a_v = 0`), so the Vlasov
 # equation reduces to `∂f/∂t + v ∂f/∂x = 0`. Each velocity slice
@@ -56,11 +56,13 @@ def f_initial(x: Real, v: Real) -> Real:
 def _one_run[P_X: Int](
     var ctx: DeviceContext, num_x: Int,
 ) raises -> Real:
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx, X_MIN, X_MAX, V_MIN, V_MAX,
-        num_x=num_x, num_v=NV, periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[X_MIN, V_MIN], hi=[X_MAX, V_MAX], n=[num_x, NV],
+        periodic=[True],
     )
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, num_x, NV)
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     mesh.fill(q, f_initial)
 
@@ -69,23 +71,23 @@ def _one_run[P_X: Int](
         skin_depth_norm=Real(1.0),
         cfl_max=Real(0.5),
     )
-    var spatial = DGVlasovSolver1D1V[P_X, P_V](app)
-    var stepper = SSPRK3_1D1V[P_X, P_V, VLASOV_NC](ctx, num_x, NV)
+    var spatial = DGVlasovSolver[1, 1, P_X, P_V](app)
+    var stepper = SSPRK3Phase[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     # Zero Maxwell aux ⇒ a_v = 0 ⇒ pure free streaming along x.
-    var aux = DGState[1, P_X, VLASOV_AUX_NC](ctx, num_x)
+    var aux = DGState[1, P_X, VLASOV_AUX_NC](ctx, mesh.num_x_elements)
 
     def compute_rhs(
-        mut q_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut q_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+        mut q_in: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
+        mut q_out: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
     ) raises {mut aux, imm}:
         spatial.compute_rhs(ctx, mesh, q_in, aux, q_out)
 
-    def no_adjust(mut q_: PhaseState1D1V[P_X, P_V, VLASOV_NC]) raises {imm}:
-        pass
-
     _ = stepper.run_until(
-        ctx, q, Real(0.0), T_FINAL, DT, compute_rhs, no_adjust,
+        ctx, q, Real(0.0), T_FINAL, DT, compute_rhs,
+        no_op_adjust_phase[1, 1, P_X, P_V, VLASOV_NC],
     )
     ctx.synchronize()
 

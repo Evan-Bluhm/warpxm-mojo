@@ -59,7 +59,7 @@ comptime T_FINAL: Real = 12.0
 comptime DT: Real = 0.05
 # Pick the sample x-node where `sin(2π·x/L) = 1` (peak amplitude).
 comptime SAMPLE_X: Real = L_DOMAIN / Real(4.0)
-comptime PhaseState = PhaseState1D1V[P_X, P_V, VLASOV_NC]
+comptime Phase = PhaseState[1, 1, P_X, P_V, VLASOV_NC]
 comptime MaxwellState = DGState[1, P_X, MAXWELL_NC]
 
 
@@ -67,16 +67,18 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
 
-    var phase_mesh = PhaseMesh1D1V[P_X, P_V](
+    var phase_mesh = PhaseMesh[1, 1, P_X, P_V](
         ctx,
-        Real(0.0), L_DOMAIN, -V_MAX, V_MAX,
-        num_x=NX, num_v=NV, periodic_x=True,
+        lo=[Real(0.0), -V_MAX],
+        hi=[L_DOMAIN, V_MAX],
+        n=[NX, NV],
+        periodic=[True],
     )
     var x_mesh = BlockMesh[1, P_X](
         ctx, Real(0.0), L_DOMAIN, NX, periodic=True,
     )
 
-    var q_phase = PhaseState(ctx, NX, NV)
+    var q_phase = Phase(ctx, phase_mesh.num_phase_elements)
     var q_maxwell = MaxwellState(ctx, NX)
 
     # IC f₀(v) = exp(-v²/σ²) / (σ√π) (normalised so ∫f dv = 1).
@@ -118,23 +120,25 @@ def main() raises:
         cfl_max=Real(0.5),
     )
     var maxwell_app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
-    var spatial_vlasov = DGVlasovSolver1D1V[P_X, P_V](vlasov_app)
+    var spatial_vlasov = DGVlasovSolver[1, 1, P_X, P_V](vlasov_app)
     var spatial_maxwell = DGMaxwellSolver[1, P_X](maxwell_app)
-    var moments = VlasovMoments1D1V[P_X, P_V]()
-    var stepper = SSPRK3_VlasovMaxwell_1D1V[P_X, P_V](ctx, NX, NV)
-    var j_current = DGState[1, P_X, 1](ctx, NX)
+    var moments = VlasovMoments[1, 1, P_X, P_V](ctx, phase_mesh)
+    var stepper = SSPRK3VlasovMaxwell[1, 1, P_X, P_V](
+        ctx, phase_mesh.num_phase_elements, phase_mesh.num_x_elements,
+    )
+    var mom = DGState[1, P_X, VLASOV_MOMENT_NC](ctx, NX)
 
     def compute_joint_rhs(
-        mut qp_in: PhaseState,
+        mut qp_in: Phase,
         mut qm_in: MaxwellState,
-        mut qp_out: PhaseState,
+        mut qp_out: Phase,
         mut qm_out: MaxwellState,
-    ) raises {mut j_current, imm}:
+    ) raises {mut mom, imm}:
         spatial_vlasov.compute_rhs(ctx, phase_mesh, qp_in, qm_in, qp_out)
         spatial_maxwell.compute_rhs(ctx, x_mesh, qm_in, qm_out)
-        moments.first_moment(ctx, phase_mesh, qp_in, j_current)
-        apply_vlasov_current_source_1d[P_X](
-            ctx, j_current, qm_out, CHARGE_MASS_RATIO, EPS0,
+        moments.compute(ctx, phase_mesh, qp_in, mom)
+        apply_vlasov_current_source[1, 1, P_X](
+            ctx, mom, qm_out, CHARGE_MASS_RATIO, EPS0,
         )
 
     # --- time loop with E_x sampling ---

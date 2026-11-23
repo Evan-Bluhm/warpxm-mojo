@@ -348,6 +348,19 @@ struct DGVlasovSolver[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
         comptime ND = Self.XDIM + Self.VDIM
         comptime NXN = (Self.P_x + 1) ** Self.XDIM
         comptime NVN = (Self.P_v + 1) ** Self.VDIM
+        # The kernel indexes `fields` by configuration element, so a state
+        # from another mesh would be read out of bounds.
+        if (
+            fields.num_elements != mesh.num_x_elements
+            or q.num_phase_elements != mesh.num_phase_elements
+            or rhs.num_phase_elements != mesh.num_phase_elements
+        ):
+            raise Error(
+                "DGVlasovSolver.compute_rhs: state sizes do not match the "
+                + "mesh (fields on " + String(fields.num_elements)
+                + " elements, mesh has " + String(mesh.num_x_elements)
+                + " configuration elements)"
+            )
         var q_layout = row_major(Int(q.buf_len))
         var node_v_layout = row_major(Int(mesh.node_v_len))
         var fields_layout = row_major(Int(fields.buf_len))

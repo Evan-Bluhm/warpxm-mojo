@@ -37,13 +37,12 @@ hit a parse error.
 
 ### File names
 
-* Fluid-side library files carry no dimension suffix: everything is
-  written once for all dimensions (apps, `mesh/block.mojo`,
-  `variable/state.mojo`, `spatial/dg_core.mojo`, `dg_euler.mojo`, the
-  adjusters, `temporal/ssprk3.mojo`, the source kernels in
-  `spatial/sources/`, `io/vtu.mojo`). The original kinetic files end in `_1d1v` /
-  `_1d2v`; the generic kinetic files (`phase_mesh.mojo`,
-  `dg_vlasov.mojo`, ...) have no suffix.
+* Library files carry no dimension suffix: everything is written once
+  for all dimensions (apps, `mesh/block.mojo`, `variable/state.mojo`,
+  `spatial/dg_core.mojo`, `dg_euler.mojo`, the adjusters,
+  `temporal/ssprk3.mojo`, the source kernels in `spatial/sources/`,
+  `io/vtu.mojo`, and the kinetic `phase_mesh.mojo`, `dg_vlasov.mojo`,
+  ...).
 * Source kernels are named `<thing>_source.mojo`; tests are
   `test_<physics>_<problem>_<dim>.mojo`.
 * Underscored prefixes mark "internal helpers": `_load_node`,

@@ -1,4 +1,5 @@
-# 1D1V Vlasov second-moment kernel test.
+# 1D1V Vlasov second-moment test: the `MOM_ENERGY` component of
+# `VlasovMoments[1, 1, P_x, P_v]`.
 #
 # `E_kin(x) = ½ ∫ v² · f(x, v) dv` is the species energy density;
 # combined with ρ = ∫ f dv and u = (∫ v f dv) / ρ it produces the
@@ -37,22 +38,22 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx,
-        Real(0.0), Real(1.0), Real(-V_MAX), V_MAX,
-        num_x=NX, num_v=NV,
-        periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[0.0, -V_MAX], hi=[1.0, V_MAX], n=[NX, NV],
+        periodic=[True],
     )
 
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     def maxwellian(x: Real, v: Real) -> Real:
         return exp(-v * v / SIGMA_SQ)
     mesh.fill(q, maxwellian)
 
-    var e_dens = DGState[1, P_X, 1](ctx, NX)
-    var moments = VlasovMoments1D1V[P_X, P_V]()
-    moments.second_moment(ctx, mesh, q, e_dens)
+    var mom = DGState[1, P_X, VLASOV_MOMENT_NC](ctx, mesh.num_x_elements)
+    var moments = VlasovMoments[1, 1, P_X, P_V](ctx, mesh)
+    moments.compute(ctx, mesh, q, mom)
     ctx.synchronize()
 
     var sigma = sqrt(SIGMA_SQ)
@@ -62,9 +63,9 @@ def main() raises:
     var e_kin_analytic = Real(0.5) * sigma * sigma * sigma * bulk_int
 
     var max_abs_err: Real = 0.0
-    with e_dens.buf.map_to_host() as h:
-        for k in range(e_dens.buf_len):
-            var d = h[k] - e_kin_analytic
+    with mom.buf.map_to_host() as h:
+        for k in range(mom.total_nodes):
+            var d = h[k * VLASOV_MOMENT_NC + MOM_ENERGY] - e_kin_analytic
             var ad = d if d >= 0.0 else -d
             if ad > max_abs_err:
                 max_abs_err = ad

@@ -16,8 +16,6 @@ a capture list).
 | `ssprk3_plasma.mojo` | `SSPRK3_Plasma[NDIM, P]` | two Euler species + Maxwell |
 | `ssprk3_phase.mojo` | `SSPRK3Phase[XDIM, VDIM, P_x, P_v, NC]`, `no_op_adjust_phase` | a phase-space state alone, any dimensions |
 | `ssprk3_vlasov_maxwell.mojo` | `SSPRK3VlasovMaxwell[XDIM, VDIM, P_x, P_v]` | Vlasov + Maxwell, any dimensions |
-| `ssprk3_1d1v.mojo`, `ssprk3_1d2v.mojo` | `SSPRK3_1D1V[P_x, P_v, NC]`, `SSPRK3_1D2V[P_x, P_v1, P_v2, NC]` | a phase-space state alone |
-| `ssprk3_vlasov_maxwell_1d1v.mojo`, `..._1d2v.mojo` | `SSPRK3_VlasovMaxwell_1D1V[P_x, P_v]`, `SSPRK3_VlasovMaxwell_1D2V[P_x, P_v1, P_v2]` | Vlasov + 1D Maxwell |
 
 The state buffer is flat in every dimension, so the RK combine kernels
 do not depend on `NDIM`; it only fixes the state type. Each stepper owns
@@ -183,11 +181,6 @@ the Maxwell state, for the coupled stepper). They keep two scratch
 copies of the state rather than four (`stage` and `rhs`), because the
 number of copies of `f` is what limits a kinetic run. `CflPacer`
 (`temporal/pacing.mojo`) is the step-size bookkeeping shared by the
-`run_until_cfl` loops. The original per-dimension steppers follow.
+`run_until_cfl` loops.
 
-`SSPRK3_1D1V` / `SSPRK3_1D2V` advance one phase-space state with the
-same `step(ctx, f, dt, compute_rhs, adjust)` shape (adjuster
-`no_op_adjust_1d1v` / `no_op_adjust_1d2v`). `SSPRK3_VlasovMaxwell_1D1V` /
-`_1D2V` advance `(f, q_maxwell)` together with one joint-RHS closure:
-`step(ctx, q_phase, q_maxwell, dt, compute_joint_rhs)`. See
-[Vlasov-Maxwell](../physics/vlasov.md).
+See [Vlasov-Maxwell](../physics/vlasov.md).

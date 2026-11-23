@@ -1,13 +1,13 @@
-# Coupled 1D2V Vlasov-Maxwell — smoke test for the full slice-21 stack.
+# Coupled 1D2V Vlasov-Maxwell — smoke test for the full coupled stack.
 #
-# Exercises every code path landed in slice 21:
-#   * 1D2V Vlasov RHS reading `(E_x, E_y, B_z)` from the Maxwell aux
-#     state — including the `v × B_z` Lorentz coupling that is identically
-#     zero in 1D1V,
-#   * `VlasovMoments1D2V.first_moment_v1 / v2` to extract `(J_x, J_y)`,
-#   * `apply_vlasov_current_source_1d2v` feeding both transverse `E`
-#     components,
-#   * `SSPRK3_VlasovMaxwell_1D2V` joint stepper composing both sides.
+# Exercises every piece of a coupled 1D2V run:
+#   * the `DGVlasovSolver[1, 2, …]` RHS reading `(E_x, E_y, B_z)` from the
+#     Maxwell state — including the `v × B_z` Lorentz coupling that is
+#     identically zero in 1D1V,
+#   * `VlasovMoments[1, 2, …].compute` for the flux moments `(J_x, J_y)`,
+#   * `apply_vlasov_current_source[1, 2, …]` feeding both `E_x` and `E_y`,
+#   * the `SSPRK3VlasovMaxwell[1, 2, …]` joint stepper composing both
+#     sides.
 #
 # IC is a bi-Maxwellian `f₀ ∝ exp(-v1²/σ_par² − v2²/σ_perp²)` with
 # `σ_perp > σ_par` plus a small `B_z(x, 0) = δ · sin(kx)` seed, `k = 2π`.
@@ -62,8 +62,7 @@ from warpxm.physics.maxwell import *
 
 
 comptime P_X: Int = 2
-comptime P_V1: Int = 2
-comptime P_V2: Int = 2
+comptime P_V: Int = 2
 comptime NX: Int = 8
 comptime NV1: Int = 8
 comptime NV2: Int = 8
@@ -87,12 +86,12 @@ comptime DT: Real = T_FINAL / Real(N_STEPS)
 comptime SAMPLE_EVERY: Int = 5
 comptime DELTA_BZ: Real = 1.0e-3   # B_z seed amplitude
 
-comptime PhaseState = PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC]
+comptime Phase = PhaseState[1, 2, P_X, P_V, VLASOV_NC]
 comptime MaxwellState = DGState[1, P_X, MAXWELL_NC]
 
 
 def compute_total_mass(
-    phase_mesh: PhaseMesh1D2V[P_X, P_V1, P_V2], mut q_phase: PhaseState,
+    phase_mesh: PhaseMesh[1, 2, P_X, P_V], mut q_phase: Phase,
 ) raises -> Real:
     """M = ∫∫∫ f dv1 dv2 dx via GLL quadrature over the full phase mesh."""
     var acc: Real = 0.0
@@ -118,19 +117,18 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
 
-    var phase_mesh = PhaseMesh1D2V[P_X, P_V1, P_V2](
+    var phase_mesh = PhaseMesh[1, 2, P_X, P_V](
         ctx,
-        X_MIN, X_MAX,
-        -V_MAX, V_MAX,
-        -V_MAX, V_MAX,
-        num_x=NX, num_v1=NV1, num_v2=NV2,
-        periodic_x=True,
+        lo=[X_MIN, -V_MAX, -V_MAX],
+        hi=[X_MAX, V_MAX, V_MAX],
+        n=[NX, NV1, NV2],
+        periodic=[True],
     )
     var x_mesh = BlockMesh[1, P_X](
         ctx, X_MIN, X_MAX, NX, periodic=True,
     )
 
-    var q_phase = PhaseState(ctx, NX, NV1, NV2)
+    var q_phase = Phase(ctx, phase_mesh.num_phase_elements)
     var q_maxwell = MaxwellState(ctx, NX)
 
     # IC: f₀(v1, v2) = norm · exp(-v1²/σ_par² - v2²/σ_perp²), uniform in x.
@@ -166,28 +164,25 @@ def main() raises:
         cfl_max=Real(0.5),
     )
     var maxwell_app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
-    var spatial_vlasov = DGVlasovSolver1D2V[P_X, P_V1, P_V2](vlasov_app)
+    var spatial_vlasov = DGVlasovSolver[1, 2, P_X, P_V](vlasov_app)
     var spatial_maxwell = DGMaxwellSolver[1, P_X](maxwell_app)
-    var moments = VlasovMoments1D2V[P_X, P_V1, P_V2]()
-    var stepper = SSPRK3_VlasovMaxwell_1D2V[P_X, P_V1, P_V2](
-        ctx, NX, NV1, NV2,
+    var moments = VlasovMoments[1, 2, P_X, P_V](ctx, phase_mesh)
+    var stepper = SSPRK3VlasovMaxwell[1, 2, P_X, P_V](
+        ctx, phase_mesh.num_phase_elements, phase_mesh.num_x_elements,
     )
-    var jx_current = DGState[1, P_X, 1](ctx, NX)
-    var jy_current = DGState[1, P_X, 1](ctx, NX)
+    var mom = DGState[1, P_X, VLASOV_MOMENT_NC](ctx, NX)
 
     def compute_joint_rhs(
-        mut qp_in: PhaseState,
+        mut qp_in: Phase,
         mut qm_in: MaxwellState,
-        mut qp_out: PhaseState,
+        mut qp_out: Phase,
         mut qm_out: MaxwellState,
-    ) raises {mut jx_current, mut jy_current, imm}:
+    ) raises {mut mom, imm}:
         spatial_vlasov.compute_rhs(ctx, phase_mesh, qp_in, qm_in, qp_out)
         spatial_maxwell.compute_rhs(ctx, x_mesh, qm_in, qm_out)
-        moments.first_moment_v1(ctx, phase_mesh, qp_in, jx_current)
-        moments.first_moment_v2(ctx, phase_mesh, qp_in, jy_current)
-        apply_vlasov_current_source_1d2v[P_X](
-            ctx, jx_current, jy_current, qm_out,
-            CHARGE_MASS_RATIO, EPS0,
+        moments.compute(ctx, phase_mesh, qp_in, mom)
+        apply_vlasov_current_source[1, 2, P_X](
+            ctx, mom, qm_out, CHARGE_MASS_RATIO, EPS0,
         )
 
     # --- time loop: two wave periods, sampling b(t) every 5 steps ---

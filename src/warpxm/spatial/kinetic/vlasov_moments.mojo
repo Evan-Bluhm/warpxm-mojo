@@ -59,8 +59,15 @@ comptime _SUM_BLOCK: Int = 256
 
 def _moment_lanes(num_x_nodes: Int) -> Int:
     """Threads per configuration node sharing one velocity reduction: 32,
-    or fewer when 32 per node would not fit in a 1024-thread block."""
-    return 32 if num_x_nodes * 32 <= 1024 else 1024 // num_x_nodes
+    or fewer when that would put more than 256 threads in the block. The
+    cap is on registers, not threads: the kernel unrolls the velocity
+    nodes of an element, and a large block of such threads asks for more
+    registers than one SM has, so the launch fails with
+    CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES (seen at 999 threads in 3D3V
+    P = 2 and at 512 in 2D3V P = 3)."""
+    if num_x_nodes * 32 <= 256:
+        return 32
+    return max(1, 256 // num_x_nodes)
 
 
 def _v_node_weight[P_v: Int, VDIM: Int](v_node: Int) -> Real:
@@ -253,6 +260,17 @@ struct VlasovMoments[XDIM: Int, VDIM: Int, P_x: Int, P_v: Int]:
         `MOM_ENERGY`) with the velocity moments of `q`. `mesh` must be the
         mesh this object was built for."""
         comptime NXN = (Self.P_x + 1) ** Self.XDIM
+        if (
+            moments.num_elements != mesh.num_x_elements
+            or q.num_phase_elements != mesh.num_phase_elements
+            or self.num_chunks
+                != ceildiv(mesh.num_v_elements, self.chunk_size)
+            or self.partials_len != moments.buf_len * self.num_chunks
+        ):
+            raise Error(
+                "VlasovMoments.compute: state sizes do not match the mesh "
+                + "this object was built for"
+            )
         var q_layout = row_major(Int(q.buf_len))
         var node_v_layout = row_major(Int(mesh.node_v_len))
         var out_layout = row_major(Int(moments.buf_len))

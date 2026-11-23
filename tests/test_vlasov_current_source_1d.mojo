@@ -1,9 +1,10 @@
 # Vlasov → Maxwell current-source kernel test.
 #
-# Builds a known J from a v-shifted Maxwellian, calls the current-source
-# kernel on a non-zero Maxwell RHS, and verifies the new RHS equals
-# `rhs_old + (-α / ε₀) · J` at every x-node. Touches only `IDX_EX`; the
-# other Maxwell components must be unchanged.
+# Builds a known J (the `MOM_FLUX_X` moment) from a v-shifted Maxwellian,
+# calls `apply_vlasov_current_source[1, 1, P_x]` on a non-zero Maxwell RHS,
+# and verifies the new RHS equals `rhs_old + (-α / ε₀) · J` at every
+# x-node. With one velocity dimension only `IDX_EX` is touched; the other
+# Maxwell components must be unchanged.
 #
 # Build / run:
 #     pixi run mojo run -I src tests/test_vlasov_current_source_1d.mojo
@@ -32,13 +33,13 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx,
-        Real(0.0), Real(1.0), Real(-3.0), Real(3.0),
-        num_x=NX, num_v=NV,
-        periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[0.0, -3.0], hi=[1.0, 3.0], n=[NX, NV],
+        periodic=[True],
     )
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     # IC: v-shifted Maxwellian, x-independent ⇒ J is the same at every x-node.
     def shifted(x: Real, v: Real) -> Real:
@@ -46,15 +47,15 @@ def main() raises:
         return exp(-dv_shift * dv_shift / SIGMA_SQ)
     mesh.fill(q, shifted)
 
-    # Build J via first-moment kernel.
-    var moments = VlasovMoments1D1V[P_X, P_V]()
-    var j = DGState[1, P_X, 1](ctx, NX)
-    moments.first_moment(ctx, mesh, q, j)
+    # Build the moments; J is the `MOM_FLUX_X` component.
+    var moments = VlasovMoments[1, 1, P_X, P_V](ctx, mesh)
+    var mom = DGState[1, P_X, VLASOV_MOMENT_NC](ctx, mesh.num_x_elements)
+    moments.compute(ctx, mesh, q, mom)
     ctx.synchronize()
 
-    # Snapshot J for the analytic prediction.
-    var j_host = ctx.enqueue_create_host_buffer[Real.dtype](j.buf_len)
-    ctx.enqueue_copy(dst_buf=j_host, src_buf=j.buf)
+    # Snapshot the moments for the analytic prediction.
+    var mom_host = ctx.enqueue_create_host_buffer[Real.dtype](mom.buf_len)
+    ctx.enqueue_copy(dst_buf=mom_host, src_buf=mom.buf)
     ctx.synchronize()
 
     # Build a Maxwell RHS scratch buffer with a known starting pattern,
@@ -69,8 +70,8 @@ def main() raises:
     ctx.synchronize()
 
     # Apply the source.
-    apply_vlasov_current_source_1d[P_X](
-        ctx, j, rhs_maxwell, ALPHA, EPS0,
+    apply_vlasov_current_source[1, 1, P_X](
+        ctx, mom, rhs_maxwell, ALPHA, EPS0,
     )
     ctx.synchronize()
 
@@ -82,7 +83,7 @@ def main() raises:
     var max_abs_j: Real = 0.0
     with rhs_maxwell.buf.map_to_host() as h:
         for n in range(node_count):
-            var j_n = j_host[n]
+            var j_n = mom_host[n * VLASOV_MOMENT_NC + MOM_FLUX_X]
             var aj = j_n if j_n >= 0.0 else -j_n
             if aj > max_abs_j:
                 max_abs_j = aj

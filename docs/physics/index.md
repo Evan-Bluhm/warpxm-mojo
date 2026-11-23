@@ -1,7 +1,7 @@
 # Physics
 
 warpxm-mojo implements seven fluid and field systems across three
-dimensions, plus a kinetic Vlasov-Maxwell solver in 1D1V and 1D2V. Every
+dimensions, plus a kinetic Vlasov-Maxwell solver from 1D1V to 3D3V. Every
 (physics, dimension) cell checked here has end-to-end regression tests
 passing on the GPU; the full matrix is on the [Features](../features.md)
 page.

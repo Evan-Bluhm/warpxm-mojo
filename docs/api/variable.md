@@ -1,7 +1,7 @@
 # `warpxm.variable`
 
 Conserved-variable storage: `DGState[NDIM, P, NC]` for configuration-space
-fields and `PhaseState1D1V` / `PhaseState1D2V` for the kinetic
+fields and `PhaseState[XDIM, VDIM, P_x, P_v, NC]` for the kinetic
 distribution function. Each is a thin wrapper around one flat
 `DeviceBuffer[Real.dtype]`.
 
@@ -97,28 +97,14 @@ var f = PhaseState[1, 3, P_x, P_v, VLASOV_NC](ctx, mesh.num_phase_elements)
 `PhaseState[XDIM, VDIM, P_x, P_v, NC]` is the generic phase-space state.
 Phase elements are numbered with the last axis innermost, local nodes
 with the first axis innermost, and
-`PhaseState.index(elem, node, comp)` gives the flat index. For `XDIM = 1`
-the layout is identical to the two original types below.
-
-```mojo
-from warpxm.variable.phase_state_1d1v import PhaseState1D1V
-from warpxm.variable.phase_state_1d2v import PhaseState1D2V
-
-var f = PhaseState1D1V[P_x, P_v, VLASOV_NC](ctx, num_x, num_v)
-var g = PhaseState1D2V[P_x, P_v1, P_v2, VLASOV_NC](ctx, num_x, num_v1, num_v2)
-```
-
-Layout, with the x node index fastest inside a phase element:
+`PhaseState.index(elem, node, comp)` gives the flat index:
 
 ```text
-1D1V: buf[((phase_e * (P_v+1) + iv) * (P_x+1) + ix) * NC + c]
-      phase_e = ex * num_v + ev
-1D2V: buf[(phase_e * NPE + (iv2 * (P_v1+1) + iv1) * (P_x+1) + ix) * NC + c]
-      phase_e = (ex * num_v1 + ev1) * num_v2 + ev2
-      NPE = (P_x+1) * (P_v1+1) * (P_v2+1)
+phase element  e = ((e_0 * n_1 + e_1) * n_2 + ...) + e_last     (axes: x..., then v...)
+local node     n = i_0 + s_1 * i_1 + s_2 * i_2 + ...            (s_a: node count of the axes before a)
+buffer         buf[(e * nodes_per_elem + n) * NC + c]
 ```
 
-Members: `buf`, `buf_len`, `total_nodes`, `num_phase_elements`, `num_x`,
-`num_v` (or `num_v1`, `num_v2`). The phase meshes provide `fill` and
-`visit_nodes` for these states; there is no `index` helper. See
-[Vlasov-Maxwell](../physics/vlasov.md).
+Members: `buf`, `buf_len`, `total_nodes`, `num_phase_elements`. The
+phase mesh provides `fill`, `visit_nodes` and `integrate` for these
+states. See [Vlasov-Maxwell](../physics/vlasov.md).

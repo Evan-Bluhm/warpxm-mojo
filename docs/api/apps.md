@@ -114,11 +114,9 @@ from warpxm.apps.vlasovmaxwell import VlasovMaxwell, VLASOV_NC
 
 One-component kinetic distribution function. Parameters:
 `charge_mass_ratio`, `skin_depth_norm`, `cfl_max`. Static helpers give
-the velocity-space accelerations (`lorentz_acceleration_static[VDIM,
-axis]` for any number of velocity dimensions; `acceleration_v_1d1v_static`,
-`acceleration_v1_1d2v_static`, `acceleration_v2_1d2v_static`) and the
-upwind flux. Used by the kernels in `spatial/kinetic/`, not by the fluid
-DG cores. See [Vlasov-Maxwell](../physics/vlasov.md).
+the velocity-space acceleration (`lorentz_acceleration_static[VDIM,
+axis]`, for any number of velocity dimensions). Used by the kernels in
+`spatial/kinetic/`, not by the fluid DG cores. See [Vlasov-Maxwell](../physics/vlasov.md).
 
 ## Switching MHD flux
 

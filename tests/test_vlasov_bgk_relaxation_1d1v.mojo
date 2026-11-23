@@ -49,8 +49,8 @@ comptime DT: Real = 0.01
 
 
 def compute_three_moments(
-    mesh: PhaseMesh1D1V[P_X, P_V],
-    mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+    mesh: PhaseMesh[1, 1, P_X, P_V],
+    mut q: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
     mut m_out: Real,
     mut p_out: Real,
     mut e_out: Real,
@@ -74,13 +74,13 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
 
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx,
-        Real(0.0), Real(1.0), V_MIN, V_MAX,
-        num_x=NX, num_v=NV,
-        periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[0.0, V_MIN], hi=[1.0, V_MAX], n=[NX, NV],
+        periodic=[True],
     )
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     # IC: bimodal counter-streaming Maxwellian.
     def bimodal(x: Real, v: Real) -> Real:
@@ -103,26 +103,28 @@ def main() raises:
     )
 
     # --- solver + stepper ---
-    var bgk = VlasovBGKSource1D1V[P_X, P_V](ctx, NX)
-    var stepper = SSPRK3_1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
+    var bgk = VlasovBGKSource[1, 1, P_X, P_V](ctx, mesh)
+    var stepper = SSPRK3Phase[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     def compute_rhs(
-        mut q_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut q_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+        mut q_in: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
+        mut q_out: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
     ) raises {mut bgk, imm}:
         # BGK alone — zero the residual first because `bgk.apply`
         # *adds* its contribution.
         q_out.buf.enqueue_fill(Real(0.0))
         bgk.apply(ctx, mesh, q_in, q_out, TAU)
 
-    def no_adjust(mut _q: PhaseState1D1V[P_X, P_V, VLASOV_NC]) raises {imm}:
-        pass
-
     var t: Real = 0.0
     var nsteps: Int = 0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
+        stepper.step(
+            ctx, q, dt_use, compute_rhs,
+            no_op_adjust_phase[1, 1, P_X, P_V, VLASOV_NC],
+        )
         t += dt_use
         nsteps += 1
     ctx.synchronize()

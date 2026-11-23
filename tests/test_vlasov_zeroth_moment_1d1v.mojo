@@ -1,4 +1,5 @@
-# 1D1V Vlasov zeroth-moment kernel test.
+# 1D1V Vlasov zeroth-moment test: the `MOM_DENSITY` component of
+# `VlasovMoments[1, 1, P_x, P_v]`.
 #
 # Sets `f(x, v) = exp(-v²/σ²)` (x-independent Maxwellian) and verifies
 # that
@@ -38,23 +39,23 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx,
-        X_MIN, X_MAX, V_MIN, V_MAX,
-        num_x=NX, num_v=NV,
-        periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[X_MIN, V_MIN], hi=[X_MAX, V_MAX], n=[NX, NV],
+        periodic=[True],
     )
 
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     # IC: f(x, v) = exp(-v²/σ²), x-independent.
     def maxwellian(x: Real, v: Real) -> Real:
         return exp(-v * v / SIGMA_SQ)
     mesh.fill(q, maxwellian)
 
-    var rho = DGState[1, P_X, 1](ctx, NX)
-    var moments = VlasovMoments1D1V[P_X, P_V]()
-    moments.zeroth_moment(ctx, mesh, q, rho)
+    var mom = DGState[1, P_X, VLASOV_MOMENT_NC](ctx, mesh.num_x_elements)
+    var moments = VlasovMoments[1, 1, P_X, P_V](ctx, mesh)
+    moments.compute(ctx, mesh, q, mom)
     ctx.synchronize()
 
     # Analytic: ρ = σ √π · erf(v_max / σ).
@@ -62,9 +63,9 @@ def main() raises:
     var rho_analytic = sigma * sqrt(PI) * erf(V_MAX / sigma)
 
     var max_abs_err: Real = 0.0
-    with rho.buf.map_to_host() as h:
-        for k in range(rho.buf_len):
-            var d = h[k] - rho_analytic
+    with mom.buf.map_to_host() as h:
+        for k in range(mom.total_nodes):
+            var d = h[k * VLASOV_MOMENT_NC + MOM_DENSITY] - rho_analytic
             var ad = d if d >= 0.0 else -d
             if ad > max_abs_err:
                 max_abs_err = ad

@@ -48,20 +48,19 @@ Phase-space DG (continuum kinetic), separate from the fluid matrix above.
 | Vlasov-Maxwell (self-consistent)  | ✅   | ✅   | ✅   | ✅   |
 | Moments (density, current, energy)| ✅   | ✅   | ✅   | ✅   |
 | CFL step (`suggest_dt`)           | ✅   | ✅   | ✅   | ✅   |
-| BGK collision operator            | ✅   | —    | —    | —    |
-| 5-moment → kinetic initialisation | ✅   | —    | —    | —    |
+| BGK collision operator            | ✅   | ◑    | ◑    | ◑    |
+| 5-moment → kinetic initialisation | ✅   | ◑    | ◑    | ◑    |
 | Velocity-space outflow BC         | ✅   | ✅   | ✅   | ✅   |
 | Specular (reflecting) wall        | ◑    | ◑    | ✅   | ✅   |
 
-◑: available through the generic stack (`PhaseMesh[1, 1, …]`,
-`PhaseMesh[1, 2, …]`), not on the hand-written types, and not tested at
-that dimension.
+◑: the code is generic over the dimensions, but there is no test at
+that one.
 
-1D3V and 2D2V come from the dimension-generic stack
-(`PhaseMesh[XDIM, VDIM, P_x, P_v]` and friends), which also reproduces
-1D1V and 1D2V to round-off. The same code runs 2D3V and 3D3V: their
-right-hand side is tested (exact to round-off on polynomial data), but
-no time-dependent or coupled run is.
+Every column comes from one dimension-generic stack
+(`PhaseMesh[XDIM, VDIM, P_x, P_v]` and friends). The same code runs
+2D3V and 3D3V, where the suite checks the right-hand side (exact to
+round-off on polynomial data), free streaming, and a coupled plasma
+oscillation with all three current components.
 
 The generic kernel runs one phase element per GPU block, so
 `(P_x + 1)^XDIM (P_v + 1)^VDIM` cannot exceed the 1024 threads of a
@@ -76,12 +75,9 @@ The specular wall is tested in free streaming, in prescribed electric
 and magnetic fields, and in a coupled run with conducting walls on the
 field solver (all 1D3V; free streaming also 2D2V).
 
-BGK and the 5-moment initialiser exist only on the original hand-written
-1D1V types.
-
-Sources: `src/warpxm/spatial/kinetic/`, `mesh/phase_mesh*.mojo`,
-`variable/phase_state*.mojo`, `temporal/ssprk3_phase.mojo`,
-`ssprk3_1d{1,2}v.mojo` and `ssprk3_vlasov_maxwell*.mojo`. See
+Sources: `src/warpxm/spatial/kinetic/`, `mesh/phase_mesh.mojo`,
+`variable/phase_state.mojo`, `temporal/ssprk3_phase.mojo` and
+`ssprk3_vlasov_maxwell.mojo`. See
 [Vlasov-Maxwell](physics/vlasov.md).
 
 ## Capability notes
@@ -132,6 +128,6 @@ Feature-matrix-complete, apart from 1D MHD (an intentional gap: ∇·B = 0
 makes it degenerate). What remains is scale:
 
 1. **MPI halo exchange** for multi-GPU runs.
-2. **Kinetic solver**: the generic stack reaches 1D3V and 2D2V; still
-   open are curvilinear (cylindrical) configuration coordinates, BGK and the fluid initialiser on the generic
-   types, and retiring the hand-written 1D1V / 1D2V code in its favour.
+2. **Kinetic solver**: still open are curvilinear (cylindrical)
+   configuration coordinates, positivity preservation for `f`, and a
+   second species.

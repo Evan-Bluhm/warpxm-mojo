@@ -38,15 +38,12 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
 
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx,
-        Real(0.0), Real(1.0), Real(-3.0), Real(3.0),
-        num_x=NX, num_v=NV,
-        periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[0.0, -3.0], hi=[1.0, 3.0], n=[NX, NV], periodic=[True],
     )
 
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    var rhs = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](ctx, mesh.num_phase_elements)
+    var rhs = PhaseState[1, 1, P_X, P_V, VLASOV_NC](ctx, mesh.num_phase_elements)
 
     # IC: f(x, v) = exp(-v²/σ²). x-independent Maxwellian.
     def maxwellian(x: Real, v: Real) -> Real:
@@ -63,7 +60,7 @@ def main() raises:
     ctx.synchronize()
 
     # Apply BGK source.
-    var bgk = VlasovBGKSource1D1V[P_X, P_V](ctx, NX)
+    var bgk = VlasovBGKSource[1, 1, P_X, P_V](ctx, mesh)
     bgk.apply(ctx, mesh, q, rhs, TAU)
     ctx.synchronize()
 

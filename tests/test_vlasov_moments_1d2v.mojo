@@ -1,13 +1,14 @@
 # 1D2V Vlasov moment-kernel test.
 #
 # Sets `f(x, v1, v2) = exp(-(v1² + v2²) / σ²)` (x-independent 2D
-# Maxwellian) and verifies the four moment kernels against analytic
-# values:
+# Maxwellian) and verifies the moments from `VlasovMoments[1, 2, P_X,
+# P_V].compute` against analytic values:
 #
-#   ρ           = (σ √π · erf(V/σ))²
-#   J_x         = 0     (odd integrand symmetry along v1)
-#   J_y         = 0     (odd integrand symmetry along v2)
-#   E_kin       = ((σ³√π/2)·erf(V/σ) − σ²·V·exp(-V²/σ²)) · (σ√π·erf(V/σ))
+#   ρ     (MOM_DENSITY) = (σ √π · erf(V/σ))²
+#   J_x   (MOM_FLUX_X)  = 0     (odd integrand symmetry along v1)
+#   J_y   (MOM_FLUX_Y)  = 0     (odd integrand symmetry along v2)
+#   J_z   (MOM_FLUX_Z)  = 0     (no v3 axis in 1D2V; must be exactly zero)
+#   E_kin (MOM_ENERGY)  = ((σ³√π/2)·erf(V/σ) − σ²·V·exp(-V²/σ²)) · (σ√π·erf(V/σ))
 #
 # Tolerances follow the slice-13/14/16 erfc budget: for σ² = 0.5,
 # V = 3 (V/σ = 3√2 ≈ 4.243), `erfc(3√2) ≈ 1.5·10⁻⁹` and the second-
@@ -28,8 +29,7 @@ from warpxm.physics.vlasov import *
 
 
 comptime P_X: Int = 1
-comptime P_V1: Int = 3
-comptime P_V2: Int = 3
+comptime P_V: Int = 3
 comptime NX: Int = 4
 comptime NV1: Int = 12
 comptime NV2: Int = 12
@@ -40,37 +40,33 @@ comptime V1_MAX: Real = 3.0
 comptime V2_MIN: Real = -3.0
 comptime V2_MAX: Real = 3.0
 comptime SIGMA_SQ: Real = 0.5
+comptime MomentState = DGState[1, P_X, VLASOV_MOMENT_NC]
 
 
 def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = PhaseMesh1D2V[P_X, P_V1, P_V2](
+    var mesh = PhaseMesh[1, 2, P_X, P_V](
         ctx,
-        X_MIN, X_MAX,
-        V1_MIN, V1_MAX,
-        V2_MIN, V2_MAX,
-        num_x=NX, num_v1=NV1, num_v2=NV2,
-        periodic_x=True,
+        lo=[X_MIN, V1_MIN, V2_MIN],
+        hi=[X_MAX, V1_MAX, V2_MAX],
+        n=[NX, NV1, NV2],
+        periodic=[True],
     )
 
-    var q = PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC](ctx, NX, NV1, NV2)
+    var q = PhaseState[1, 2, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     # IC: f(x, v1, v2) = exp(-(v1² + v2²) / σ²), x-independent.
     def maxwellian(x: Real, v1: Real, v2: Real) -> Real:
         return exp(-(v1 * v1 + v2 * v2) / SIGMA_SQ)
     mesh.fill(q, maxwellian)
 
-    var rho = DGState[1, P_X, 1](ctx, NX)
-    var jx = DGState[1, P_X, 1](ctx, NX)
-    var jy = DGState[1, P_X, 1](ctx, NX)
-    var e_dens = DGState[1, P_X, 1](ctx, NX)
-    var moments = VlasovMoments1D2V[P_X, P_V1, P_V2]()
-    moments.zeroth_moment(ctx, mesh, q, rho)
-    moments.first_moment_v1(ctx, mesh, q, jx)
-    moments.first_moment_v2(ctx, mesh, q, jy)
-    moments.second_moment(ctx, mesh, q, e_dens)
+    var mom = MomentState(ctx, NX)
+    var moments = VlasovMoments[1, 2, P_X, P_V](ctx, mesh)
+    moments.compute(ctx, mesh, q, mom)
     ctx.synchronize()
 
     # Analytic values for the truncated 2D Maxwellian.
@@ -90,26 +86,28 @@ def main() raises:
     var max_rho_err: Real = 0.0
     var max_jx: Real = 0.0
     var max_jy: Real = 0.0
+    var max_jz: Real = 0.0
     var max_e_err: Real = 0.0
-    with rho.buf.map_to_host() as h_rho, \
-         jx.buf.map_to_host() as h_jx, \
-         jy.buf.map_to_host() as h_jy, \
-         e_dens.buf.map_to_host() as h_e:
-        for k in range(rho.buf_len):
-            var dr = h_rho[k] - rho_analytic
-            var adr = dr if dr >= 0.0 else -dr
-            if adr > max_rho_err:
-                max_rho_err = adr
-            var ajx = h_jx[k] if h_jx[k] >= 0.0 else -h_jx[k]
-            if ajx > max_jx:
-                max_jx = ajx
-            var ajy = h_jy[k] if h_jy[k] >= 0.0 else -h_jy[k]
-            if ajy > max_jy:
-                max_jy = ajy
-            var de = h_e[k] - e_analytic
-            var ade = de if de >= 0.0 else -de
-            if ade > max_e_err:
-                max_e_err = ade
+    with mom.buf.map_to_host() as h:
+        for e in range(NX):
+            for n in range(P_X + 1):
+                max_rho_err = fmax(
+                    max_rho_err,
+                    abs(h[MomentState.index(e, n, MOM_DENSITY)] - rho_analytic),
+                )
+                max_jx = fmax(
+                    max_jx, abs(h[MomentState.index(e, n, MOM_FLUX_X)]),
+                )
+                max_jy = fmax(
+                    max_jy, abs(h[MomentState.index(e, n, MOM_FLUX_Y)]),
+                )
+                max_jz = fmax(
+                    max_jz, abs(h[MomentState.index(e, n, MOM_FLUX_Z)]),
+                )
+                max_e_err = fmax(
+                    max_e_err,
+                    abs(h[MomentState.index(e, n, MOM_ENERGY)] - e_analytic),
+                )
 
     print(
         "1D2V moments: ρ_analytic =", rho_analytic,
@@ -121,7 +119,7 @@ def main() raises:
     )
     print(
         "1D2V moments: max |J_x| =", max_jx,
-        " max |J_y| =", max_jy,
+        " max |J_y| =", max_jy, " max |J_z| =", max_jz,
     )
 
     # Tolerances. ρ-axis truncation residue ≈ σ √π · erfc(V/σ) ≈ 1.4·10⁻⁹;
@@ -131,5 +129,6 @@ def main() raises:
     assert_true(max_rho_err < Real(4.0e-9), "ρ moment off")
     assert_true(max_jx < Real(1.0e-15), "J_x not zero by symmetry")
     assert_true(max_jy < Real(1.0e-15), "J_y not zero by symmetry")
+    assert_true(max_jz == Real(0.0), "J_z not zero without a v3 axis")
     assert_true(max_e_err < Real(2.5e-8), "E_kin moment off")
     print("PASSED")

@@ -1,8 +1,9 @@
-# 1D1V Vlasov first-moment kernel test.
+# 1D1V Vlasov first-moment test: the `MOM_FLUX_X` component of
+# `VlasovMoments[1, 1, P_x, P_v]`.
 #
 # `J(x) = ∫ v · f(x, v) dv` is the species current density / momentum
-# density — the quantity that couples Vlasov back into Maxwell's source
-# in a future slice.
+# density — the quantity `apply_vlasov_current_source` feeds into
+# Ampère's law.
 #
 # Two checks, both with `f(x, v)` x-independent:
 #
@@ -38,8 +39,8 @@ comptime SIGMA_SQ: Real = 0.5
 
 
 def fill_shifted_maxwellian(
-    mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-    mesh: PhaseMesh1D1V[P_X, P_V],
+    mut q: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
+    mesh: PhaseMesh[1, 1, P_X, P_V],
     u: Real,
 ) raises:
     """Fill `q` with `f(x, v) = exp(-(v - u)² / σ²)` (x-independent)."""
@@ -49,20 +50,20 @@ def fill_shifted_maxwellian(
     mesh.fill(q, shifted)
 
 
-def first_moment_max_err(
+def flux_x_max_err(
     var ctx: DeviceContext,
-    mut moments: VlasovMoments1D1V[P_X, P_V],
-    mesh: PhaseMesh1D1V[P_X, P_V],
-    mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+    moments: VlasovMoments[1, 1, P_X, P_V],
+    mesh: PhaseMesh[1, 1, P_X, P_V],
+    mut q: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
     j_analytic: Real,
 ) raises -> Real:
-    var j = DGState[1, P_X, 1](ctx, NX)
-    moments.first_moment(ctx, mesh, q, j)
+    var mom = DGState[1, P_X, VLASOV_MOMENT_NC](ctx, mesh.num_x_elements)
+    moments.compute(ctx, mesh, q, mom)
     ctx.synchronize()
     var worst: Real = 0.0
-    with j.buf.map_to_host() as h:
-        for k in range(j.buf_len):
-            var d = h[k] - j_analytic
+    with mom.buf.map_to_host() as h:
+        for k in range(mom.total_nodes):
+            var d = h[k * VLASOV_MOMENT_NC + MOM_FLUX_X] - j_analytic
             var ad = d if d >= 0.0 else -d
             if ad > worst:
                 worst = ad
@@ -73,20 +74,20 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx,
-        X_MIN, X_MAX, V_MIN, V_MAX,
-        num_x=NX, num_v=NV,
-        periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[X_MIN, V_MIN], hi=[X_MAX, V_MAX], n=[NX, NV],
+        periodic=[True],
     )
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    var moments = VlasovMoments1D1V[P_X, P_V]()
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
+    var moments = VlasovMoments[1, 1, P_X, P_V](ctx, mesh)
 
     var sigma = sqrt(SIGMA_SQ)
 
     # --- (a) symmetric Maxwellian: J = 0 exactly ---
     fill_shifted_maxwellian(q, mesh, Real(0.0))
-    var err_sym = first_moment_max_err(ctx, moments, mesh, q, Real(0.0))
+    var err_sym = flux_x_max_err(ctx, moments, mesh, q, Real(0.0))
     print("first-moment 1D1V (u=0): max |J - 0| =", err_sym)
     assert_true(err_sym < Real(1.0e-15), "symmetric J should be machine zero")
 
@@ -105,7 +106,7 @@ def main() raises:
         erf(dvmax_lo / sigma) + erf(dvmax_hi / sigma)
     )
     var j_analytic = u_shift * bulk - tail_correction
-    var err_shift = first_moment_max_err(ctx, moments, mesh, q, j_analytic)
+    var err_shift = flux_x_max_err(ctx, moments, mesh, q, j_analytic)
     print(
         "first-moment 1D1V (u=", u_shift, "): J_analytic =", j_analytic,
         "max |err| =", err_shift,

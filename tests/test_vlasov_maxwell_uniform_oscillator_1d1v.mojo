@@ -62,7 +62,9 @@ comptime T_FINAL: Real = 2.0 * PI
 comptime STEPS_PER_QUARTER: Int = 80
 comptime DT: Real = T_FINAL / Real(4 * STEPS_PER_QUARTER)
 comptime E0: Real = 0.01  # initial uniform field perturbation
+comptime Phase = PhaseState[1, 1, P_X, P_V, VLASOV_NC]
 comptime MaxwellState = DGState[1, P_X, MAXWELL_NC]
+comptime MomentState = DGState[1, P_X, VLASOV_MOMENT_NC]
 
 
 def main() raises:
@@ -72,18 +74,19 @@ def main() raises:
     # --- meshes ---
     # The phase mesh's x-axis and the Maxwell mesh must align (same NX,
     # same domain, same periodicity) so the aux buffer indexes match.
-    var phase_mesh = PhaseMesh1D1V[P_X, P_V](
+    var phase_mesh = PhaseMesh[1, 1, P_X, P_V](
         ctx,
-        Real(0.0), Real(1.0), Real(-3.0), Real(3.0),
-        num_x=NX, num_v=NV,
-        periodic_x=True,
+        lo=[Real(0.0), Real(-3.0)],
+        hi=[Real(1.0), Real(3.0)],
+        n=[NX, NV],
+        periodic=[True],
     )
     var x_mesh = BlockMesh[1, P_X](
         ctx, Real(0.0), Real(1.0), NX, periodic=True,
     )
 
     # --- state ---
-    var q_phase = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
+    var q_phase = Phase(ctx, phase_mesh.num_phase_elements)
     var q_maxwell = MaxwellState(ctx, NX)
 
     # IC: f₀(v) = exp(-v²/σ²) / (σ√π) — normalised so ∫ f dv ≈ 1.
@@ -108,29 +111,32 @@ def main() raises:
         cfl_max=Real(0.5),
     )
     var maxwell_app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
-    var spatial_vlasov = DGVlasovSolver1D1V[P_X, P_V](vlasov_app)
+    var spatial_vlasov = DGVlasovSolver[1, 1, P_X, P_V](vlasov_app)
     var spatial_maxwell = DGMaxwellSolver[1, P_X](maxwell_app)
-    var moments = VlasovMoments1D1V[P_X, P_V]()
-    var stepper = SSPRK3_VlasovMaxwell_1D1V[P_X, P_V](ctx, NX, NV)
+    var moments = VlasovMoments[1, 1, P_X, P_V](ctx, phase_mesh)
+    var stepper = SSPRK3VlasovMaxwell[1, 1, P_X, P_V](
+        ctx, phase_mesh.num_phase_elements, phase_mesh.num_x_elements,
+    )
 
-    # Scratch buffer for the species current at each RHS evaluation.
-    var j_current = DGState[1, P_X, 1](ctx, NX)
+    # Scratch state for the velocity moments at each RHS evaluation; the
+    # species current is its `MOM_FLUX_X` component.
+    var mom = MomentState(ctx, NX)
 
     def compute_joint_rhs(
-        mut qp_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+        mut qp_in: Phase,
         mut qm_in: MaxwellState,
-        mut qp_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+        mut qp_out: Phase,
         mut qm_out: MaxwellState,
-    ) raises {mut j_current, imm}:
+    ) raises {mut mom, imm}:
         # Vlasov reads E_x from qm_in (the Maxwell aux at this stage).
         spatial_vlasov.compute_rhs(ctx, phase_mesh, qp_in, qm_in, qp_out)
         # Maxwell's spatial RHS (purely from its own state).
         spatial_maxwell.compute_rhs(ctx, x_mesh, qm_in, qm_out)
         # Species current density `J = ∫ v f dv`.
-        moments.first_moment(ctx, phase_mesh, qp_in, j_current)
+        moments.compute(ctx, phase_mesh, qp_in, mom)
         # Add `-α/ε₀ · J` to `qm_out.E_x`. Closes the two-way coupling.
-        apply_vlasov_current_source_1d[P_X](
-            ctx, j_current, qm_out, CHARGE_MASS_RATIO, EPS0,
+        apply_vlasov_current_source[1, 1, P_X](
+            ctx, mom, qm_out, CHARGE_MASS_RATIO, EPS0,
         )
 
     # --- time loop: one full plasma period, sampled every quarter ---
@@ -145,7 +151,7 @@ def main() raises:
         for _ in range(STEPS_PER_QUARTER):
             stepper.step(ctx, q_phase, q_maxwell, DT, compute_joint_rhs)
             t += DT
-        moments.first_moment(ctx, phase_mesh, q_phase, j_current)
+        moments.compute(ctx, phase_mesh, q_phase, mom)
         ctx.synchronize()
         var e_node0: Real
         with q_maxwell.buf.map_to_host() as h:
@@ -157,11 +163,15 @@ def main() raises:
             max_x_spread = fmax(max_x_spread, abs(v[IDX_EX] - e_node0))
         x_mesh.visit_nodes(q_maxwell, check_e)
         var j_node0: Real
-        with j_current.buf.map_to_host() as hj:
-            j_node0 = hj[0]
-        def check_j(x: Real, w: Real, v: Array[Real, 1]) {mut max_j_err, imm}:
-            max_j_err = fmax(max_j_err, abs(v[0] - E0 * j_exact[quarter]))
-        x_mesh.visit_nodes(j_current, check_j)
+        with mom.buf.map_to_host() as hj:
+            j_node0 = hj[MomentState.index(0, 0, MOM_FLUX_X)]
+        def check_j(
+            x: Real, w: Real, v: Array[Real, VLASOV_MOMENT_NC],
+        ) {mut max_j_err, imm}:
+            max_j_err = fmax(
+                max_j_err, abs(v[MOM_FLUX_X] - E0 * j_exact[quarter]),
+            )
+        x_mesh.visit_nodes(mom, check_j)
         print(
             "  t =", t, " E_x/E0 =", e_node0 / E0, " J/E0 =", j_node0 / E0,
         )

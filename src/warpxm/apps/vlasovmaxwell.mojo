@@ -6,11 +6,9 @@
 # through the Lorentz acceleration `a = (q/m) (E + v × B) / λ_skin` when
 # building the velocity-direction internal flux.
 #
-# In 1D1V (one physical dim, one velocity dim) the Lorentz formula
-# collapses: `v_y = v_z = 0`, so the velocity-direction field component
-# is simply `(q/m)/λ_skin · E_x`. The magnetic field drops out entirely.
-# 2D2V / 3D3V ports will need the full `E + v × B` expression and
-# additional internal-flux methods along the extra velocity axes.
+# `lorentz_acceleration_static[VDIM, axis]` gives that acceleration for
+# one, two or three velocity dimensions; the terms of absent velocity
+# components drop out at compile time (in 1V only `E_x` is left).
 #
 # Conserving the upstream parameter names:
 #   * `charge_mass_ratio`  (q / m)
@@ -19,7 +17,7 @@
 from std.collections import Array
 
 from warpxm.core.math_compat import fabs
-from warpxm.core.types import Real, WXM_INF, WXM_TINY
+from warpxm.core.types import Real
 
 
 # Number of solution components on the Vlasov side: just `f`.
@@ -78,8 +76,7 @@ struct VlasovMaxwell(ImplicitlyCopyable, Movable):
 
     # ------------------------------------------------------------------
     # Per-node helpers. Mirror upstream's
-    # `vlasovmaxwell_calculate_field_component` collapsed to 1D1V (where
-    # v_y = v_z = 0 and only E_x contributes to the v-axis acceleration).
+    # `vlasovmaxwell_calculate_field_component`.
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -87,41 +84,6 @@ struct VlasovMaxwell(ImplicitlyCopyable, Movable):
         """Scalar coefficient `(q/m) / λ_skin` that multiplies the
         Lorentz `(E + v × B)` field when forming the v-axis flux."""
         return charge_mass_ratio / skin_depth_norm
-
-    @staticmethod
-    def acceleration_v_1d1v_static(
-        ex: Real, charge_mass_ratio: Real, skin_depth_norm: Real,
-    ) -> Real:
-        """1D1V Lorentz acceleration along the single v-axis:
-        `a_v = (q/m)/λ_skin · E_x`. `v × B` vanishes because the only
-        velocity component is `v_x` and it crosses with no other axis."""
-        return (charge_mass_ratio / skin_depth_norm) * ex
-
-    @staticmethod
-    def acceleration_v1_1d2v_static(
-        ex: Real, bz: Real, v2: Real,
-        charge_mass_ratio: Real, skin_depth_norm: Real,
-    ) -> Real:
-        """1D2V Lorentz acceleration along `v1` (= `v_x`):
-        `a_v1 = (q/m)/λ_skin · (E_x + v2·B_z)`.
-
-        Derivation: with `B = (0, 0, B_z)` and `v = (v1, v2, 0)`,
-        `(v × B)_x = v2·B_z`. The `v3·B_y` term that would also appear in
-        a full 3V solver collapses because `v3 = 0` in 1D2V."""
-        return (charge_mass_ratio / skin_depth_norm) * (ex + v2 * bz)
-
-    @staticmethod
-    def acceleration_v2_1d2v_static(
-        ey: Real, bz: Real, v1: Real,
-        charge_mass_ratio: Real, skin_depth_norm: Real,
-    ) -> Real:
-        """1D2V Lorentz acceleration along `v2` (= `v_y`):
-        `a_v2 = (q/m)/λ_skin · (E_y − v1·B_z)`.
-
-        Derivation: `(v × B)_y = -v1·B_z` with the same `(B, v)` from
-        `acceleration_v1_1d2v_static`. Together with `a_v1`, this is the
-        full gyration-driving piece of the 1D2V Lorentz force."""
-        return (charge_mass_ratio / skin_depth_norm) * (ey - v1 * bz)
 
     @staticmethod
     @always_inline
@@ -136,9 +98,7 @@ struct VlasovMaxwell(ImplicitlyCopyable, Movable):
         (q/m) / λ_skin`. Velocity components at or beyond `VDIM` are zero
         and their terms are left out at compile time (a run-time
         `0.0 * B` is not folded away), so the `v` arguments for those
-        components are ignored. With `VDIM = 1` this is
-        `acceleration_v_1d1v_static`; with `VDIM = 2` the two 1D2V
-        accelerations.
+        components are ignored.
 
         The result never depends on the velocity component along `axis`
         itself, which is what makes the acceleration single-valued on a
@@ -187,35 +147,17 @@ struct VlasovMaxwell(ImplicitlyCopyable, Movable):
     ) -> Array[Real, NC]:
         """Velocity-axis flux: `a_v · f` per component. `av` is the
         Lorentz acceleration along the v-axis at the current phase
-        node — e.g. `acceleration_v_1d1v_static(Ex, q/m, λ)`."""
+        node."""
         var out = Array[Real, NC](fill=Real(0.0))
         comptime for c in range(NC):
             out[c] = av * f[c]
         return out^
 
-    @staticmethod
-    def internal_flux_v1_static[NC: Int](
-        f: Array[Real, NC], av1: Real,
-    ) -> Array[Real, NC]:
-        """1D2V v1-axis flux: `a_v1 · f` per component. Thin alias over
-        `internal_flux_v_static`; named separately so the 1D2V DG
-        kernel's call site reads symmetrically with `internal_flux_x_static`
-        and `internal_flux_v2_static`."""
-        return Self.internal_flux_v_static[NC](f, av1)
-
-    @staticmethod
-    def internal_flux_v2_static[NC: Int](
-        f: Array[Real, NC], av2: Real,
-    ) -> Array[Real, NC]:
-        """1D2V v2-axis flux: `a_v2 · f` per component. Counterpart to
-        `internal_flux_v1_static`."""
-        return Self.internal_flux_v_static[NC](f, av2)
-
     # ------------------------------------------------------------------
     # Numerical flux: upwind on the (face-local) signal speed. For
     # `F = c · f`, the upwind flux is
     #     F* = 0.5 (c · f_L + c · f_R) + 0.5 |c| (f_L − f_R).
-    # In 1D1V the wave speed for an x-axis face is the local v-coordinate;
+    # The wave speed for a configuration face is the local v-coordinate;
     # for a v-axis face it is the local Lorentz acceleration. The caller
     # passes whichever applies via `wave_speed`.
     # ------------------------------------------------------------------
@@ -236,19 +178,3 @@ struct VlasovMaxwell(ImplicitlyCopyable, Movable):
                 wave_speed * (f_l[c] + f_r[c]) + abs_c * (f_l[c] - f_r[c])
             )
         return out^
-
-    # ------------------------------------------------------------------
-    # CFL helper. Mirrors upstream's combined-bound formula in
-    # `vlasovmaxwell_internal_flux`: dt_max = cfl / Σ |c_d| / Δ_d, where
-    # the sum is over all phase-space directions.
-    # ------------------------------------------------------------------
-
-    def dt_max_1d1v(self, vx: Real, av: Real, dx: Real, dv: Real) -> Real:
-        """Per-node CFL bound on `dt`. Caller passes the local
-        v-coordinate (`vx`) and local Lorentz acceleration (`av`)
-        together with mesh widths. Returns `WXM_INF` if both speeds
-        underflow `WXM_TINY`."""
-        var s = fabs(vx) / dx + fabs(av) / dv
-        if s < WXM_TINY:
-            return WXM_INF
-        return self.cfl_max / s

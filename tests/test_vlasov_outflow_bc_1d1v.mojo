@@ -1,8 +1,7 @@
 # 1D1V Vlasov v-axis outflow BC test.
 #
-# Stress-test the `BC_VLASOV_OUTFLOW` boundary condition added in this
-# slice (replacing the previous `BC_COPYOUT` fallback at v-axis
-# boundaries). Setup:
+# Stress-test the zero-ghost (`BC_VLASOV_OUTFLOW`) condition that
+# `DGVlasovSolver` applies at every velocity boundary. Setup:
 #
 #   * IC: a Maxwellian centred at `v = 2.0`, so the right tail
 #     `f(v_max = 3) ≈ exp(-2) ≈ 0.135` is non-negligible.
@@ -22,8 +21,8 @@
 # (characteristics enter the domain from `v > v_max`). The correct
 # BC says "outside is empty, no inflow", giving `F* = a_v · 0 = 0`.
 #
-# Under the old `BC_COPYOUT` (ghost = interior), the upwind would
-# have computed `F* = a_v · f_interior(v_max) ≈ −0.0675` at t = 0,
+# With a copy-out ghost (ghost = interior) the upwind flux would
+# be `F* = a_v · f_interior(v_max) ≈ −0.0675` at t = 0,
 # **adding spurious mass to the interior** at rate
 # `|F*| · L_x ≈ 0.0675` per unit time. Over T = 2 with a Maxwellian
 # `f(v_max) ≈ 0.135` decaying as the centre drifts down, that
@@ -57,8 +56,8 @@ comptime DT: Real = 5.0e-3
 
 
 def compute_total_mass(
-    mesh: PhaseMesh1D1V[P_X, P_V],
-    mut q: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+    mesh: PhaseMesh[1, 1, P_X, P_V],
+    mut q: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
 ) raises -> Real:
     var acc: Real = 0.0
     def add(x: Real, v: Real, w: Real, f: Real) {mut acc}:
@@ -71,13 +70,15 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
 
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx, Real(0.0), Real(1.0), Real(-3.0), Real(3.0),
-        num_x=NX, num_v=NV, periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[0.0, -3.0], hi=[1.0, 3.0], n=[NX, NV],
+        periodic=[True],
     )
 
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    var aux = DGState[1, P_X, VLASOV_AUX_NC](ctx, NX)
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
+    var aux = DGState[1, P_X, VLASOV_AUX_NC](ctx, mesh.num_x_elements)
 
     # IC: f₀(v) = exp(-(v - U_CENTER)² / σ²) — Maxwellian near v_max,
     # x-independent.
@@ -109,23 +110,25 @@ def main() raises:
         skin_depth_norm=Real(1.0),
         cfl_max=Real(0.5),
     )
-    var spatial = DGVlasovSolver1D1V[P_X, P_V](app)
-    var stepper = SSPRK3_1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
+    var spatial = DGVlasovSolver[1, 1, P_X, P_V](app)
+    var stepper = SSPRK3Phase[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     def compute_rhs(
-        mut q_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut q_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+        mut q_in: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
+        mut q_out: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
     ) raises {mut aux, imm}:
         spatial.compute_rhs(ctx, mesh, q_in, aux, q_out)
-
-    def no_adjust(mut _q: PhaseState1D1V[P_X, P_V, VLASOV_NC]) raises {imm}:
-        pass
 
     var t: Real = 0.0
     var nsteps: Int = 0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
+        stepper.step(
+            ctx, q, dt_use, compute_rhs,
+            no_op_adjust_phase[1, 1, P_X, P_V, VLASOV_NC],
+        )
         t += dt_use
         nsteps += 1
     ctx.synchronize()
@@ -141,12 +144,12 @@ def main() raises:
         " |ΔM|/M0 =", rel_dM,
     )
 
-    # Mass must be conserved to machine precision: with the new
-    # outflow BC, no spurious inflow at v_max even though
+    # Mass must be conserved to machine precision: with the zero ghost
+    # state there is no spurious inflow at v_max even though
     # `f(v_max) ≈ 0.135` is substantial and the wave at that face is
-    # inflow-directed. Under the old copyout BC this same simulation
+    # inflow-directed. With a copy-out ghost this same simulation
     # would have grown the mass by a few percent.
-    # Measured 2.9e-15.
+    # Measured 2.0e-15.
     assert_true(rel_dM < Real(1.0e-13), "outflow BC didn't conserve mass")
 
     print("PASSED")

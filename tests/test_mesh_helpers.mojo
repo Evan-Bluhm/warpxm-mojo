@@ -21,6 +21,7 @@ from std.sys import has_accelerator
 from std.testing import assert_true
 from max.gpu.host import DeviceContext
 
+from warpxm.basis.nodal_basis_1d import NodalBasis1D
 from warpxm.prelude import *
 from warpxm.physics.vlasov import *
 
@@ -178,34 +179,37 @@ def _test_3d[P: Int](var ctx: DeviceContext) raises:
 def _test_phase_1d1v(var ctx: DeviceContext) raises:
     comptime PX = 2
     comptime PV = 3
-    var mesh = PhaseMesh1D1V[PX, PV](
-        ctx, Real(0.0), Real(2.0), Real(-3.0), Real(1.0),
-        num_x=3, num_v=5, periodic_x=True,
+    var mesh = PhaseMesh[1, 1, PX, PV](
+        ctx, lo=[0.0, -3.0], hi=[2.0, 1.0], n=[3, 5], periodic=[True],
     )
-    var f = PhaseState1D1V[PX, PV, VLASOV_NC](ctx, 3, 5)
+    var f = PhaseState[1, 1, PX, PV, VLASOV_NC](ctx, mesh.num_phase_elements)
     def ic(x: Real, v: Real) -> Real:
         return x + Real(10.0) * v
     mesh.fill(f, ic)
 
-    # Against the mesh's 1D coordinate buffers and the documented layout
-    # ((ex·Nv + ev)·(P_v+1) + iv)·(P_x+1) + ix.
+    # Against node coordinates built here from the GLL nodes, and the
+    # documented layout: element (ex·Nv + ev), node iv·(P_x+1) + ix.
+    var ref_x = NodalBasis1D[PX].nodes()
+    var ref_v = NodalBasis1D[PV].nodes()
     var worst: Real = 0.0
-    with mesh.node_x_buf.map_to_host() as xs:
-        with mesh.node_v_buf.map_to_host() as vs:
-            with f.buf.map_to_host() as h:
-                for ex in range(3):
-                    for ev in range(5):
-                        for iv in range(PV + 1):
-                            for ix in range(PX + 1):
-                                var idx = (
-                                    ((ex * 5 + ev) * (PV + 1) + iv) * (PX + 1) + ix
-                                )
-                                var want = (
-                                    xs[ex * (PX + 1) + ix]
-                                    + Real(10.0) * vs[ev * (PV + 1) + iv]
-                                )
-                                worst = fmax(worst, fabs(h[idx] - want))
-    assert_true(worst < TOL, "1D1V fill does not match the mesh node coordinates")
+    with f.buf.map_to_host() as h:
+        for ex in range(3):
+            for ev in range(5):
+                for iv in range(PV + 1):
+                    for ix in range(PX + 1):
+                        var x = mesh.lo[0] + mesh.dx[0] * (
+                            Real(ex) + Real(0.5) * (ref_x[ix] + Real(1.0))
+                        )
+                        var v = mesh.lo[1] + mesh.dx[1] * (
+                            Real(ev) + Real(0.5) * (ref_v[iv] + Real(1.0))
+                        )
+                        var idx = PhaseState[1, 1, PX, PV, VLASOV_NC].index(
+                            ex * 5 + ev, iv * (PX + 1) + ix, 0,
+                        )
+                        worst = fmax(
+                            worst, fabs(h[idx] - (x + Real(10.0) * v)),
+                        )
+    assert_true(worst < TOL, "1D1V fill does not match the node coordinates")
 
     var total: Real = 0.0
     var wsum: Real = 0.0
@@ -218,43 +222,52 @@ def _test_phase_1d1v(var ctx: DeviceContext) raises:
     _close(wsum, Real(8.0), "1D1V quadrature weights")
     # ∫∫ x = 2·4, ∫∫ v = 2·(−4).
     _close(total, Real(8.0) - Real(80.0), "1D1V ∫∫ f")
+    _close(mesh.integrate(f), Real(8.0) - Real(80.0), "1D1V integrate")
     assert_true(bad < TOL, "1D1V visit_nodes coordinates disagree with fill")
 
 
 def _test_phase_1d2v(var ctx: DeviceContext) raises:
     comptime PX = 1
-    comptime PV1 = 2
-    comptime PV2 = 3
-    var mesh = PhaseMesh1D2V[PX, PV1, PV2](
-        ctx, Real(0.0), Real(2.0), Real(-1.0), Real(1.0), Real(0.0), Real(3.0),
-        num_x=3, num_v1=2, num_v2=4, periodic_x=True,
+    comptime PV = 2
+    comptime State = PhaseState[1, 2, PX, PV, VLASOV_NC]
+    var mesh = PhaseMesh[1, 2, PX, PV](
+        ctx, lo=[0.0, -1.0, 0.0], hi=[2.0, 1.0, 3.0], n=[3, 2, 4],
+        periodic=[True],
     )
-    var f = PhaseState1D2V[PX, PV1, PV2, VLASOV_NC](ctx, 3, 2, 4)
+    var f = State(ctx, mesh.num_phase_elements)
     def ic(x: Real, v1: Real, v2: Real) -> Real:
         return x + Real(10.0) * v1 + Real(100.0) * v2
     mesh.fill(f, ic)
 
+    var ref_x = NodalBasis1D[PX].nodes()
+    var ref_v = NodalBasis1D[PV].nodes()
     var worst: Real = 0.0
-    comptime NPE = (PX + 1) * (PV1 + 1) * (PV2 + 1)
-    with mesh.node_x_buf.map_to_host() as xs:
-        with mesh.node_v1_buf.map_to_host() as v1s:
-            with mesh.node_v2_buf.map_to_host() as v2s:
-                with f.buf.map_to_host() as h:
-                    for ex in range(3):
-                        for ev1 in range(2):
-                            for ev2 in range(4):
-                                var pe = (ex * 2 + ev1) * 4 + ev2
-                                for iv2 in range(PV2 + 1):
-                                    for iv1 in range(PV1 + 1):
-                                        for ix in range(PX + 1):
-                                            var n = (iv2 * (PV1 + 1) + iv1) * (PX + 1) + ix
-                                            var want = (
-                                                xs[ex * (PX + 1) + ix]
-                                                + Real(10.0) * v1s[ev1 * (PV1 + 1) + iv1]
-                                                + Real(100.0) * v2s[ev2 * (PV2 + 1) + iv2]
-                                            )
-                                            worst = fmax(worst, fabs(h[pe * NPE + n] - want))
-    assert_true(worst < Real(100.0) * TOL, "1D2V fill does not match the mesh node coordinates")
+    with f.buf.map_to_host() as h:
+        for ex in range(3):
+            for ev1 in range(2):
+                for ev2 in range(4):
+                    var pe = (ex * 2 + ev1) * 4 + ev2
+                    for iv2 in range(PV + 1):
+                        for iv1 in range(PV + 1):
+                            for ix in range(PX + 1):
+                                var node = (iv2 * (PV + 1) + iv1) * (PX + 1) + ix
+                                var x = mesh.lo[0] + mesh.dx[0] * (
+                                    Real(ex) + Real(0.5) * (ref_x[ix] + Real(1.0))
+                                )
+                                var v1 = mesh.lo[1] + mesh.dx[1] * (
+                                    Real(ev1) + Real(0.5) * (ref_v[iv1] + Real(1.0))
+                                )
+                                var v2 = mesh.lo[2] + mesh.dx[2] * (
+                                    Real(ev2) + Real(0.5) * (ref_v[iv2] + Real(1.0))
+                                )
+                                var want = x + Real(10.0) * v1 + Real(100.0) * v2
+                                worst = fmax(
+                                    worst,
+                                    fabs(h[State.index(pe, node, 0)] - want),
+                                )
+    assert_true(
+        worst < Real(100.0) * TOL, "1D2V fill does not match the node coordinates",
+    )
 
     var total: Real = 0.0
     var wsum: Real = 0.0

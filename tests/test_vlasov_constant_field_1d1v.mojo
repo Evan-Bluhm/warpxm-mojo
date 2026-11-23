@@ -7,7 +7,7 @@
 # so
 #     f(x, v, t) = f₀(v - a_v t)     ∀ x.
 #
-# This test exercises the new Maxwell aux coupling on the kernel by
+# This test exercises the field coupling of `DGVlasovSolver[1, 1, …]` by
 # checking that the numerical solution recovers a uniformly v-shifted
 # Maxwellian. The x-direction term should contribute zero (f is
 # x-independent and stays x-independent), which validates that the
@@ -44,6 +44,10 @@ comptime T_FINAL: Real = 2.0
 comptime DT: Real = 5.0e-3
 
 
+comptime State = PhaseState[1, 1, P_X, P_V, VLASOV_NC]
+comptime Fields = DGState[1, P_X, VLASOV_AUX_NC]
+
+
 @always_inline
 def f_maxwellian(v: Real) -> Real:
     """Un-normalised Maxwellian in v."""
@@ -54,15 +58,15 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
 
     var ctx = DeviceContext()
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx,
-        X_MIN, X_MAX, V_MIN, V_MAX,
-        num_x=NX, num_v=NV,
-        periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[X_MIN, V_MIN], hi=[X_MAX, V_MAX], n=[NX, NV],
+        periodic=[True],
     )
 
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    var aux = DGState[1, P_X, VLASOV_AUX_NC](ctx, NX)
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
+    var aux = Fields(ctx, mesh.num_x_elements)
 
     # --- IC: f₀(x, v) = exp(-v²/σ²) — x-independent Maxwellian ---
     def initial(x: Real, v: Real) -> Real:
@@ -75,8 +79,7 @@ def main() raises:
         aux_host[k] = Real(0.0)
     for ex in range(NX):
         for ix in range(P_X + 1):
-            var node_x = ex * (P_X + 1) + ix
-            aux_host[node_x * VLASOV_AUX_NC + AUX_EX] = E0
+            aux_host[Fields.index(ex, ix, AUX_EX)] = E0
     ctx.enqueue_copy(dst_buf=aux.buf, src_buf=aux_host)
     ctx.synchronize()
 
@@ -86,24 +89,26 @@ def main() raises:
         skin_depth_norm=SKIN_DEPTH_NORM,
         cfl_max=Real(0.5),
     )
-    var spatial = DGVlasovSolver1D1V[P_X, P_V](app)
-    var stepper = SSPRK3_1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
+    var spatial = DGVlasovSolver[1, 1, P_X, P_V](app)
+    var stepper = SSPRK3Phase[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
 
     def compute_rhs(
-        mut q_in: PhaseState1D1V[P_X, P_V, VLASOV_NC],
-        mut q_out: PhaseState1D1V[P_X, P_V, VLASOV_NC],
+        mut q_in: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
+        mut q_out: PhaseState[1, 1, P_X, P_V, VLASOV_NC],
     ) raises {mut aux, imm}:
         spatial.compute_rhs(ctx, mesh, q_in, aux, q_out)
-
-    def no_adjust(mut q_: PhaseState1D1V[P_X, P_V, VLASOV_NC]) raises {imm}:
-        pass
 
     # --- time loop ---
     var t: Real = 0.0
     var nsteps: Int = 0
     while t < T_FINAL - Real(0.5) * DT:
         var dt_use = DT if (t + DT) < T_FINAL else (T_FINAL - t)
-        stepper.step(ctx, q, dt_use, compute_rhs, no_adjust)
+        stepper.step(
+            ctx, q, dt_use, compute_rhs,
+            no_op_adjust_phase[1, 1, P_X, P_V, VLASOV_NC],
+        )
         t += dt_use
         nsteps += 1
     ctx.synchronize()
@@ -127,12 +132,12 @@ def main() raises:
     with q.buf.map_to_host() as h:
         for ev in range(NV):
             for iv in range(P_V + 1):
-                var f_ref = h[((ev * (P_V + 1) + iv) * (P_X + 1)) * VLASOV_NC]
+                var f_ref = h[State.index(ev, iv * (P_X + 1), 0)]
                 for ex in range(NX):
                     for ix in range(P_X + 1):
-                        var idx = (
-                            ((ex * NV + ev) * (P_V + 1) + iv) * (P_X + 1) + ix
-                        ) * VLASOV_NC
+                        var idx = State.index(
+                            ex * NV + ev, iv * (P_X + 1) + ix, 0,
+                        )
                         max_x_variation = fmax(
                             max_x_variation, fabs(h[idx] - f_ref),
                         )

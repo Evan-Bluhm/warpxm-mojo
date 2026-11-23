@@ -12,9 +12,6 @@
 #                   (first axis innermost; s_a is the node count of the
 #                   axes before a)
 #   buffer          buf[(e · nodes_per_elem + n) · NC + c]
-#
-# For XDIM = 1 this is exactly the layout of `PhaseState1D1V` and
-# `PhaseState1D2V`.
 
 from max.gpu.host import DeviceBuffer, DeviceContext
 from warpxm.core.types import Real

@@ -3,11 +3,11 @@
 # Build a uniform 5-moment Euler state with prescribed (ρ, u_x, T):
 #   ρ = 1.0, u_x = 0.0, T = 0.5  ⇒  e = ½ρu² + p/(γ−1) = T/(γ−1)
 #                                         = 0.5/(2/3) = 0.75   (γ = 5/3)
-# Apply `apply_5moment_to_kinetic_1d1v` to populate the phase state
-# with a Maxwellian, then verify via the three Vlasov moment kernels
-# that the kinetic state recovers:
-#   * n  = ρ/m       (zeroth moment matches ρ when m=1)
-#   * J  = ρu_x/m    (first moment matches ρu_x when m=1)
+# Apply `apply_5moment_to_kinetic[1, 1, P_x, P_v]` to populate the phase
+# state with a Maxwellian, then verify via `VlasovMoments` that the
+# kinetic state recovers:
+#   * n  = ρ/m       (`MOM_DENSITY` matches ρ when m=1)
+#   * J  = ρu_x/m    (`MOM_FLUX_X` matches ρu_x when m=1)
 #   * ½∫v² f dv = ½·V_th²·n = T/2  (kinetic energy in one v-DoF,
 #                                     half of fluid's 3-DoF (3/2)·n·T)
 #
@@ -47,11 +47,9 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
 
-    var mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx,
-        Real(0.0), Real(1.0), V_MIN, V_MAX,
-        num_x=NX, num_v=NV,
-        periodic_x=True,
+    var mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx, lo=[0.0, V_MIN], hi=[1.0, V_MAX], n=[NX, NV],
+        periodic=[True],
     )
 
     # Build a uniform fluid IC.
@@ -69,25 +67,23 @@ def main() raises:
     ctx.synchronize()
 
     # Apply the 5moment→kinetic initialiser.
-    var q = PhaseState1D1V[P_X, P_V, VLASOV_NC](ctx, NX, NV)
-    apply_5moment_to_kinetic_1d1v[P_X, P_V](
+    var q = PhaseState[1, 1, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
+    )
+    apply_5moment_to_kinetic[1, 1, P_X, P_V](
         ctx, mesh, fluid, q, MASS, GAMMA,
     )
     ctx.synchronize()
 
-    # Verify via the three moment kernels — sample at every x-node.
-    var moments = VlasovMoments1D1V[P_X, P_V]()
-    var rho_k = DGState[1, P_X, 1](ctx, NX)
-    var j_k = DGState[1, P_X, 1](ctx, NX)
-    var e_k = DGState[1, P_X, 1](ctx, NX)
-    moments.zeroth_moment(ctx, mesh, q, rho_k)
-    moments.first_moment(ctx, mesh, q, j_k)
-    moments.second_moment(ctx, mesh, q, e_k)
+    # Verify via the velocity moments — sample at every x-node.
+    var moments = VlasovMoments[1, 1, P_X, P_V](ctx, mesh)
+    var mom = DGState[1, P_X, VLASOV_MOMENT_NC](ctx, mesh.num_x_elements)
+    moments.compute(ctx, mesh, q, mom)
     ctx.synchronize()
 
     var rho_expected = RHO_TARGET / MASS
     var j_expected = RHO_TARGET * UX_TARGET / MASS
-    # `e_k` is the kinetic-side `½ ∫ v² f dv`; for a centred Maxwellian
+    # `MOM_ENERGY` is the kinetic-side `½ ∫ v² f dv`; for a centred Maxwellian
     # with `V_th² = T/m` and n = ρ/m: `½·n·V_th² = ρT/(2m²)`.
     var e_expected = (
         Real(0.5) * (RHO_TARGET / MASS) * (T_TARGET / MASS)
@@ -96,24 +92,12 @@ def main() raises:
     var max_drho: Real = 0.0
     var max_dj: Real = 0.0
     var max_de: Real = 0.0
-    with rho_k.buf.map_to_host() as h:
-        for k in range(rho_k.buf_len):
-            var d = h[k] - rho_expected
-            var ad = d if d >= 0.0 else -d
-            if ad > max_drho:
-                max_drho = ad
-    with j_k.buf.map_to_host() as h:
-        for k in range(j_k.buf_len):
-            var d = h[k] - j_expected
-            var ad = d if d >= 0.0 else -d
-            if ad > max_dj:
-                max_dj = ad
-    with e_k.buf.map_to_host() as h:
-        for k in range(e_k.buf_len):
-            var d = h[k] - e_expected
-            var ad = d if d >= 0.0 else -d
-            if ad > max_de:
-                max_de = ad
+    with mom.buf.map_to_host() as h:
+        for k in range(mom.total_nodes):
+            var base = k * VLASOV_MOMENT_NC
+            max_drho = fmax(max_drho, fabs(h[base + MOM_DENSITY] - rho_expected))
+            max_dj = fmax(max_dj, fabs(h[base + MOM_FLUX_X] - j_expected))
+            max_de = fmax(max_de, fabs(h[base + MOM_ENERGY] - e_expected))
 
     print(
         "5moment→kinetic: rho_expected =", rho_expected,

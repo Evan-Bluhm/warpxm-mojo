@@ -135,7 +135,7 @@ struct NodalBasis1D[P: Int](Copyable, Movable):
     # Mojo 1.2.0 miscompiles (at -O1 and above) host code where an `Array`
     # returned by an *inlined* function is read in a loop after a
     # `ctx.enqueue_copy(...)` earlier in the same function: the table reads
-    # back as uninitialised memory. PhaseMesh1D1V / 1D2V hit exactly that
+    # back as uninitialised memory. The phase-mesh constructors hit exactly that
     # (seven Vlasov tests failed with wrong velocity-node coordinates).
     # Drop the decorator once the compiler bug is fixed and
     # `tests/test_vlasov_scaffolding_1d1v.mojo` still passes without it.

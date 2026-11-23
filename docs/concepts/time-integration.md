@@ -175,5 +175,4 @@ Single fluid + Maxwell      → SSPRK3_TwoFluid[NDIM, P]
 
 Kinetic (Vlasov, Vlasov-Maxwell)
     → SSPRK3Phase[XDIM, VDIM, ...], SSPRK3VlasovMaxwell[XDIM, VDIM, ...]
-      (originals: SSPRK3_1D1V / _1D2V, SSPRK3_VlasovMaxwell_1D1V / _1D2V)
 ```

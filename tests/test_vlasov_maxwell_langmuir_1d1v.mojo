@@ -68,14 +68,14 @@ comptime EPS0: Real = 1.0
 comptime C_LIGHT: Real = 1.0
 comptime T_FINAL: Real = 1.0
 comptime EPS: Real = 0.01  # amplitude of the E_x perturbation
-comptime PhaseState = PhaseState1D1V[P_X, P_V, VLASOV_NC]
+comptime Phase = PhaseState[1, 1, P_X, P_V, VLASOV_NC]
 comptime MaxwellState = DGState[1, P_X, MAXWELL_NC]
 
 
 def compute_total_energy(
-    phase_mesh: PhaseMesh1D1V[P_X, P_V],
+    phase_mesh: PhaseMesh[1, 1, P_X, P_V],
     x_mesh: BlockMesh[1, P_X],
-    mut q_phase: PhaseState,
+    mut q_phase: Phase,
     mut q_maxwell: MaxwellState,
 ) raises -> Tuple[Real, Real]:
     """(W_E, W_K) = (½ ∫ E_x² dx, ½ ∫∫ v² f dv dx) via GLL quadrature."""
@@ -91,7 +91,7 @@ def compute_total_energy(
 
 
 def compute_total_mass(
-    phase_mesh: PhaseMesh1D1V[P_X, P_V], mut q_phase: PhaseState,
+    phase_mesh: PhaseMesh[1, 1, P_X, P_V], mut q_phase: Phase,
 ) raises -> Real:
     """M = ∫∫ f dv dx."""
     var acc: Real = 0.0
@@ -105,15 +105,18 @@ def main() raises:
     comptime assert has_accelerator(), "Requires GPU"
     var ctx = DeviceContext()
 
-    var phase_mesh = PhaseMesh1D1V[P_X, P_V](
-        ctx, Real(0.0), Real(1.0), Real(-3.0), Real(3.0),
-        num_x=NX, num_v=NV, periodic_x=True,
+    var phase_mesh = PhaseMesh[1, 1, P_X, P_V](
+        ctx,
+        lo=[Real(0.0), Real(-3.0)],
+        hi=[Real(1.0), Real(3.0)],
+        n=[NX, NV],
+        periodic=[True],
     )
     var x_mesh = BlockMesh[1, P_X](
         ctx, Real(0.0), Real(1.0), NX, periodic=True,
     )
 
-    var q_phase = PhaseState(ctx, NX, NV)
+    var q_phase = Phase(ctx, phase_mesh.num_phase_elements)
     var q_maxwell = MaxwellState(ctx, NX)
 
     # IC: f₀(v) = exp(-v²/σ²) / (σ√π) — x-independent, ∫f dv ≈ 1.
@@ -143,23 +146,25 @@ def main() raises:
         cfl_max=Real(0.5),
     )
     var maxwell_app = Maxwell(c_light=C_LIGHT, cfl_max=Real(0.5))
-    var spatial_vlasov = DGVlasovSolver1D1V[P_X, P_V](vlasov_app)
+    var spatial_vlasov = DGVlasovSolver[1, 1, P_X, P_V](vlasov_app)
     var spatial_maxwell = DGMaxwellSolver[1, P_X](maxwell_app)
-    var moments = VlasovMoments1D1V[P_X, P_V]()
-    var stepper = SSPRK3_VlasovMaxwell_1D1V[P_X, P_V](ctx, NX, NV)
-    var j_current = DGState[1, P_X, 1](ctx, NX)
+    var moments = VlasovMoments[1, 1, P_X, P_V](ctx, phase_mesh)
+    var stepper = SSPRK3VlasovMaxwell[1, 1, P_X, P_V](
+        ctx, phase_mesh.num_phase_elements, phase_mesh.num_x_elements,
+    )
+    var mom = DGState[1, P_X, VLASOV_MOMENT_NC](ctx, NX)
 
     def compute_joint_rhs(
-        mut qp_in: PhaseState,
+        mut qp_in: Phase,
         mut qm_in: MaxwellState,
-        mut qp_out: PhaseState,
+        mut qp_out: Phase,
         mut qm_out: MaxwellState,
-    ) raises {mut j_current, imm}:
+    ) raises {mut mom, imm}:
         spatial_vlasov.compute_rhs(ctx, phase_mesh, qp_in, qm_in, qp_out)
         spatial_maxwell.compute_rhs(ctx, x_mesh, qm_in, qm_out)
-        moments.first_moment(ctx, phase_mesh, qp_in, j_current)
-        apply_vlasov_current_source_1d[P_X](
-            ctx, j_current, qm_out, CHARGE_MASS_RATIO, EPS0,
+        moments.compute(ctx, phase_mesh, qp_in, mom)
+        apply_vlasov_current_source[1, 1, P_X](
+            ctx, mom, qm_out, CHARGE_MASS_RATIO, EPS0,
         )
 
     # --- linear theory: Volterra solution for E(t)/E(0) ---
@@ -242,8 +247,8 @@ def main() raises:
         dW_field_rel < Real(1.0e-4),
         "energy not conserved on the field-energy scale",
     )
-    # (c) Mass conservation. Measured 7e-11 (copyout flux of the
-    # Maxwellian tail at |v| = 3).
+    # (c) Mass conservation. Measured 7e-11 (outflow of the Maxwellian
+    # tail through the velocity boundaries at |v| = 3).
     assert_true(adM < Real(5.0e-10), "mass not conserved")
 
     print("PASSED")

@@ -1,9 +1,10 @@
 # `warpxm.mesh`
 
-Uniform block meshes in 1D, 2D, and 3D, and the 1D1V / 1D2V phase-space
-meshes. Each carries face / element connectivity, per-face
-boundary-condition tags, and per-node coordinates as device buffers, plus
-host-side helpers for initial conditions and diagnostics.
+Uniform block meshes in 1D, 2D, and 3D, and the phase-space mesh of the
+kinetic solver. A block mesh carries face / element connectivity,
+per-face boundary-condition tags, and per-node coordinates as device
+buffers; both kinds have host-side helpers for initial conditions and
+diagnostics.
 
 ## `BlockMesh[NDIM, P]`
 
@@ -185,33 +186,16 @@ of the companion `BlockMesh[XDIM, P_x]`, and `check_companion(x_mesh)`
 raises unless that mesh has the same extent, element counts and
 periodicity.
 
-The original per-dimension meshes:
-
-```mojo
-from warpxm.mesh.phase_mesh_1d1v import PhaseMesh1D1V
-from warpxm.mesh.phase_mesh_1d2v import PhaseMesh1D2V
-
-var m1 = PhaseMesh1D1V[P_x, P_v](
-    ctx, x_min, x_max, v_min, v_max,
-    num_x=NX, num_v=NV, periodic_x=True,
-)
-var m2 = PhaseMesh1D2V[P_x, P_v1, P_v2](
-    ctx, x_min, x_max, v1_min, v1_max, v2_min, v2_max,
-    num_x=NX, num_v1=NV1, num_v2=NV2, periodic_x=True,
-)
-```
-
-Tensor-product meshes over $(x, v)$ or $(x, v_1, v_2)$ with independent
-polynomial orders per axis. The velocity axes are never periodic: their
-boundary faces carry `BC_VLASOV_OUTFLOW`. `bc_left` / `bc_right` apply to
-the x boundaries when `periodic_x=False`.
+The velocity axes are never periodic: their boundaries take a zero ghost
+state (`BC_VLASOV_OUTFLOW`), so nothing flows in across the velocity
+truncation. Choose the velocity extent so that $f$ is negligible there.
 
 Helpers act on component 0 of a `PhaseState` (the distribution function):
 
 | Method | Closure |
 | ------ | ------- |
-| `mesh.fill(f, ic)` | `ic(x, v) -> Real` or `ic(x, v1, v2) -> Real` |
-| `mesh.visit_nodes(f, visit)` | `visit(x, v, w, f_node)` or `visit(x, v1, v2, w, f_node)`; `w` is the phase-space quadrature weight |
+| `mesh.fill(f, ic)` | `ic(x, v) -> Real`, `ic(x, v1, v2) -> Real`, ... up to six coordinates, configuration axes first |
+| `mesh.visit_nodes(f, visit)` | `visit(x, v, w, f_node)`, `visit(x, v1, v2, w, f_node)`, ...; `w` is the phase-space quadrature weight |
 
 See [Vlasov-Maxwell](../physics/vlasov.md).
 

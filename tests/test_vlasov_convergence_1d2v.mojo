@@ -1,7 +1,7 @@
 # 1D2V Vlasov DG convergence regression — confirm rate ≈ (P + 1)
 # on smooth free-streaming. Tensor-product extension of
-# `test_vlasov_convergence_1d1v` to the slice-19 1D2V kernel
-# (`spatial/dg_vlasov_1d2v.mojo`).
+# `test_vlasov_convergence_1d1v` to 1D2V, on the generic kinetic stack
+# (`DGVlasovSolver[1, 2, P_X, P_V]`, `spatial/kinetic/dg_vlasov.mojo`).
 #
 # Setup: zero Maxwell aux (`E = B = 0` ⇒ `a_v1 = a_v2 = 0`), so the
 # 1D2V Vlasov equation reduces to `∂f/∂t + v1 ∂f/∂x = 0`. Each
@@ -13,8 +13,8 @@
 # bounded support in v to machine precision over the truncated v
 # domain (`erfc(v_max / σ) ≈ 4·10⁻¹⁰` for `σ² = 0.5, v_max = 3`).
 #
-# Sweep: for `P_X ∈ {1, 2, 3}` and fixed `NV1 = NV2 = 4`, `P_V1 = P_V2
-# = 2`, run `NX = 32` and `NX = 64` and fit `log2(err_lo / err_hi) ≈
+# Sweep: for `P_X ∈ {1, 2, 3}` and fixed `NV1 = NV2 = 4`, `P_V = 2`,
+# run `NX = 32` and `NX = 64` and fit `log2(err_lo / err_hi) ≈
 # P_X + 1`. v-mesh is held constant so the L² error is dominated by
 # the x-direction discretisation (`a_v1 = a_v2 = 0` ⇒ no v-direction
 # advection error).
@@ -35,8 +35,7 @@ from warpxm.testing.convergence import check_convergence
 
 comptime NV1: Int = 4
 comptime NV2: Int = 4
-comptime P_V1: Int = 2
-comptime P_V2: Int = 2
+comptime P_V: Int = 2
 comptime X_MIN: Real = 0.0
 comptime X_MAX: Real = 1.0
 comptime V1_MIN: Real = -3.0
@@ -56,17 +55,15 @@ def f_initial(x: Real, v1: Real, v2: Real) -> Real:
 def _one_run[P_X: Int](
     var ctx: DeviceContext, num_x: Int,
 ) raises -> Real:
-    var mesh = PhaseMesh1D2V[P_X, P_V1, P_V2](
+    comptime Phase = PhaseState[1, 2, P_X, P_V, VLASOV_NC]
+    var mesh = PhaseMesh[1, 2, P_X, P_V](
         ctx,
-        X_MIN, X_MAX,
-        V1_MIN, V1_MAX,
-        V2_MIN, V2_MAX,
-        num_x=num_x, num_v1=NV1, num_v2=NV2,
-        periodic_x=True,
+        lo=[X_MIN, V1_MIN, V2_MIN],
+        hi=[X_MAX, V1_MAX, V2_MAX],
+        n=[num_x, NV1, NV2],
+        periodic=[True],
     )
-    var q = PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC](
-        ctx, num_x, NV1, NV2,
-    )
+    var q = Phase(ctx, mesh.num_phase_elements)
 
     mesh.fill(q, f_initial)
 
@@ -75,26 +72,19 @@ def _one_run[P_X: Int](
         skin_depth_norm=Real(1.0),
         cfl_max=Real(0.5),
     )
-    var spatial = DGVlasovSolver1D2V[P_X, P_V1, P_V2](app)
-    var stepper = SSPRK3_1D2V[P_X, P_V1, P_V2, VLASOV_NC](
-        ctx, num_x, NV1, NV2,
+    var spatial = DGVlasovSolver[1, 2, P_X, P_V](app)
+    var stepper = SSPRK3Phase[1, 2, P_X, P_V, VLASOV_NC](
+        ctx, mesh.num_phase_elements,
     )
     # Zero Maxwell aux ⇒ a_v1 = a_v2 = 0 ⇒ pure free streaming along x.
     var aux = DGState[1, P_X, VLASOV_AUX_NC](ctx, num_x)
 
-    def compute_rhs(
-        mut q_in: PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC],
-        mut q_out: PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC],
-    ) raises {mut aux, imm}:
+    def compute_rhs(mut q_in: Phase, mut q_out: Phase) raises {imm}:
         spatial.compute_rhs(ctx, mesh, q_in, aux, q_out)
 
-    def no_adjust(
-        mut q_: PhaseState1D2V[P_X, P_V1, P_V2, VLASOV_NC],
-    ) raises {imm}:
-        pass
-
     _ = stepper.run_until(
-        ctx, q, Real(0.0), T_FINAL, DT, compute_rhs, no_adjust,
+        ctx, q, Real(0.0), T_FINAL, DT, compute_rhs,
+        no_op_adjust_phase[1, 2, P_X, P_V, VLASOV_NC],
     )
     ctx.synchronize()
 
